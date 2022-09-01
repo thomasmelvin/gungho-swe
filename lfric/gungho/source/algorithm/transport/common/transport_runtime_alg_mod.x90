@@ -1,0 +1,1066 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief A module that controls set-up of various transport objects.
+!> @details This module controls the set-up of various objects that are
+!!          created at the start of (or during) the transport process, and
+!!          are needed throughout the transport routines.
+
+module transport_runtime_alg_mod
+
+  use check_configuration_mod,        only: check_any_scheme_mol,   &
+                                            check_any_scheme_split, &
+                                            check_horz_dep_pts, &
+                                            check_vert_dep_pts
+  use constants_mod,                  only: r_def, i_def, l_def,  &
+                                            str_def, tiny_eps, imdi
+  use field_mod,                      only: field_type
+  use function_space_mod,             only: function_space_type
+  use function_space_collection_mod,  only: function_space_collection
+  use local_mesh_mod,                 only: local_mesh_type
+  use log_mod,                        only: log_event,            &
+                                            log_scratch_space,    &
+                                            LOG_LEVEL_ERROR,      &
+                                            LOG_LEVEL_INFO
+  use mesh_mod,                       only: mesh_type
+  use mesh_collection_mod,            only: mesh_collection
+  use runtime_tools_mod,              only: check_initialised_field
+  use transport_enumerated_types_mod, only: scheme_split
+
+  implicit none
+
+  private
+
+  ! Public types
+  ! TODO #3008: this should be based on a linked_list_item type
+  type, public :: transport_runtime_type
+
+    private
+
+    integer(kind=i_def)                              :: n_meshes
+    integer(kind=i_def)                              :: local_mesh_id
+    integer(kind=i_def)                              :: num_dry_steps
+    integer(kind=i_def)                              :: dry_step_ctr
+    integer(kind=i_def)                              :: tracer_step_ctr
+    integer(kind=i_def), allocatable, dimension(:)   :: mesh_ids
+    type(field_type),    allocatable, dimension(:)   :: advecting_wind
+    type(field_type),    allocatable, dimension(:)   :: horizontal_advecting_wind
+    type(field_type),    allocatable, dimension(:)   :: vertical_advecting_wind
+    type(field_type),    allocatable, dimension(:)   :: detj_at_w2_transport
+    type(field_type),    allocatable, dimension(:)   :: departure_points_x_w2
+    type(field_type),    allocatable, dimension(:)   :: departure_points_y_w2
+    type(field_type),    allocatable, dimension(:)   :: departure_points_z_w2
+    type(field_type),    allocatable, dimension(:)   :: div_factor
+    type(field_type),    allocatable, dimension(:,:) :: rho_d_n
+    type(field_type),    allocatable, dimension(:,:) :: rho_d_np1
+    type(field_type),    allocatable, dimension(:,:) :: dry_flux
+    real(kind=r_def),    allocatable, dimension(:)   :: horizontal_cfl_max
+    real(kind=r_def),    allocatable, dimension(:)   :: vertical_cfl_max
+    real(kind=r_def)                                 :: dt_model
+
+    contains
+
+    procedure, private :: idx_from_mesh_id
+    procedure, private :: compute_num_dry_steps
+    procedure, public  :: get_local_mesh_id
+    procedure, public  :: get_primary_mesh_id
+    procedure, public  :: set_dry_fields
+    procedure, public  :: copy_all_dry_fields
+    procedure, public  :: get_number_substeps
+    procedure, public  :: get_dt_substep
+    procedure, public  :: get_advecting_wind
+    procedure, public  :: get_horizontal_advecting_wind
+    procedure, public  :: get_vertical_advecting_wind
+    procedure, public  :: get_detj_at_w2_transport
+    procedure, public  :: get_departure_points_x_w2
+    procedure, public  :: get_departure_points_y_w2
+    procedure, public  :: get_departure_points_z_w2
+    procedure, public  :: get_div_factor
+    procedure, public  :: get_rho_d_n
+    procedure, public  :: get_rho_d_np1
+    procedure, public  :: get_dry_flux
+    procedure, public  :: get_num_dry_steps
+    procedure, public  :: get_tracer_step_ctr
+    procedure, public  :: inc_tracer_step_ctr
+    procedure, public  :: reset_tracer_step_ctr
+    procedure, public  :: transport_runtime_assign
+    !> Override default assignment for transport_runtime_type pairs.
+    generic            :: assignment(=) => transport_runtime_assign
+    final              :: destroy_transport_runtime
+
+  end type transport_runtime_type
+
+  !-----------------------------------------------------------------------------
+  ! Constructors
+  !-----------------------------------------------------------------------------
+  !> Function to construct a transport_runtime object
+  interface transport_runtime_type
+    module procedure transport_runtime_constructor
+  end interface
+
+contains
+
+  !> @brief Constructs the transport_runtime object
+  !> @param[in] primal_wind_n    Wind field at start of current time step on the
+  !!                             primary extrusion
+  !> @param[in] primal_wind_np1  Predictor of wind field at next time step on
+  !!                             the primary extrusion
+  !> @param[in] dt               Change in time during one model time step
+  !> @param[in] shifted_mesh    (Optional) Shifted mesh
+  function transport_runtime_constructor(primal_wind_n, primal_wind_np1, dt, shifted_mesh) result(self)
+
+    use calc_dep_pts_alg_mod,          only: calc_dep_pts, &
+                                             calc_vert_dep_pts, &
+                                             calc_hori_dep_pts, &
+                                             select_detj_at_w2
+    use geometric_constants_mod,       only: get_cell_orientation
+    use split_w2_field_kernel_mod,     only: split_w2_field_kernel_type
+    use function_space_collection_mod, only: function_space_collection
+    use fs_continuity_mod,             only: W2, W2v, W2h, W3
+    use timestepping_config_mod,       only: beta
+    use transport_config_mod,          only: max_vert_cfl_calc, &
+                                             max_vert_cfl_calc_dep_point, &
+                                             max_vert_cfl_calc_uniform
+    use map_w2_to_sh_w2_alg_mod,       only: sample_w2_to_sh_w2_alg
+    use dg_matrix_vector_kernel_mod,   only: dg_matrix_vector_kernel_type
+    use fem_constants_mod,             only: get_div, &
+                                             get_inverse_W3_mass_matrix
+    use operator_mod,                  only: operator_type
+
+    implicit none
+
+    type(field_type), target,  intent(in) :: primal_wind_n
+    type(field_type), target,  intent(in) :: primal_wind_np1
+    real(kind=r_def),          intent(in) :: dt
+
+    type(mesh_type),  pointer, intent(in), optional :: shifted_mesh
+
+    type(transport_runtime_type)   :: self
+    type(field_type)               :: cfl, vertical_cfl, horizontal_cfl, cfl_dep
+    integer(kind=i_def)            :: element_order, mesh_idx, i
+    type(mesh_type),       pointer :: mesh => null()
+    type(local_mesh_type), pointer :: local_mesh => null()
+    type(field_type),      pointer :: cell_orientation => null()
+    type(field_type),      pointer :: wind_n           => null()
+    type(field_type),      pointer :: wind_np1         => null()
+    type(field_type),      target  :: shifted_wind_n
+    type(field_type),      target  :: shifted_wind_np1
+    type(field_type)               :: rhs
+    real(kind=r_def)               :: minus_beta_dt
+    real(kind=r_def)               :: cfl_min, cfl_max
+    logical(kind=l_def)            :: any_scheme_mol, any_scheme_split
+    logical(kind=l_def)            :: any_horz_dep_pts, any_vert_dep_pts
+    type(operator_type),   pointer :: mm_w3_inv => null(), &
+                                      div       => null()
+
+    type(mesh_type),           pointer :: tmp_mesh => null()
+    type(function_space_type), pointer :: w3_fs => null()
+    type(function_space_type), pointer :: w2_fs => null()
+
+    write(log_scratch_space, '(A,I4)') 'Setting up transport_runtime on mesh: ', &
+                                       primal_wind_n%get_mesh_id()
+    call log_event(log_scratch_space, LOG_LEVEL_INFO)
+
+    if ( present(shifted_mesh) ) then
+      self%n_meshes = 2
+    else
+      self%n_meshes = 1
+    end if
+
+    self%dt_model = dt
+
+    mesh => primal_wind_n%get_mesh()
+    local_mesh => mesh%get_local_mesh()
+    self%local_mesh_id = local_mesh%get_id()
+
+    allocate( self%mesh_ids(self%n_meshes),                  &
+              self%advecting_wind(self%n_meshes),            &
+              self%horizontal_advecting_wind(self%n_meshes), &
+              self%vertical_advecting_wind(self%n_meshes),   &
+              self%detj_at_w2_transport(self%n_meshes),      &
+              self%departure_points_x_w2(self%n_meshes),     &
+              self%departure_points_y_w2(self%n_meshes),     &
+              self%departure_points_z_w2(self%n_meshes),     &
+              self%div_factor(self%n_meshes),                &
+              self%horizontal_cfl_max(self%n_meshes),        &
+              self%vertical_cfl_max(self%n_meshes) )
+
+    ! Get mesh ID and element order
+    self%mesh_ids(1) = primal_wind_n%get_mesh_id()
+    element_order = primal_wind_n%get_element_order()
+
+    ! If asked for compute obejects on the shifted mesh
+    if ( present(shifted_mesh ) ) then
+      self%mesh_ids(2) = shifted_mesh%get_id()
+      write(log_scratch_space, '(A,I4)') '... and shifted mesh: ', &
+                                         shifted_mesh%get_id()
+      call log_event(log_scratch_space, LOG_LEVEL_INFO)
+    end if
+
+    ! ======================================================================== !
+    ! Checks for what schemes we have
+
+    any_scheme_mol = check_any_scheme_mol()
+    any_scheme_split = check_any_scheme_split()
+    any_horz_dep_pts = check_horz_dep_pts()
+    any_vert_dep_pts = check_vert_dep_pts()
+
+    ! ======================================================================== !
+    ! Create winds on shifted mesh
+    if ( present(shifted_mesh) ) then
+
+      call shifted_wind_n%initialise( vector_space = &
+              function_space_collection%get_fs(shifted_mesh, element_order, W2) )
+      call shifted_wind_np1%initialise( vector_space = &
+              function_space_collection%get_fs(shifted_mesh, element_order, W2) )
+
+      call sample_w2_to_sh_w2_alg(shifted_wind_n,   primal_wind_n)
+      call sample_w2_to_sh_w2_alg(shifted_wind_np1, primal_wind_np1)
+    end if
+
+
+    do mesh_idx = 1, self%n_meshes
+
+      tmp_mesh => mesh_collection%get_mesh(self%mesh_ids(mesh_idx))
+
+      !=======================================================================!
+      ! Create advecting winds
+
+      if ( mesh_idx == 1 ) then
+        ! First pass, make wind_n & wind_np1 point to the primal mesh fields
+        wind_n   => primal_wind_n
+        wind_np1 => primal_wind_np1
+      else
+        ! For second pass (if needed) set wind_n & wind_np1 to point to
+        ! shifted mesh versions
+        wind_n   => shifted_wind_n
+        wind_np1 => shifted_wind_np1
+      end if
+
+      call self%advecting_wind(mesh_idx)%initialise( wind_n%get_function_space() )
+      call invoke( aX_plus_bY(self%advecting_wind(mesh_idx), 0.5_r_def, wind_n, &
+                                                         0.5_r_def, wind_np1) )
+
+      call self%horizontal_advecting_wind(mesh_idx)%initialise( vector_space = &
+        function_space_collection%get_fs( tmp_mesh, element_order, W2h) )
+      call self%vertical_advecting_wind(mesh_idx)%initialise( vector_space = &
+        function_space_collection%get_fs( tmp_mesh, element_order, W2v) )
+
+      if (any_scheme_split) then
+        call invoke( split_w2_field_kernel_type(self%horizontal_advecting_wind(mesh_idx), &
+                                                self%vertical_advecting_wind(mesh_idx),   &
+                                                self%advecting_wind(mesh_idx)) )
+      end if
+
+      !=======================================================================!
+      ! Compute departure points
+
+      ! Get detj_at_w2 using wind_n
+      call self%detj_at_w2_transport(mesh_idx)%initialise( wind_n%get_function_space() )
+      call select_detj_at_w2( wind_n, self%detj_at_w2_transport(mesh_idx) )
+
+      ! If any vertical scheme is ffsl/sl compute vertical departure points
+      call self%departure_points_z_w2(mesh_idx)%initialise( vector_space = &
+                function_space_collection%get_fs(tmp_mesh, element_order, W2) )
+      call cfl_dep%initialise( vector_space = &
+                function_space_collection%get_fs(tmp_mesh, element_order, W2) )
+
+      if (any_vert_dep_pts) then
+        call calc_vert_dep_pts( self%departure_points_z_w2(mesh_idx), &
+                                cfl_dep,                              &
+                                wind_n,                               &
+                                wind_np1,                             &
+                                self%detj_at_w2_transport(mesh_idx),  &
+                                dt )
+      end if
+
+      ! If any horizontal scheme is ffsl compute horizontal departure points
+      call self%departure_points_x_w2(mesh_idx)%initialise( vector_space = &
+                function_space_collection%get_fs(tmp_mesh, element_order, W2) )
+      call self%departure_points_y_w2(mesh_idx)%initialise( vector_space = &
+                function_space_collection%get_fs(tmp_mesh, element_order, W2) )
+
+      if (any_horz_dep_pts) then
+        cell_orientation => get_cell_orientation(self%mesh_ids(mesh_idx))
+        call calc_hori_dep_pts( self%departure_points_x_w2(mesh_idx),  &
+                                self%departure_points_y_w2(mesh_idx),  &
+                                wind_n,                                &
+                                wind_np1,                              &
+                                self%detj_at_w2_transport(mesh_idx),   &
+                                cell_orientation,                      &
+                                dt )
+      end if
+
+      !=======================================================================!
+      ! Compute cfls for use in substepping
+      call cfl%initialise( wind_n%get_function_space() )
+      call horizontal_cfl%initialise( self%horizontal_advecting_wind(mesh_idx)%get_function_space() )
+      call vertical_cfl%initialise( self%vertical_advecting_wind(mesh_idx)%get_function_space() )
+
+      call invoke( setval_X(cfl, self%advecting_wind(mesh_idx)),                 &
+                   inc_X_divideby_Y( cfl, self%detj_at_w2_transport(mesh_idx) ), &
+                   inc_a_times_X( dt, cfl ),                                     &
+                   split_w2_field_kernel_type(horizontal_cfl,                    &
+                                              vertical_cfl,                      &
+                                              cfl) )
+      call horizontal_cfl%field_minmax(cfl_min, cfl_max)
+      self%horizontal_cfl_max(mesh_idx) = max(abs(cfl_max), abs(cfl_min))
+
+      select case(max_vert_cfl_calc)
+        ! Calculate the maximum vertical cfl for substepping
+      case(max_vert_cfl_calc_uniform)
+        call vertical_cfl%field_minmax(cfl_min, cfl_max)
+      case(max_vert_cfl_calc_dep_point)
+        call cfl_dep%field_minmax(cfl_min, cfl_max)
+      case default
+        write(log_scratch_space, '(A)') &
+          'transport_runtime: maximum vertical CFL method not defined '
+        call log_event(log_scratch_space, LOG_LEVEL_ERROR)
+      end select
+      self%vertical_cfl_max(mesh_idx) = max(abs(cfl_max), abs(cfl_min))
+
+      write( log_scratch_space, '(A, E16.8)') &
+          'Transport: maximum horizontal CFL ', self%horizontal_cfl_max(mesh_idx)
+      call log_event( log_scratch_space, LOG_LEVEL_INFO )
+      write( log_scratch_space, '(A, E16.8)') &
+          'Transport: maximum vertical CFL ', self%vertical_cfl_max(mesh_idx)
+      call log_event( log_scratch_space, LOG_LEVEL_INFO )
+
+      !========================================================================!
+      ! Compute the divergence factor for use in density advection
+      ! div_factor = 1 - beta*dt*m3_inv*div*wind_n
+      minus_beta_dt = -beta*dt
+      mm_w3_inv => get_inverse_w3_mass_matrix(self%mesh_ids(mesh_idx))
+      div       => get_div(self%mesh_ids(mesh_idx))
+      call self%div_factor(mesh_idx)%initialise( vector_space = &
+                function_space_collection%get_fs( tmp_mesh, element_order, W3)  )
+      call rhs%initialise( self%div_factor(mesh_idx)%get_function_space() )
+      call invoke( name = "compute_density_predictor",                          &
+                   dg_matrix_vector_kernel_type(self%div_factor(mesh_idx),      &
+                                                wind_n, div),                   &
+                   dg_matrix_vector_kernel_type(rhs, self%div_factor(mesh_idx), &
+                                                mm_w3_inv),                     &
+                   setval_c(self%div_factor(mesh_idx), 1.0_r_def),              &
+                   inc_X_plus_bY(self%div_factor(mesh_idx), minus_beta_dt, rhs) )
+
+    end do
+
+    !==========================================================================!
+    ! Dry fields stored for consistent transport of scalars
+    self%num_dry_steps = self%compute_num_dry_steps()
+
+    ! Allocate arrays for dry fields
+    allocate( self%rho_d_n(self%n_meshes, self%num_dry_steps),   &
+              self%rho_d_np1(self%n_meshes, self%num_dry_steps), &
+              self%dry_flux(self%n_meshes, self%num_dry_steps) )
+
+    ! Initialise these fields
+    do mesh_idx = 1, self%n_meshes
+      tmp_mesh => mesh_collection%get_mesh(self%mesh_ids(mesh_idx))
+      w2_fs => function_space_collection%get_fs(tmp_mesh, element_order, W2)
+      w3_fs => function_space_collection%get_fs(tmp_mesh, element_order, W3)
+      do i = 1, self%num_dry_steps
+        call self%rho_d_n(mesh_idx, i)%initialise( vector_space = w3_fs )
+        call self%rho_d_np1(mesh_idx, i)%initialise( vector_space = w3_fs )
+        call self%dry_flux(mesh_idx, i)%initialise( vector_space = w2_fs )
+      end do
+    end do
+
+    ! Set dry substep counter to be 1
+    self%dry_step_ctr = 1
+    self%tracer_step_ctr = 1
+
+    nullify(mesh, local_mesh, w2_fs, w3_fs, tmp_mesh)
+
+  end function transport_runtime_constructor
+
+  !> Finalizer for the transport runtime
+  !> @param [in,out] self The transport runtime object
+  subroutine destroy_transport_runtime(self)
+    implicit none
+    type(transport_runtime_type), intent(inout) :: self
+
+    if ( allocated( self%mesh_ids ) )                  deallocate( self%mesh_ids )
+    if ( allocated( self%advecting_wind ) )            deallocate( self%advecting_wind )
+    if ( allocated( self%horizontal_advecting_wind ) ) deallocate( self%horizontal_advecting_wind )
+    if ( allocated( self%vertical_advecting_wind ) )   deallocate( self%vertical_advecting_wind )
+    if ( allocated( self%detj_at_w2_transport ) )      deallocate( self%detj_at_w2_transport )
+    if ( allocated( self%departure_points_x_w2 ) )     deallocate( self%departure_points_x_w2 )
+    if ( allocated( self%departure_points_y_w2 ) )     deallocate( self%departure_points_y_w2 )
+    if ( allocated( self%departure_points_z_w2 ) )     deallocate( self%departure_points_z_w2 )
+    if ( allocated( self%div_factor ) )                deallocate( self%div_factor )
+    if ( allocated( self%rho_d_n ) )                   deallocate( self%rho_d_n )
+    if ( allocated( self%rho_d_np1 ) )                 deallocate( self%rho_d_np1 )
+    if ( allocated( self%dry_flux ) )                  deallocate( self%dry_flux )
+    if ( allocated( self%horizontal_cfl_max ) )        deallocate( self%horizontal_cfl_max )
+    if ( allocated( self%vertical_cfl_max ) )          deallocate( self%vertical_cfl_max )
+
+  end subroutine destroy_transport_runtime
+
+  !> @brief Overload the default assign (=) to correctly copy fields
+  !> @param[out] dest    The destination transport_runtime object
+  !> @param[in]  source  The source transport_runtime object
+  subroutine transport_runtime_assign(dest, source)
+
+    implicit none
+    class(transport_runtime_type), intent(in)  :: source
+    class(transport_runtime_type), intent(out) :: dest
+    integer(kind=i_def)                        :: mesh_idx, i
+
+    ! Deep copy of the contents of the transport_runtime_type
+    dest%n_meshes = source%n_meshes
+    dest%local_mesh_id = source%local_mesh_id
+    dest%dry_step_ctr = source%dry_step_ctr
+    dest%tracer_step_ctr = source%tracer_step_ctr
+    dest%num_dry_steps = source%num_dry_steps
+
+    if (.not. allocated( dest%mesh_ids ) )                  allocate( dest%mesh_ids(dest%n_meshes) )
+    if (.not. allocated( dest%advecting_wind ) )            allocate( dest%advecting_wind(dest%n_meshes) )
+    if (.not. allocated( dest%horizontal_advecting_wind ) ) allocate( dest%horizontal_advecting_wind(dest%n_meshes) )
+    if (.not. allocated( dest%vertical_advecting_wind ) )   allocate( dest%vertical_advecting_wind(dest%n_meshes) )
+    if (.not. allocated( dest%detj_at_w2_transport ) )      allocate( dest%detj_at_w2_transport(dest%n_meshes) )
+    if (.not. allocated( dest%departure_points_y_w2 ) )     allocate( dest%departure_points_y_w2(dest%n_meshes) )
+    if (.not. allocated( dest%departure_points_x_w2 ) )     allocate( dest%departure_points_x_w2(dest%n_meshes) )
+    if (.not. allocated( dest%departure_points_z_w2 ) )     allocate( dest%departure_points_z_w2(dest%n_meshes) )
+    if (.not. allocated( dest%div_factor ) )                allocate( dest%div_factor(dest%n_meshes) )
+    if (.not. allocated( dest%rho_d_n ) )                   allocate( dest%rho_d_n(dest%n_meshes, dest%num_dry_steps) )
+    if (.not. allocated( dest%rho_d_np1 ) )                 allocate( dest%rho_d_np1(dest%n_meshes, dest%num_dry_steps) )
+    if (.not. allocated( dest%dry_flux ) )                  allocate( dest%dry_flux(dest%n_meshes, dest%num_dry_steps) )
+    if (.not. allocated( dest%horizontal_cfl_max ) )        allocate( dest%horizontal_cfl_max(dest%n_meshes) )
+    if (.not. allocated( dest%vertical_cfl_max ) )          allocate( dest%vertical_cfl_max(dest%n_meshes) )
+
+    do mesh_idx = 1, source%n_meshes
+      call source%advecting_wind(mesh_idx)%copy_field(dest%advecting_wind(mesh_idx))
+      call source%horizontal_advecting_wind(mesh_idx)%copy_field(dest%horizontal_advecting_wind(mesh_idx))
+      call source%vertical_advecting_wind(mesh_idx)%copy_field(dest%vertical_advecting_wind(mesh_idx))
+      call source%detj_at_w2_transport(mesh_idx)%copy_field(dest%detj_at_w2_transport(mesh_idx))
+      call source%departure_points_x_w2(mesh_idx)%copy_field(dest%departure_points_x_w2(mesh_idx))
+      call source%departure_points_y_w2(mesh_idx)%copy_field(dest%departure_points_y_w2(mesh_idx))
+      call source%departure_points_z_w2(mesh_idx)%copy_field(dest%departure_points_z_w2(mesh_idx))
+      call source%div_factor(mesh_idx)%copy_field(dest%div_factor(mesh_idx))
+      do i = 1, source%num_dry_steps
+        call source%rho_d_n(mesh_idx,i)%copy_field(dest%rho_d_n(mesh_idx,i))
+        call source%rho_d_np1(mesh_idx,i)%copy_field(dest%rho_d_np1(mesh_idx,i))
+        call source%dry_flux(mesh_idx,i)%copy_field(dest%dry_flux(mesh_idx,i))
+      end do
+    end do
+
+    dest%mesh_ids(:) = source%mesh_ids(:)
+    dest%horizontal_cfl_max(:) = source%horizontal_cfl_max(:)
+    dest%vertical_cfl_max(:) = source%vertical_cfl_max(:)
+    dest%dt_model = source%dt_model
+
+  end subroutine transport_runtime_assign
+
+  !> @brief Sets dry fields for use in conservative mixing ratio transport
+  !> @param[in,out] self      The transport_runtime object
+  !> @param[in]     rho_d_n   Dry density field at start of time step
+  !> @param[in]     rho_d_np1 Dry density field at end of time step
+  !> @param[in]     dry_flux  Flux field used to transport dry density
+  subroutine set_dry_fields(self, rho_d_n, rho_d_np1, dry_flux)
+
+    use apply_w3_to_sh_w3_kernel_mod,   only: apply_w3_to_sh_w3_kernel_type
+    use consist_w2_to_sh_w2_kernel_mod, only: consist_w2_to_sh_w2_kernel_type
+    use fem_constants_mod,              only: get_rmultiplicity
+    use fs_continuity_mod,              only: W2
+    use intermesh_constants_mod,        only: get_consist_w3_to_sh_w3_op
+    use transport_config_mod,           only: moisture_eqn, &
+                                              moisture_eqn_consistent
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(inout) :: self
+    type(field_type),                      intent(in)    :: rho_d_n
+    type(field_type),                      intent(in)    :: rho_d_np1
+    type(field_type),                      intent(in)    :: dry_flux
+
+    type(field_type), pointer :: consist_w3_to_sh_w3_op(:) => null()
+    type(field_type), pointer :: rmultiplicity_w2 => null()
+
+    ! Only set fields for primal mesh
+    if (rho_d_n%get_mesh_id() /= self%mesh_ids(1)) then
+      call log_event('Can only set dry fields on primal mesh', LOG_LEVEL_ERROR)
+    end if
+
+    call rho_d_n%copy_field(self%rho_d_n(1,self%dry_step_ctr))
+    call rho_d_np1%copy_field(self%rho_d_np1(1,self%dry_step_ctr))
+    call dry_flux%copy_field(self%dry_flux(1,self%dry_step_ctr))
+
+    if (self%n_meshes > 1 .and. moisture_eqn == moisture_eqn_consistent) then
+      ! Transform these densities and dry fluxes to the shifted mesh
+      consist_w3_to_sh_w3_op => get_consist_w3_to_sh_w3_op()
+      rmultiplicity_w2 => get_rmultiplicity(W2, dry_flux%get_mesh_id())
+
+      call invoke( name='shift_dry_quantities',                               &
+          setval_c(self%dry_flux(2,self%dry_step_ctr), 0.0_r_def),            &
+          consist_w2_to_sh_w2_kernel_type(self%dry_flux(2,self%dry_step_ctr), &
+                                          self%dry_flux(1,self%dry_step_ctr), &
+                                          rmultiplicity_w2),                  &
+          apply_w3_to_sh_w3_kernel_type(self%rho_d_n(2,self%dry_step_ctr),    &
+                                        self%rho_d_n(1,self%dry_step_ctr),    &
+                                        consist_w3_to_sh_w3_op),              &
+          apply_w3_to_sh_w3_kernel_type(self%rho_d_np1(2,self%dry_step_ctr),  &
+                                        self%rho_d_np1(1,self%dry_step_ctr),  &
+                                        consist_w3_to_sh_w3_op) )
+
+      nullify( rmultiplicity_w2, consist_w3_to_sh_w3_op )
+    end if
+
+    ! Increment counter for dry substep
+    self%dry_step_ctr = self%dry_step_ctr + 1
+
+  end subroutine set_dry_fields
+
+  !> @brief Copies across all the dry fields from one transport runtime to
+  !!        another, restricting the fields if the target mesh is coarser
+  !> @param[in,out] self                       Target transport_runtime object
+  !> @param[in]     source_transport_runtime   Source transport_runtime object
+  subroutine copy_all_dry_fields(self, source_transport_runtime)
+
+    use fem_constants_mod,         only: get_rmultiplicity
+    use finite_element_config_mod,      only: element_order
+    use fs_continuity_mod,         only: W2, W3
+    use mesh_collection_mod,       only: mesh_collection
+    use restrict_kernel_mod,       only: restrict_kernel_type
+    use restrict_w2_kernel_mod,    only: restrict_w2_kernel_type
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(inout) :: self
+    class(transport_runtime_type),         intent(in)    :: source_transport_runtime
+    type(function_space_type),             pointer       :: w2_fs => null()
+    type(function_space_type),             pointer       :: w3_fs => null()
+    type(mesh_type),                       pointer       :: source_mesh => null()
+    type(mesh_type),                       pointer       :: target_mesh => null()
+    type(field_type),                      pointer       :: source_rho_d_n => null()
+    type(field_type),                      pointer       :: source_rho_d_np1 => null()
+    type(field_type),                      pointer       :: source_dry_flux => null()
+    type(field_type),                      pointer       :: rmultiplicity_w2 => null()
+    type(field_type)                                     :: target_rho_d_n
+    type(field_type)                                     :: target_rho_d_np1
+    type(field_type)                                     :: target_dry_flux
+    integer(kind=i_def)                                  :: source_ncells
+    integer(kind=i_def)                                  :: target_ncells
+    integer(kind=i_def)                                  :: source_mesh_id
+    integer(kind=i_def)                                  :: target_mesh_id
+    integer(kind=i_def)                                  :: i
+
+    ! N.B. The meshes should not be the same as one another, otherwise the
+    ! transport_runtime objects will be the same
+
+    source_mesh_id = source_transport_runtime%get_primary_mesh_id()
+    target_mesh_id = self%get_primary_mesh_id()
+    ! Obtain meshes to check that we can coarsen
+    source_mesh => mesh_collection%get_mesh(source_mesh_id)
+    target_mesh => mesh_collection%get_mesh(target_mesh_id)
+    ! Figure out which of the meshes has fewer cells
+    source_ncells = source_mesh%get_ncells()
+    target_ncells = target_mesh%get_ncells()
+
+    ! Get rmultiplicity
+    rmultiplicity_w2 => get_rmultiplicity(W2, source_mesh_id)
+
+    w2_fs => function_space_collection%get_fs(target_mesh, element_order, W2)
+    w3_fs => function_space_collection%get_fs(target_mesh, element_order, W3)
+
+    ! Initialise target fields
+    call target_rho_d_n%initialise( vector_space = w3_fs )
+    call target_rho_d_np1%initialise( vector_space = w3_fs )
+    call target_dry_flux%initialise( vector_space = w2_fs )
+
+    if (source_ncells > target_ncells) then
+      ! Loop through fields for each step for primary extrusion
+      do i = 1, source_transport_runtime%get_num_dry_steps()
+        source_rho_d_n => source_transport_runtime%get_rho_d_n(source_mesh_id, i)
+        source_rho_d_np1 => source_transport_runtime%get_rho_d_np1(source_mesh_id, i)
+        source_dry_flux => source_transport_runtime%get_dry_flux(source_mesh_id, i)
+        ! Intergrid kernels have to be called in separate invokes
+        call invoke(                                                    &
+            setval_c(target_dry_flux, 0.0_r_def),                       &
+            restrict_w2_kernel_type(target_dry_flux, source_dry_flux,   &
+                                    rmultiplicity_w2) )
+        call invoke(                                                    &
+            setval_c(target_rho_d_n, 0.0_r_def),                        &
+            restrict_kernel_type(target_rho_d_n, source_rho_d_n) )
+        call invoke(                                                    &
+            setval_c(target_rho_d_np1, 0.0_r_def),                      &
+            restrict_kernel_type(target_rho_d_np1, source_rho_d_np1) )
+
+        ! Set dry fields
+        call self%set_dry_fields(target_rho_d_n, target_rho_d_np1, target_dry_flux)
+
+      end do
+
+    else
+      call log_event( 'Can only call copy_all_dry_fields when ' // &
+                      'target mesh is coarser than source mesh', LOG_LEVEL_ERROR)
+    end if
+
+    nullify( source_mesh, target_mesh, rmultiplicity_w2, source_rho_d_n, &
+             source_rho_d_np1, source_dry_flux, w3_fs, w2_fs )
+
+  end subroutine copy_all_dry_fields
+
+  !> @brief Private function for getting array index corresponding to mesh_id
+  !> @param[in] self      The transport_runtime object
+  !> @param[in] mesh_id   Identifier of mesh to find
+  function idx_from_mesh_id(self, mesh_id) result(idx)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def),                   intent(in) :: mesh_id
+    integer(kind=i_def)                               :: idx
+    integer(kind=i_def)                               :: i
+
+    idx = imdi
+    do i = 1, self%n_meshes
+      if ( mesh_id == self%mesh_ids(i) ) idx = i
+    end do
+
+    if ( idx == imdi ) then
+      write(log_scratch_space, '(A,I4)') 'transport_runtime does not contain mesh: ', &
+                                          mesh_id
+      call log_event(log_scratch_space, LOG_LEVEL_ERROR)
+    end if
+
+  end function idx_from_mesh_id
+
+  !> @brief Computes number of MoL substeps for a splitting step
+  !> @param[in] self       The transport_runtime object
+  !> @param[in] mesh_id    Identifier of mesh
+  !> @param[in] direction  A transport direction enumerator
+  !> @param[in] splitting  A transport splitting enumerator
+  !> @return number_substeps  Number of substeps
+  function get_number_substeps(self, mesh_id, direction, splitting) result(number_substeps)
+    use transport_config_mod,           only: cfl_mol_3d_stab, &
+                                              cfl_mol_2d_stab, &
+                                              cfl_mol_1d_stab
+    use transport_enumerated_types_mod, only: direction_h,          &
+                                              direction_v,          &
+                                              direction_3d,         &
+                                              splitting_strang_vhv, &
+                                              splitting_strang_hvh
+    implicit none
+
+    class(transport_runtime_type), intent(in) :: self
+    integer(kind=i_def),           intent(in) :: mesh_id
+    integer(kind=i_def),           intent(in) :: direction
+    integer(kind=i_def),           intent(in) :: splitting
+    integer(kind=i_def)                       :: number_substeps
+    integer(kind=i_def)                       :: idx
+
+    idx = self%idx_from_mesh_id(mesh_id)
+    select case (direction)
+
+      case (direction_v)
+        number_substeps = int( self%vertical_cfl_max(idx)        &
+                              /(cfl_mol_1d_stab+tiny_eps),i_def) &
+                         + 1_i_def
+        ! Strang_vhv splitting uses half timestep for the vertical stage
+        if ( splitting  == splitting_strang_vhv ) then
+          number_substeps = int( self%vertical_cfl_max(idx)        &
+                              /(2.0_r_def*cfl_mol_1d_stab+tiny_eps),i_def) &
+                          + 1_i_def
+        end if
+      case (direction_h)
+        number_substeps = int( self%horizontal_cfl_max(idx)      &
+                              /(cfl_mol_2d_stab+tiny_eps),i_def) &
+                        + 1_i_def
+        ! Strang_hvh splitting uses half timestep for the horizontal stage
+        if ( splitting  == splitting_strang_hvh ) then
+          number_substeps = int( self%horizontal_cfl_max(idx)        &
+                              /(2.0_r_def*cfl_mol_2d_stab+tiny_eps),i_def) &
+                          + 1_i_def
+        end if
+
+      case (direction_3d)
+        number_substeps = int( max( self%horizontal_cfl_max(idx), &
+                                    self%vertical_cfl_max(idx) )  &
+                              /(cfl_mol_3d_stab+tiny_eps),i_def)  &
+                         + 1_i_def
+      case default
+        number_substeps = 1_i_def
+    end select
+
+  end function get_number_substeps
+
+  !> @brief Get the MoL dt for substeps for this mesh / direction / splitting
+  !> @param[in] self       The transport_runtime object
+  !> @param[in] mesh_id    Identifier of mesh
+  !> @param[in] direction  A transport direction enumerator
+  !> @param[in] splitting  A transport splitting enumerator
+  !> @return dt_substep  The dt for MoL substeps
+  function get_dt_substep(self, mesh_id, direction, splitting) result(dt_substep)
+    use transport_enumerated_types_mod, only: direction_v,          &
+                                              direction_h,          &
+                                              splitting_strang_vhv, &
+                                              splitting_strang_hvh
+
+    implicit none
+
+    class(transport_runtime_type), intent(in) :: self
+    integer(kind=i_def),           intent(in) :: mesh_id
+    integer(kind=i_def),           intent(in) :: direction
+    integer(kind=i_def),           intent(in) :: splitting
+    integer(kind=i_def)                       :: number_substeps
+    real(kind=r_def)                          :: dt_substep
+
+    number_substeps = self%get_number_substeps(mesh_id, direction, splitting)
+    dt_substep = self%dt_model/real(number_substeps, r_def)
+    if ( splitting  == splitting_strang_vhv .and. direction == direction_v ) then
+        dt_substep = dt_substep / 2.0_r_def
+    else if ( splitting  == splitting_strang_hvh .and. direction == direction_h ) then
+        dt_substep = dt_substep / 2.0_r_def
+    end if
+
+  end function get_dt_substep
+
+  !> @brief Returns the local mesh id for the transport_runtime
+  !> @return The identifier for the underlying local mesh
+  function get_local_mesh_id(self) result(local_mesh_id)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def)                               :: local_mesh_id
+
+    local_mesh_id = self%local_mesh_id
+
+  end function get_local_mesh_id
+
+  !> @brief Returns the mesh id for the transport_runtime primary mesh
+  !> @return The identifier for the primary mesh
+  function get_primary_mesh_id(self) result(primary_mesh_id)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def)                               :: primary_mesh_id
+
+    primary_mesh_id = self%mesh_ids(1)
+
+  end function get_primary_mesh_id
+
+  !> @brief Returns a pointer to the advecting wind
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return The advecting wind for that mesh
+  function get_advecting_wind(self, mesh_id) result(advecting_wind)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def),                   intent(in) :: mesh_id
+    type(field_type),                      pointer    :: advecting_wind
+    character(str_def)                                :: field_name
+
+    field_name = 'advecting wind'
+    advecting_wind => self%advecting_wind(self%idx_from_mesh_id(mesh_id))
+    call check_initialised_field(advecting_wind, field_name, mesh_id)
+
+  end function get_advecting_wind
+
+   !> @brief Returns a pointer to the horizontal advecting wind
+   !> @param[in] mesh_id The ID of the mesh to get the object for
+   !> @return The horizontal part of the advecting wind
+  function get_horizontal_advecting_wind(self, mesh_id) result(advecting_wind)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def),                   intent(in) :: mesh_id
+    type(field_type),                      pointer    :: advecting_wind
+    character(str_def)                                :: field_name
+
+    field_name = 'horizontal advecting wind'
+    advecting_wind => self%horizontal_advecting_wind(self%idx_from_mesh_id(mesh_id))
+    call check_initialised_field(advecting_wind, field_name, mesh_id)
+
+  end function get_horizontal_advecting_wind
+
+  !> @brief Returns a pointer to the vertical advecting wind
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return The vertical part of the advecting wind
+  function get_vertical_advecting_wind(self, mesh_id) result(advecting_wind)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def),                   intent(in) :: mesh_id
+    type(field_type),                      pointer    :: advecting_wind
+    character(str_def)                                :: field_name
+
+    field_name = 'vertical advecting wind'
+    advecting_wind => self%vertical_advecting_wind(self%idx_from_mesh_id(mesh_id))
+    call check_initialised_field(advecting_wind, field_name, mesh_id)
+
+  end function get_vertical_advecting_wind
+
+  !> @brief Returns a pointer to det(J) at W2 DoFs
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return det(J) evaluated at W2 DoFs
+  function get_detj_at_w2_transport(self, mesh_id) result(detj_at_w2_transport)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def),                   intent(in) :: mesh_id
+    type(field_type),                      pointer    :: detj_at_w2_transport
+    character(str_def)                                :: field_name
+
+    field_name = 'detj_at_w2_transport'
+    detj_at_w2_transport => self%detj_at_w2_transport(self%idx_from_mesh_id(mesh_id))
+    call check_initialised_field(detj_at_w2_transport, field_name, mesh_id)
+
+  end function get_detj_at_w2_transport
+
+  !> @brief Returns a pointer to the x departure points at W2 DoFs
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return The departure points for the x direction at W2 DoFs
+  function get_departure_points_x_w2(self, mesh_id) result(departure_points_x_w2)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def),                   intent(in) :: mesh_id
+    type(field_type),                      pointer    :: departure_points_x_w2
+    character(str_def)                                :: field_name
+
+    field_name = 'departure_points_x_w2'
+    departure_points_x_w2 => self%departure_points_x_w2(self%idx_from_mesh_id(mesh_id))
+    call check_initialised_field(departure_points_x_w2, field_name, mesh_id)
+
+  end function get_departure_points_x_w2
+
+  !> @brief Returns a pointer to the y departure points at W2 DoFs
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return The departure points for the y direction at W2 DoFs
+  function get_departure_points_y_w2(self, mesh_id) result(departure_points_y_w2)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def),                   intent(in) :: mesh_id
+    type(field_type),                      pointer    :: departure_points_y_w2
+    character(str_def)                                :: field_name
+
+    field_name = 'departure_points_y_w2'
+    departure_points_y_w2 => self%departure_points_y_w2(self%idx_from_mesh_id(mesh_id))
+    call check_initialised_field(departure_points_y_w2, field_name, mesh_id)
+
+  end function get_departure_points_y_w2
+
+  !> @brief Returns a pointer to the z departure points at W2 DoFs
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return The departure points for the z direction at W2 DoFs
+  function get_departure_points_z_w2(self, mesh_id) result(departure_points_z_w2)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def),                   intent(in) :: mesh_id
+    type(field_type),                      pointer    :: departure_points_z_w2
+    character(str_def)                                :: field_name
+
+    field_name = 'get_departure_points_z_w2'
+    departure_points_z_w2 => self%departure_points_z_w2(self%idx_from_mesh_id(mesh_id))
+    call check_initialised_field(departure_points_z_w2, field_name, mesh_id)
+
+  end function get_departure_points_z_w2
+
+  !> @brief Returns a pointer to the divergence factor
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return The divergence factor field
+  function get_div_factor(self, mesh_id) result(div_factor)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def),                   intent(in) :: mesh_id
+    type(field_type),                      pointer    :: div_factor
+    character(str_def)                                :: field_name
+
+    field_name = 'div_factor'
+    div_factor => self%div_factor(self%idx_from_mesh_id(mesh_id))
+    call check_initialised_field(div_factor, field_name, mesh_id)
+
+  end function get_div_factor
+
+  !> @brief Returns number of split transport steps for the dry density
+  !> @return The number of split transport steps for the dry density
+  function get_num_dry_steps(self) result(num_dry_steps)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def)                               :: num_dry_steps
+
+    num_dry_steps = self%num_dry_steps
+
+  end function get_num_dry_steps
+
+  !> @brief Returns a pointer to the dry density field at start of transport step
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @param[in] step    The step from which to return the density
+  !> @return The dry density field before its transport
+  function get_rho_d_n(self, mesh_id, step) result(rho_d_n)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def),                   intent(in) :: mesh_id
+    integer(kind=i_def),                   intent(in) :: step
+    type(field_type),                      pointer    :: rho_d_n
+    character(str_def)                                :: field_name
+
+    field_name = 'rho_d_n'
+    rho_d_n => self%rho_d_n(self%idx_from_mesh_id(mesh_id), step)
+    call check_initialised_field(rho_d_n, field_name, mesh_id)
+
+  end function get_rho_d_n
+
+  !> @brief Returns a pointer to the dry density field after transport
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @param[in] step The step from which to return the density
+  !> @return The dry density field after its transport
+  function get_rho_d_np1(self, mesh_id, step) result(rho_d_np1)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def),                   intent(in) :: mesh_id
+    integer(kind=i_def),                   intent(in) :: step
+    type(field_type),                      pointer    :: rho_d_np1
+    character(str_def)                                :: field_name
+
+    field_name = 'rho_d_np1'
+    rho_d_np1 => self%rho_d_np1(self%idx_from_mesh_id(mesh_id), step)
+    call check_initialised_field(rho_d_np1, field_name, mesh_id)
+
+  end function get_rho_d_np1
+
+  !> @brief Returns a pointer to the flux from transporting dry density
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @param[in] step The step from which to return the density
+  !> @return The dry density flux
+  function get_dry_flux(self, mesh_id, step) result(dry_flux)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def),                   intent(in) :: mesh_id
+    integer(kind=i_def),                   intent(in) :: step
+    type(field_type),                      pointer    :: dry_flux
+    character(str_def)                                :: field_name
+
+    field_name = 'dry flux'
+    dry_flux => self%dry_flux(self%idx_from_mesh_id(mesh_id), step)
+    call check_initialised_field(dry_flux, field_name, mesh_id)
+
+  end function get_dry_flux
+
+  !> @brief Returns the counter of tracer transport steps
+  !> @return The tracer step counter
+  function get_tracer_step_ctr(self) result(tracer_step_ctr)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(in) :: self
+    integer(kind=i_def) :: tracer_step_ctr
+
+    tracer_step_ctr = self%tracer_step_ctr
+
+  end function get_tracer_step_ctr
+
+  !> @brief Increments the counter of tracer transport steps
+  subroutine inc_tracer_step_ctr(self)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(inout) :: self
+
+    self%tracer_step_ctr = self%tracer_step_ctr + 1
+
+  end subroutine inc_tracer_step_ctr
+
+  !> @brief Resets the counter of tracer transport steps
+  subroutine reset_tracer_step_ctr(self)
+
+    implicit none
+
+    class(transport_runtime_type), target, intent(inout) :: self
+
+    self%tracer_step_ctr = 1
+
+  end subroutine reset_tracer_step_ctr
+
+  !> @brief Computes the total number of rho transport steps
+  !> @param[in] mesh_id          ID of the mesh for the dry density transport
+  !> @result    num_dry_steps    Total number of transport steps for rho
+  function compute_num_dry_steps(self) result(num_dry_steps)
+
+    use transport_config_mod,           only: profile_size,           &
+                                              field_names,            &
+                                              scheme,                 &
+                                              horizontal_method,      &
+                                              vertical_method,        &
+                                              splitting,              &
+                                              dry_field_name
+    use transport_enumerated_types_mod, only: scheme_mol_3d,          &
+                                              scheme_split,           &
+                                              split_method_mol,       &
+                                              direction_h,            &
+                                              direction_v,            &
+                                              direction_3d,           &
+                                              splitting_strang_hvh,   &
+                                              splitting_strang_vhv,   &
+                                              splitting_hv,           &
+                                              splitting_vh,           &
+                                              splitting_none
+
+    implicit none
+
+    ! Arguments
+    class(transport_runtime_type), target, intent(in) :: self
+    ! Internal variables
+    integer(kind=i_def) :: num_dry_steps
+    integer(kind=i_def) :: config, dry_config
+    logical(kind=l_def) :: dry_config_found
+
+    ! Extract dry density metadata
+    dry_config_found = .false.
+    do config = 1, profile_size
+      if ( trim(field_names(config)) == trim(dry_field_name) ) then
+        dry_config_found = .true.
+        dry_config = config
+        exit
+      end if
+    end do
+
+    if (.not. dry_config_found) then
+      write(log_scratch_space, '(2A)') &
+        'transport_runtime: Cannot set up consistent tracer transport ' // &
+        'if there is no field named ', trim(dry_field_name)
+      call log_event(log_scratch_space, LOG_LEVEL_ERROR)
+    end if
+
+    ! Compute total number of split steps
+    select case(splitting(dry_config))
+    case(splitting_strang_hvh, splitting_strang_vhv)
+      num_dry_steps = 3
+    case(splitting_hv, splitting_vh)
+      num_dry_steps = 2
+    case(splitting_none)
+      num_dry_steps = 1
+    case default
+      write(log_scratch_space, '(A)') &
+        'transport_runtime: Your splitting is not implemented with ' // &
+        'consistent tracer transport'
+      call log_event(log_scratch_space, LOG_LEVEL_ERROR)
+    end select
+
+  end function compute_num_dry_steps
+
+end module transport_runtime_alg_mod

@@ -1,0 +1,8 @@
+class simple_io_context_type {
+  -clock: clock_type
+
+  +initialise(callback: io_context_initialiser_type, start_time: String, finish_time: String, spinup_period: Float, seconds_per_step: Float)
+  +get_clock(): <<pointer>>clock_type
+}
+io_context_type ^-- simple_io_context_type
+simple_io_context_type -left- clock_type

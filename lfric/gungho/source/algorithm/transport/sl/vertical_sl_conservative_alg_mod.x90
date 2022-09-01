@@ -1,0 +1,126 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief Algorithm for a vertical SLICE-remapping scheme.
+!> @details The algorithm solves the 1D vertical conservative transport
+!!          equation by performing a vertical conservative remapping of a field
+!!          using the SLICE algorithm.
+
+module vertical_sl_conservative_alg_mod
+
+  use constants_mod,                      only: r_def
+  use finite_element_config_mod,          only: element_order
+  use io_config_mod,                      only: subroutine_timers
+  use timer_mod,                          only: timer
+  use field_mod,                          only: field_type
+  use transport_config_mod,               only: slice_order,          &
+                                                slice_order_linear,   &
+                                                slice_order_parabola, &
+                                                slice_order_cubic,    &
+                                                dry_field_name
+  use log_mod,                            only: log_event, LOG_LEVEL_ERROR
+  use mesh_mod,                           only: mesh_type
+  use transport_enumerated_types_mod,     only: splitting_strang_vhv
+  use transport_metadata_mod,             only: transport_metadata_type
+  use transport_runtime_alg_mod,          only: transport_runtime_type
+  use transport_runtime_collection_mod,   only: get_transport_runtime
+  use vertical_mass_remapping_kernel_mod, only: vertical_mass_remapping_kernel_type
+  use dg_matrix_vector_kernel_mod,        only: dg_matrix_vector_kernel_type
+  use fem_constants_mod,                  only: get_mass_matrix, &
+                                                get_inverse_w3_mass_matrix
+  use operator_mod,                       only: operator_type
+  use fs_continuity_mod,                  only: W2, W3
+  use function_space_mod,                 only: function_space_type
+  use function_space_collection_mod,      only: function_space_collection
+
+
+  implicit none
+
+  private
+
+  public :: vertical_sl_conservative_alg
+
+contains
+
+  !=========================================================================================
+  !> @brief Algorithm for 1D vertical conservative transport using the SLICE algorithm.
+  !> @param[in,out]  field_np1          Field at timestep n+1 = field_n at departure point
+  !> @param[in]      field_n            Field at timestep n
+  !> @param[in]      dt                 Time step (local)
+  !> @param[in]      transport_metadata Metadata for the advection of field
+  subroutine vertical_sl_conservative_alg( field_np1, field_n, dt, transport_metadata )
+
+    implicit none
+
+    type(field_type),              intent(inout) :: field_np1
+    type(field_type),              intent(in)    :: field_n
+    real(kind=r_def),              intent(in)    :: dt
+    type(transport_metadata_type), intent(in)    :: transport_metadata
+
+    type(field_type)             :: mass
+    type(field_type)             :: dep_pts_z
+    type(field_type)             :: flux
+    type(operator_type), pointer :: mm_w3_inv => null()
+    type(operator_type), pointer :: mm_w3 => null()
+    type(field_type),    pointer :: dep_pts_z_get => null()
+    type(mesh_type),     pointer :: mesh => null()
+    type(function_space_type),    pointer :: w2_fs => null()
+    type(transport_runtime_type), pointer :: transport_runtime => null()
+
+    if ( subroutine_timers ) call timer( 'vertical_sl_conservative_alg' )
+
+    if ( slice_order /= slice_order_linear  .and. &
+         slice_order /= slice_order_cubic   .and. &
+         slice_order /= slice_order_parabola       ) then
+      call log_event( "vertical_sl_conservative: Invalid slice_order", LOG_LEVEL_ERROR )
+    end if
+
+    ! Get transport_runtime
+    mesh => field_n%get_mesh()
+    transport_runtime => get_transport_runtime(mesh)
+    w2_fs => function_space_collection%get_fs( mesh, element_order, W2 )
+    call flux%initialise( w2_fs )
+
+    ! Get departure points from transport_runtime
+    dep_pts_z_get  => transport_runtime%get_departure_points_z_w2( field_n%get_mesh_id() )
+    call dep_pts_z%initialise( vector_space = dep_pts_z_get%get_function_space() )
+    call invoke( setval_X(dep_pts_z, dep_pts_z_get) )
+
+    ! If Strang splitting divide departure distance by 2
+    if ( transport_metadata%get_splitting() ==  splitting_strang_vhv ) then
+      call invoke( inc_a_times_X(0.5_r_def, dep_pts_z) )
+    end if
+
+    ! Compute conservative SL transport (vertical only) of
+    ! field_np1 =  field_n_D
+    call invoke( setval_X( field_np1, field_n ) )
+
+    call mass%initialise( vector_space = field_n%get_function_space() )
+    mm_w3 => get_mass_matrix(W3, field_n%get_mesh_id())
+    mm_w3_inv => get_inverse_w3_mass_matrix(field_n%get_mesh_id())
+
+    call invoke( dg_matrix_vector_kernel_type(mass, field_np1, mm_w3),              &
+                 vertical_mass_remapping_kernel_type(dep_pts_z, mass, slice_order), &
+                 dg_matrix_vector_kernel_type(field_np1, mass, mm_w3_inv ) )
+
+    ! Store field in transport_runtime for conservative transport
+    ! if this is the underlying dry field
+    if (trim(transport_metadata%get_name()) == trim(dry_field_name)) then
+      ! TODO: #2997 compute flux and set dry fields in transport runtime
+      ! Initialise flux -- following #2997 this should be done earlier
+      ! in this algorithm
+      w2_fs => function_space_collection%get_fs( mesh, element_order, W2 )
+      call flux%initialise( w2_fs )
+      call transport_runtime%set_dry_fields(field_n, field_np1, flux)
+      nullify(w2_fs)
+    end if
+
+    nullify( mm_w3, mm_w3_inv, dep_pts_z_get, mesh, transport_runtime )
+
+    if ( subroutine_timers ) call timer( 'vertical_sl_conservative_alg' )
+
+  end subroutine vertical_sl_conservative_alg
+
+end module vertical_sl_conservative_alg_mod

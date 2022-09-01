@@ -1,0 +1,97 @@
+!-------------------------------------------------------------------------------
+! (c) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-------------------------------------------------------------------------------
+!> @brief Calculates the mass fluxes in the x and y direction using the
+!!        symmetric horizontal COSMIC method.
+!> @details The algorithm below outputs the mass fluxes at timestep n+1 (np1)
+!!          given the horizontal departure points and the density field.
+
+module horizontal_cosmic_fluxes_alg_mod
+
+  use constants_mod,                     only: r_def
+  use field_mod,                         only: field_type
+  use function_space_mod,                only: function_space_type
+  use flux_direction_mod,                only: x_direction, y_direction
+  use departure_points_config_mod,       only: method
+  use ffsl_1d_advective_update_alg_mod,  only: ffsl_1d_advective_first_update_alg
+  use ffsl_horizontal_mass_flux_alg_mod, only: ffsl_horizontal_mass_flux_alg
+
+  implicit none
+
+  private
+  public :: horizontal_cosmic_fluxes_alg
+
+contains
+
+  !> @brief Calculate horizontal mass fluxes using the COSMIC scheme.
+  !> @details The algorithm is composed of two main stages.
+  !!          The first computes the advective half steps. The second uses these
+  !!          half steps to compute the horizontal mass fluxes.
+  !> @param[in]     rho               Density at time level n
+  !> @param[in]     cell_orientation  Orientation of cells held in W3 field
+  !> @param[in,out] mass_flux_x       Mass fluxes in x direction used to update density
+  !> @param[in,out] mass_flux_y       Mass fluxes in y direction used to update density
+  !> @param[in]     dep_pts_x         Departure points in x direction
+  !> @param[in]     dep_pts_y         Departure points in y direction
+  !> @param[in]     dt                The model timestep length
+  subroutine horizontal_cosmic_fluxes_alg( rho,              &
+                                           cell_orientation, &
+                                           mass_flux_x,      &
+                                           mass_flux_y,      &
+                                           dep_pts_x,        &
+                                           dep_pts_y,        &
+                                           dt )
+
+    implicit none
+
+    type(field_type),    intent(in)     :: rho
+    type(field_type),    intent(in)     :: cell_orientation
+    type(field_type),    intent(inout)  :: mass_flux_x
+    type(field_type),    intent(inout)  :: mass_flux_y
+    type(field_type),    intent(in)     :: dep_pts_x
+    type(field_type),    intent(in)     :: dep_pts_y
+    real(r_def),         intent(in)     :: dt
+
+    type( field_type ) :: rho_adv_x, rho_adv_y, rho_hat_adv_x, rho_hat_adv_y
+    type( field_type ) :: rho_x, rho_y
+
+    type(function_space_type), pointer :: w2_fs     => null()
+    type(function_space_type), pointer :: w3_fs     => null()
+
+    w3_fs => rho%get_function_space()
+    w2_fs => mass_flux_x%get_function_space()
+
+    call rho_adv_x%initialise( vector_space = w3_fs )
+    call rho_adv_y%initialise( vector_space = w3_fs )
+    call rho_hat_adv_x%initialise( vector_space = w3_fs )
+    call rho_hat_adv_y%initialise( vector_space = w3_fs )
+    call rho_x%initialise( vector_space = w3_fs )
+    call rho_y%initialise( vector_space = w3_fs )
+
+    ! Perform two 1D advective updates in the x and y directions (horizontal)
+    call ffsl_1d_advective_first_update_alg(x_direction, dep_pts_x,       &
+                                            cell_orientation, rho, rho_adv_x, dt)
+    call ffsl_1d_advective_first_update_alg(y_direction, dep_pts_y,       &
+                                            cell_orientation, rho, rho_adv_y, dt)
+
+    ! Average the two advective density updates with the density at timestep level n
+    call invoke( name = "average_rho_and_init_mass_fluxes",                       &
+                 aX_plus_bY(rho_hat_adv_x, 0.5_r_def, rho, 0.5_r_def, rho_adv_x), &
+                 aX_plus_bY(rho_hat_adv_y, 0.5_r_def, rho, 0.5_r_def, rho_adv_y), &
+
+    ! Calculate separately the conservative fluxes in the x and y directions (horizontal)
+                 setval_c(mass_flux_x, 0.0_r_def),                                &
+                 setval_c(mass_flux_y, 0.0_r_def) )
+
+    call ffsl_horizontal_mass_flux_alg(dep_pts_x, dep_pts_y, cell_orientation, &
+                                       rho_hat_adv_x, rho_hat_adv_y,           &
+                                       mass_flux_x, mass_flux_y, dt )
+
+    nullify( w2_fs )
+    nullify( w3_fs )
+
+  end subroutine horizontal_cosmic_fluxes_alg
+
+end module horizontal_cosmic_fluxes_alg_mod

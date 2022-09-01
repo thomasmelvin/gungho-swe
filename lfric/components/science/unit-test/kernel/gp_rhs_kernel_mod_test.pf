@@ -1,0 +1,190 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+!
+!-------------------------------------------------------------------------------
+module gp_rhs_kernel_mod_test
+
+  use constants_mod,  only : i_def, r_def
+  use pFUnit_Mod
+  use quadrature_xyoz_mod,               only: quadrature_xyoz_type, &
+                                               quadrature_xyoz_proxy_type
+  use quadrature_rule_gaussian_mod,      only: quadrature_rule_gaussian_type
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: gp_rhs_test_type
+    private
+    real(r_def), allocatable :: basis(:,:,:,:),   &
+                                basis_f(:,:,:,:), &
+                                diff_basis(:,:,:,:)
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type gp_rhs_test_type
+
+  integer(i_def), parameter :: ndf_w0 = 8
+  integer(i_def), parameter :: undf   = 8
+  integer(i_def), parameter :: undf_f = 8
+  integer(i_def), parameter :: ndf_f  = 1
+  integer(i_def), parameter :: ndf_pid = 1
+  integer(i_def), parameter :: undf_pid = 1
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use finite_element_config_mod, only : cellshape_quadrilateral, &
+                                          coord_system_xyz
+    use feign_config_mod,          only : feign_finite_element_config
+
+    implicit none
+
+    class(gp_rhs_test_type), intent(inout) :: this
+
+    type( quadrature_xyoz_type )          :: qr
+    type(quadrature_xyoz_proxy_type) :: qr_proxy
+    type( quadrature_rule_gaussian_type ) :: quadrature_rule
+
+    integer(i_def) :: nqp_h, nqp_v
+
+    call feign_finite_element_config(           &
+             cellshape=cellshape_quadrilateral, &
+             coord_order=0_i_def,               &
+             coord_system=coord_system_xyz,     &
+             element_order=0_i_def,             &
+             rehabilitate=.true. )
+
+    qr = quadrature_xyoz_type(3, quadrature_rule)
+
+    qr_proxy = qr%get_quadrature_proxy()
+    nqp_h=qr_proxy%np_xy
+    nqp_v=qr_proxy%np_z
+
+    allocate( this%basis_f   (1,ndf_f,nqp_h,nqp_v), &
+              this%basis     (1,ndf_w0,nqp_h,nqp_v), &
+              this%diff_basis(3,ndf_w0,nqp_h,nqp_v) )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod,        only: final_configuration
+
+    implicit none
+
+    class(gp_rhs_test_type), intent(inout) :: this
+
+    deallocate( this%basis, this%basis_f, this%diff_basis )
+
+    call final_configuration()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use gp_rhs_kernel_mod, only : gp_rhs_code
+
+    implicit none
+
+    class(gp_rhs_test_type), intent(inout) :: this
+
+    integer :: num_layers
+    type(quadrature_xyoz_type) :: qr
+    type(quadrature_xyoz_proxy_type) :: qr_proxy
+    type( quadrature_rule_gaussian_type ) :: quadrature_rule
+    real(kind=r_def) :: f_data(1), rhs(8)
+    real(kind=r_def) :: answer, tol
+    integer :: map_w0(8), map_f(1), map_pid(1)
+    real(kind=r_def) :: chi(8,3)
+    real(kind=r_def) :: panel_id(1)
+    real(kind=r_def) :: x_vert(8,3)
+    real(kind=r_def),pointer :: xqp_h(:,:), xqp_v(:) => null()
+    real(kind=r_def), pointer :: wh(:), wv(:) => null()
+    integer          :: nqp_h, nqp_v
+    real(kind=r_def) :: fx, fy, fz
+    integer :: df, dim, qp1, qp2
+
+    qr = quadrature_xyoz_type(3, quadrature_rule)
+
+    qr_proxy = qr%get_quadrature_proxy()
+    nqp_h=qr_proxy%np_xy
+    nqp_v=qr_proxy%np_z
+    xqp_h=>qr_proxy%points_xy
+    xqp_v=>qr_proxy%points_z
+    wh=>qr_proxy%weights_xy
+    wv=>qr_proxy%weights_z
+
+    x_vert(1,:) = (/ 0.0_r_def, 0.0_r_def, 0.0_r_def /)
+    x_vert(2,:) = (/ 1.0_r_def, 0.0_r_def, 0.0_r_def /)
+    x_vert(3,:) = (/ 1.0_r_def, 1.0_r_def, 0.0_r_def /)
+    x_vert(4,:) = (/ 0.0_r_def, 1.0_r_def, 0.0_r_def /)
+    x_vert(5,:) = (/ 0.0_r_def, 0.0_r_def, 1.0_r_def /)
+    x_vert(6,:) = (/ 1.0_r_def, 0.0_r_def, 1.0_r_def /)
+    x_vert(7,:) = (/ 1.0_r_def, 1.0_r_def, 1.0_r_def /)
+    x_vert(8,:) = (/ 0.0_r_def, 1.0_r_def, 1.0_r_def /)
+
+    do df = 1,ndf_w0
+      map_w0(df) = df
+      do qp2 = 1,nqp_v
+        do qp1 = 1,nqp_h
+          fx = (1.0_r_def - x_vert(df,1)) + (-1.0_r_def)**(int(x_vert(df,1))+1)*xqp_h(qp1,1)
+          fy = (1.0_r_def - x_vert(df,2)) + (-1.0_r_def)**(int(x_vert(df,2))+1)*xqp_h(qp1,2)
+          fz = (1.0_r_def - x_vert(df,3)) + (-1.0_r_def)**(int(x_vert(df,3))+1)*xqp_v(qp2)
+          this%diff_basis(1,df,qp1,qp2) = fy*fz
+          this%diff_basis(2,df,qp1,qp2) = fx*fz
+          this%diff_basis(3,df,qp1,qp2) = fx*fy
+          this%basis(1,df,qp1,qp2) = fx*fy*fz
+        end do
+      end do
+      do dim = 1,3
+        if ( x_vert(df,dim) < 1.0_r_def ) &
+          this%diff_basis(dim,df,:,:) = -this%diff_basis(dim,df,:,:)
+      end do
+    end do
+    chi(:,:) = x_vert(:,:)
+    panel_id(:) = 1.0_r_def
+
+    map_pid(1) = 1
+
+    map_f(1) = 1
+    this%basis_f(:,:,:,:) = 1.0_r_def
+    f_data(1) = 5.0_r_def
+
+    num_layers=1
+    rhs(:) = 0.0_r_def
+    call gp_rhs_code(num_layers,                            &
+                     rhs, f_data,                           &
+                     chi(:,1), chi(:,2), chi(:,3),          &
+                     panel_id,                              &
+                     ndf_w0, undf, map_w0, this%basis,      &
+                     ndf_f, undf_f, map_f, this%basis_f,    &
+                     ndf_w0, undf, map_w0,                  &
+                     this%basis, this%diff_basis,           &
+                     ndf_pid, undf_pid, map_pid,            &
+                     nqp_h, nqp_v, wh, wv )
+
+! Answer for hardwired jacobian
+!    answer = ( 6000.0_r_def * 1000.0_r_def * 2000.0_r_def )*0.125_r_def*f_data(1)
+
+    answer = ( 1.0_r_def * 1.0_r_def * 1.0_r_def )*0.125_r_def*f_data(1)
+    tol    = 1.0e-2_r_def
+    do df = 1, ndf_w0
+      @assertEqual(answer, rhs(df), tol)
+      @assertEqual(answer, answer, tol)
+    end do
+
+  end subroutine test_all
+
+end module gp_rhs_kernel_mod_test

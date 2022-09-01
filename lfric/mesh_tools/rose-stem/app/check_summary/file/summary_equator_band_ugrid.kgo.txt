@@ -1,0 +1,16 @@
+"gungho":
+  Geometry:            spherical
+  Topology:            channel
+  Co-ordinate system:  ll
+  Periodic X:          T
+  Periodic Y:          F
+  Constructor inputs:  geometry=spherical;topology=channel;coord_sys=ll;edge_cells_x=360;edge_cells_y=360;periodic_x=T;periodic_y=F;domain_x=360.00;domain_y=60.00;rotate_mesh=F
+  Nodes:               129960
+  Edges:               259560
+  Faces:               129600
+  Nodes per face:      4
+  Edges per face:      4
+  Nodes per edge:      2
+  Max. faces per node: 4
+  North pole [lon,lat]: [      0.00,     90.00]
+  Null Island [lon,lat]: [      0.00,      0.00]

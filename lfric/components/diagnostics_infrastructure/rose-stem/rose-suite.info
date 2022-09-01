@@ -1,0 +1,4 @@
+access-list=*
+owner=lfric
+project=diagnostics
+title=Functional testing suite for LFRic diagnostics infrastructure

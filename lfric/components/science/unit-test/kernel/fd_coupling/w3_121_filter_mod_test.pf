@@ -1,0 +1,193 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> Test the 1-2-1 filter that results from applications of w3_to_w1 followed
+!> by w1_to_w3
+
+module w3_121_filter_mod_test
+
+  use constants_mod, only : i_def, r_def
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_w3_to_w1_average_kernel
+  public :: test_w1_to_w3_average_kernel
+
+  @TestCase
+  type, extends(TestCase), public :: w3_121_filter_test_type
+    private
+    integer(kind=i_def) :: nlayers
+    integer(kind=i_def) :: ncells
+    integer(kind=i_def) :: ndf3, undf3
+    integer(kind=i_def) :: ndf1, undf1
+    integer(kind=i_def), allocatable :: map3(:,:)
+    integer(kind=i_def), allocatable :: map1(:,:)
+    real(kind=r_def),    allocatable :: field_w3(:)
+    real(kind=r_def),    allocatable :: field_w1(:)
+    real(kind=r_def),    allocatable :: rmultiplicity_w1(:)
+    real(kind=r_def),    allocatable :: answer(:)
+  contains
+    procedure SetUp
+    procedure tearDown
+    procedure test_w3_to_w1_average_kernel
+    procedure test_w1_to_w3_average_kernel
+  end type w3_121_filter_test_type
+
+  contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use get_unit_test_m3x3_dofmap_mod,       only : get_w1_m3x3_dofmap, &
+                                                    get_w3_m3x3_dofmap
+    use get_unit_test_m3x3_q3x3x3_sizes_mod, only : get_w1_m3x3_q3x3x3_size, &
+                                                    get_w3_m3x3_q3x3x3_size
+
+    implicit none
+
+    class(w3_121_filter_test_type), intent(inout) :: this
+
+    ! Quadrature (not used)
+    integer(kind=i_def) :: nqp_h, nqp_v
+
+    ! Dimensions (not used)
+    integer(kind=i_def) :: dim_space, dim_space_diff
+
+    ! Mesh
+    this%nlayers = 1
+
+    ! Setup W3 fields
+    call get_w3_m3x3_q3x3x3_size(this%ndf3, this%undf3, this%ncells, &
+                                 dim_space, dim_space_diff, &
+                                 nqp_h, nqp_v, &
+                                 this%nlayers)
+
+    allocate(this%map3(this%ndf3,this%ncells))
+    allocate(this%field_w3(this%undf3))
+
+    call get_w3_m3x3_dofmap(this%map3, this%nlayers)
+
+    ! Setup W1 fields
+    call get_w1_m3x3_q3x3x3_size(this%ndf1, this%undf1, this%ncells, &
+                                 dim_space, dim_space_diff, &
+                                 nqp_h, nqp_v, &
+                                 this%nlayers)
+
+    allocate(this%map1(this%ndf1,this%ncells))
+    allocate(this%field_w1(this%undf1))
+    allocate(this%rmultiplicity_w1(this%undf1))
+
+    call get_w1_m3x3_dofmap(this%map1, this%nlayers)
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(w3_121_filter_test_type), intent(inout) :: this
+
+    deallocate(this%map3)
+    deallocate(this%field_w3)
+    deallocate(this%map1)
+    deallocate(this%field_w1)
+    deallocate(this%rmultiplicity_w1)
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_w3_to_w1_average_kernel( this )
+
+    use w3_to_w1_average_kernel_mod, only : w3_to_w1_average_code
+
+    implicit none
+
+    class(w3_121_filter_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter :: tol = 1.0e-9_r_def
+
+    integer(kind=r_def) :: cell
+
+    ! Test smoothing from W3 to W1
+    this%field_w1(:) = 0.0_r_def
+    this%field_w3(:) = 0.0_r_def
+    this%field_w3(5) = 16.0_r_def
+
+    ! Define answer
+    allocate(this%answer(this%undf1))
+
+    this%answer(:) = 0.0_r_def
+    this%answer(11) = 4.0_r_def
+    this%answer(20) = 4.0_r_def
+    this%answer(31) = 4.0_r_def
+    this%answer(37) = 4.0_r_def
+
+    do cell=1,this%ncells
+      call w3_to_w1_average_code(this%nlayers,                             &
+                                 this%field_w1, this%field_w3,             &
+                                 this%ndf1, this%undf1, this%map1(:,cell), &
+                                 this%ndf3, this%undf3, this%map3(:,cell)  &
+                                 )
+    end do
+
+    ! Checking all DoFs using the dot_product instead of checking them one by one in a DO loop
+    @assertEqual(dot_product(this%field_w1-this%answer, this%field_w1-this%answer), 0.0_r_def, tol)
+
+    deallocate(this%answer)
+
+  end subroutine test_w3_to_w1_average_kernel
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_w1_to_w3_average_kernel( this )
+
+    use w1_to_w3_average_kernel_mod, only : w1_to_w3_average_code
+
+    implicit none
+
+    class(w3_121_filter_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter :: tol = 1.0e-9_r_def
+
+    integer(kind=r_def) :: cell
+
+    ! Test smoothing from W1 to W3
+    this%rmultiplicity_w1(:) = 0.25_r_def
+    this%field_w3(:) = 0.0_r_def
+
+    this%field_w1(:)  = 0.0_r_def
+    this%field_w1(11) = 4.0_r_def
+    this%field_w1(20) = 4.0_r_def
+    this%field_w1(31) = 4.0_r_def
+    this%field_w1(37) = 4.0_r_def
+
+    ! Define answer
+    allocate(this%answer(this%undf3))
+
+    this% answer = [1.0_r_def, 2.0_r_def, 1.0_r_def, &
+                    2.0_r_def, 4.0_r_def, 2.0_r_def, &
+                    1.0_r_def, 2.0_r_def, 1.0_r_def]
+
+    do cell=1, this%ncells
+      call w1_to_w3_average_code(this%nlayers,                                        &
+                                 this%field_w3, this%field_w1, this%rmultiplicity_w1, &
+                                 this%ndf3, this%undf3, this%map3(:,cell),            &
+                                 this%ndf1, this%undf1, this%map1(:,cell)             &
+                                 )
+    end do
+
+    ! Checking all DoFs using the dot_product instead of checking them one by one in a DO loop
+    @assertEqual(dot_product(this%field_w3-this%answer, this%field_w3-this%answer), 0.0_r_def, tol)
+
+    deallocate(this%answer)
+
+  end subroutine test_w1_to_w3_average_kernel
+
+end module w3_121_filter_mod_test

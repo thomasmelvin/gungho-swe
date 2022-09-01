@@ -1,0 +1,93 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief Algorithm which calculate the divergence of a mass flux W2 field.
+
+module ffsl_divergence_alg_mod
+
+  use constants_mod,                     only: i_def
+  use field_mod,                         only: field_type
+  use log_mod,                           only: log_event, LOG_LEVEL_ERROR
+  use fem_constants_mod,                 only: get_inverse_w3_mass_matrix
+  use operator_mod,                      only: operator_type
+  use dg_matrix_vector_kernel_mod,       only: dg_matrix_vector_kernel_type
+  use fv_divergence_kernel_mod,          only: fv_divergence_kernel_type
+  use psykal_lite_mod,                   only: invoke_fv_divergence
+  use flux_direction_mod,                only: x_direction, y_direction, z_direction
+
+  implicit none
+
+  private
+  public :: ffsl_divergence_alg
+
+contains
+
+  !> @brief Algorithm which calculate the divergence of a mass flux W2 field.
+  !> @details  Input is typically the mass flux at time level n. Output is the
+  !!           divergence. Due to the split nature of flux-form semi-Lagrangian (FFSL)
+  !!           schemes the divergence is calculated in the x, y or z direction separately.
+  !!           The divergence is calculated by multiplying the flux term by the
+  !!           det(J) values at the W2 dofs, then taking the divergence which at
+  !!           lowest order elements is simply the difference between fluxes on
+  !!           opposite faces and then dividing by the det(J) values at W3 dofs.
+  !!           This is the divergence form for use with curvlinear coordinates.
+  !> @param[in,out] divergence       Divergence term
+  !> @param[in]     mass_flux        Mass flux
+  !> @param[in]     detj_at_w2       Det(J) located at W2 dofs
+  !> @param[in]     cell_orientation Cell orientation values
+  !> @param[in]     direction        The direction in which to calculate the
+  !>                                divergence, x, y or z
+  subroutine ffsl_divergence_alg( divergence,       &
+                                  mass_flux,        &
+                                  detj_at_w2,       &
+                                  cell_orientation, &
+                                  direction  )
+
+    implicit none
+
+    type(field_type),    intent(inout) :: divergence
+    type(field_type),    intent(in)    :: mass_flux
+    type(field_type),    intent(in)    :: detj_at_w2
+    type(field_type),    intent(in)    :: cell_orientation
+    integer(kind=i_def), intent(in)    :: direction
+
+    type(field_type)                   :: div_temp, mass_flux_mult
+    type(operator_type), pointer       :: m3_inv => null()
+
+    m3_inv => get_inverse_w3_mass_matrix(mass_flux%get_mesh_id())
+
+    call div_temp%initialise( vector_space = divergence%get_function_space() )
+    call mass_flux_mult%initialise( vector_space = detj_at_w2%get_function_space() )
+
+    !
+    ! Part 1. Calculate div(mass_flux) = (1/detj_at_w3)*d(detj_at_w2 * mass_flux)/dx
+    !
+    ! Multiply mass fluxes by detj at W2 values
+    call invoke( X_times_Y(mass_flux_mult, mass_flux, detj_at_w2) )
+
+    ! Differentiate detj_at_w2*mass_flux
+    if (direction == x_direction .or. direction == y_direction) then
+      call invoke_fv_divergence( div_temp,                 &
+                                 mass_flux_mult,           &
+                                 mass_flux_mult,           &
+                                 cell_orientation,         &
+                                 direction )
+    elseif (direction == z_direction) then
+      call invoke(fv_divergence_kernel_type( div_temp,            &
+                                             cell_orientation,    &
+                                             mass_flux_mult,      &
+                                             direction) )
+    else
+      call log_event( "Error: unspecified direction for FFSL divergence", LOG_LEVEL_ERROR )
+    end if
+
+    ! Divide the divergence by detj located at W3 dofs.
+    call invoke( dg_matrix_vector_kernel_type(divergence, div_temp, m3_inv) )
+
+    nullify( m3_inv )
+
+  end subroutine ffsl_divergence_alg
+
+end module ffsl_divergence_alg_mod

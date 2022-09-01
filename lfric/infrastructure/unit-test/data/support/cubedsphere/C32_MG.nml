@@ -1,0 +1,20 @@
+!--------------------------------------------------------------------
+! Example namelists for mesh generation
+!--------------------------------------------------------------------
+&mesh
+  mesh_filename  = 'mesh_C32_MG.nc'
+  geometry       = 'spherical'
+  topology       = 'periodic'
+  n_meshes       = 5
+  mesh_names     = 'C32','C16','C12','C8','C4'
+  mesh_maps      = 'C32:C16','C16:C8','C8:C4','C12:C4'
+  n_partitions   = 0
+  coord_sys      = 'll'
+  rotate_mesh    = .false.
+/
+
+&cubedsphere_mesh
+  edge_cells     = 32, 16, 12, 8, 4
+  smooth_passes  = 0
+  stretch_factor = 1.0
+/

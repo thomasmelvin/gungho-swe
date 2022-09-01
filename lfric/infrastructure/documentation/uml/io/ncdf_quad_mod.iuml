@@ -1,0 +1,61 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class ncdf_quad_mod::ncdf_quad_type {
+
+  -ncid: integer
+  -file_name: string
+  -mesh_name: string
+  -geometry: string
+  -topology: string
+  -coord_sys: string
+  -max_stencil_depth: integer
+  -periodic_x: logical
+  -periodic_y: logical
+  -constructor_inputs: string
+  -coord_units_x: string
+  -coord_units_y: string
+
+  -nmesh_nodes: integer
+  -nmesh_edges: integer
+  -nmesh_faces: integer
+  -nmesh_targets: integer
+
+  -nmesh_nodes_dim_id: integer
+  -nmesh_edges_dim_id: integer
+  -nmesh_faces_dim_id: integer
+  -ntargets_per_source_dim_id: integer[:] <<allocatable>>
+  -ntargets_per_source_x_dim_id: integer[:] <<allocatable>>
+  -ntargets_per_source_y_dim_id: integer[:] <<allocatable>>
+  -two_dim_id: integer
+  -four_dim_id: integer
+
+  -mesh_id: integer
+  -mesh_edge_nodes_id: integer
+  -mesh_face_nodes_id: integer
+  -mesh_face_edges_id: integer
+  -mesh_mesh_links_id: integer[:] <<allocatable>>
+
+  -mesh_node_x_id: integer
+  -mesh_node_y_id: integer
+  -mesh_face_x_id: integer
+  -mesh_face_y_id: integer
+
+  -target_mesh_maps: global_mesh_map_collection_type
+
+  +read_mesh( ... )
+  +read_map( ... )
+  +write_mesh( ... )
+  +append_mesh( ... )
+  +get_dimensions( ... )
+  +get_mesh_names( ... )
+  +get_n_meshes( ... )
+  +is_mesh_present( ... )
+  +file_close( ... )
+  +file_new( ... )
+  +file_open( ... )
+
+}
+
+ugrid_file_mod::ugrid_file_type <|.left. ncdf_quad_mod::ncdf_quad_type

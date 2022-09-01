@@ -1,0 +1,56 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief Compute the flux F of a variable rho by a wind U: F = rho*U.
+
+module flux_alg_mod
+
+  use constants_mod,                only: i_def, l_def
+  use field_mod,                    only: field_type
+  use reconstruct_w3_field_alg_mod, only: reconstruct_w3_field_alg, &
+                                          reconstruct_koren_w3_field_alg
+  use transport_enumerated_types_mod, only: monotone_koren
+
+  implicit none
+
+  private
+
+  public :: flux_alg
+
+contains
+
+  !=============================================================================!
+  !> @brief Compute the flux F of a variable rho by a wind U: F = rho*U.
+  !> @details Compute the mass flux, f = density*wind using the desired spatial
+  !!          reconstruction. Options for this are either FE or FV reconstructions.
+  !> @param[in,out] mass_flux  Mass flux field: f = density*wind
+  !> @param[in]     density    Field to advect
+  !> @param[in]     wind       Advecting wind field
+  !> @param[in]     direction  Direction of the transport
+  !> @param[in]     reversible Use the reversible reconstruction
+  !> @param[in]     monotonicity  Monotonicity option
+  !> @param[in]     logspace   Carry out interpolation in log space
+  subroutine flux_alg(mass_flux, density, wind, direction, reversible, &
+                      monotonicity, logspace)
+
+    implicit none
+
+    type(field_type),              intent(in)    :: density, wind
+    type(field_type),              intent(inout) :: mass_flux
+    integer(kind=i_def),           intent(in)    :: direction, monotonicity
+    logical(kind=l_def),           intent(in)    :: reversible
+    logical(kind=l_def), optional, intent(in)    :: logspace
+
+    if ( monotonicity == monotone_koren ) then
+       call reconstruct_koren_w3_field_alg(mass_flux, density, wind, direction, logspace)
+    else
+       call reconstruct_w3_field_alg(mass_flux, density, wind, direction, reversible, logspace)
+    end if
+
+    call invoke(inc_X_times_Y(mass_flux, wind) )
+
+  end subroutine flux_alg
+
+end module flux_alg_mod

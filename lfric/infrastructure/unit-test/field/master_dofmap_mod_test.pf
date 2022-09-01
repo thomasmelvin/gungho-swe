@@ -1,0 +1,54 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the master_dofmap representation
+!>
+module master_dofmap_mod_test
+
+  implicit none
+
+
+contains
+
+  @test
+  subroutine test_master_dofmap()
+    use master_dofmap_mod,        only: master_dofmap_type
+    use pFUnit_Mod
+
+
+    implicit none
+
+    type(master_dofmap_type)  :: dofmap
+    integer, allocatable, dimension(:,:) :: map_init, map_copy
+    integer, pointer :: map(:) => null()
+    integer :: ncells, ndf, cell, df
+
+    ! Allocate the maps
+    ncells = 4
+    ndf = 3
+    allocate( map_init(ndf,0:ncells), map_copy(ndf,0:ncells) )
+
+    ! populate the map
+    map_init(:,0) = (/ 0, 0, 0 /)
+    map_init(:,1) = (/ 1, 2, 3 /)
+    map_init(:,2) = (/ 3, 4, 5 /)
+    map_init(:,3) = (/ 5, 6, 7 /)
+    map_init(:,4) = (/ 8, 9, 10/)
+
+    map_copy = map_init
+
+    dofmap = master_dofmap_type(map_init)
+
+    do cell = 1,ncells
+      map => dofmap%get_master_dofmap(cell)
+      do df = 1,ndf
+        @assertEqual( map(df), map_copy(df,cell) )
+      end do
+    end do
+
+  end subroutine test_master_dofmap
+
+end module master_dofmap_mod_test

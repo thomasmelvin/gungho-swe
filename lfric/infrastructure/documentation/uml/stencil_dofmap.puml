@@ -1,0 +1,14 @@
+' (c) Crown copyright 2020 Met Office. All rights reserved.
+' The file LICENCE, distributed with this code, contains details of the terms
+' under which the code may be used.
+
+@startuml
+
+!include look.iuml
+!include utilities/linked_list_data_mod.iuml
+!include field/stencil_dofmap_mod.iuml
+!include field/stencil_2D_dofmap_mod.iuml
+
+linked_list_data_mod::linked_list_data_type ^-- stencil_dofmap_mod::stencil_dofmap_type
+linked_list_data_mod::linked_list_data_type ^-- stencil_2D_dofmap_mod::stencil_2D_dofmap_type
+@enduml

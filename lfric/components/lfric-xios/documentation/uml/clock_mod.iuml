@@ -1,0 +1,13 @@
+' (c) Crown copyright 2021 Met Office. All rights reserved.
+' The file LICENCE, distributed with this code, contains details of the terms
+' under which the code may be used.
+
+package lfric_xios_clock_mod {
+  class lfric_xios_clock_type {
+    -step_offset: Integer
+
+    +initialise(calendar: calendar_type, first: String, last: String, seconds_per_step: Float, spinup_period: Float)
+    +tick(): Boolean
+  }
+  clock_mod::clock_type ^-- lfric_xios_clock_type
+}

@@ -1,0 +1,134 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the extraction of the inverse lumped diagonal from the
+!> vertical velocity mass matrix
+!>
+module columnwise_op_asm_m2v_lumped_inv_kernel_mod_test
+
+  use constants_mod,                 only : i_def, r_def, r_solver
+  use get_unit_test_m3x3_q3x3x3_sizes_mod, &
+       only : get_w2v_m3x3_q3x3x3_size
+  use get_unit_test_m3x3_dofmap_mod, only : get_w2v_m3x3_dofmap
+  use get_unit_test_m3x3_cma_data_mod, &
+                                     only : get_w2v_w2v_m3x3_cma_data
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: columnwise_op_asm_m2v_lumped_inv_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type columnwise_op_asm_m2v_lumped_inv_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(columnwise_op_asm_m2v_lumped_inv_test_type), intent(inout) :: this
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(columnwise_op_asm_m2v_lumped_inv_test_type), intent(inout) :: this
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use columnwise_op_asm_m2v_lumped_inv_kernel_mod, only : &
+         columnwise_op_asm_m2v_lumped_inv_kernel_code
+
+    implicit none
+
+    class(columnwise_op_asm_m2v_lumped_inv_test_type), intent(inout) :: this
+
+    real(kind=r_solver), parameter :: tol = 1.0e-6_r_solver
+    real(kind=r_solver)            :: answer
+    integer(kind=i_def)            :: i, j, k, cell
+    integer(kind=i_def)            :: nlayers, ndf, unused, ncell_2d, ncell_3d
+    integer(kind=i_def)            :: alpha, beta, g_m, g_p, bw, nrow, ncol
+
+    integer(kind=i_def), allocatable, dimension(:,:)   :: map
+    integer(kind=i_def), allocatable, dimension(:,:)   :: col_bmap
+    integer(kind=i_def), allocatable, dimension(:)     :: ind_map
+    real(kind=r_solver), allocatable, dimension(:,:,:) :: col_mat_mm
+    real(kind=r_def),    allocatable, dimension(:,:,:) :: local_stencil
+
+    nlayers = 3
+    call get_w2v_m3x3_q3x3x3_size( ndf, unused, ncell_2d, unused, unused, &
+         unused, unused, nlayers=nlayers)
+    call get_w2v_m3x3_dofmap( map )
+    ! Set ncell_3d to be 1*nlayers, as only a single column is required for the test.
+    ncell_2d = 1
+    ncell_3d = ncell_2d * nlayers
+    allocate(local_stencil(ndf,ndf,ncell_3d))
+
+    call get_w2v_w2v_m3x3_cma_data(ndf, ncell_2d, nlayers, map, alpha, beta, &
+                                 g_m, g_p, bw, nrow, ncol, &
+                                 ind_map, col_bmap)
+    allocate(col_mat_mm( bw, nrow, ncell_2d ))
+
+    cell = 1
+    col_mat_mm = 0.0_r_solver
+
+    do i=1, ncell_3d
+       local_stencil(:,:,i) = reshape( (/ 1.0_r_def/3.0_r_def, 1.0_r_def/6.0_r_def,    &
+                                          1.0_r_def/6.0_r_def, 1.0_r_def/3.0_r_def /), &
+                                          (/2, 2/) )
+    end do
+
+    call columnwise_op_asm_m2v_lumped_inv_kernel_code(cell,                 &
+                                                      nlayers,              &
+                                                      ncell_2d,             &
+                                                      ncell_3d,             &
+                                                      local_stencil,        &
+                                                      col_mat_mm,           &
+                                                      nrow,                 &
+                                                      bw,                   &
+                                                      alpha,                &
+                                                      beta,                 &
+                                                      g_m,                  &
+                                                      g_p,                  &
+                                                      ndf,                  &
+                                                      col_bmap)
+    do i = 1, nrow
+      if ( (i == 1) .or. (i == nrow) ) then
+        ! First and final row should be ( 3 )
+        answer = 3.0_r_solver
+        @assertEqual(answer, col_mat_mm(1,i,1), tol)
+      else
+        ! All other rows should be ( 3/2 )
+        answer = (3.0_r_solver/2.0_r_solver)
+        @assertEqual(answer, col_mat_mm(1,i,1), tol)
+      end if
+    end do
+
+    deallocate(local_stencil)
+    deallocate(col_mat_mm)
+    deallocate(map)
+    deallocate(col_bmap)
+    deallocate(ind_map)
+
+  end subroutine test_all
+
+end module columnwise_op_asm_m2v_lumped_inv_kernel_mod_test

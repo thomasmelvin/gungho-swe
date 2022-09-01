@@ -1,0 +1,60 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class gencube_ps_mod::gencube_ps_type {
+  -mesh_name: string
+
+  -geometry:  integer
+  -topology:  integer
+  -coord_sys: integer
+  -constructor_inputs: string
+  -coord_units_x: string
+  -coord_units_y: string
+  -edge_cells: integer
+  -nsmooth: integer
+  -npanels: integer
+  -nmaps: integer
+
+  -rotation_angle: real
+  -rotate_mesh: logical
+
+  -stretch_factor: real
+
+  -target_mesh_names: string[:] <<allocatable>>
+  -target_edge_cells: integer[:] <<allocatable>>
+  -global_mesh_maps: global_mesh_map_collection_type <<allocatable>>
+
+  -cell_next: integer[::] <<allocatable>>
+  -verts_on_cell: integer[::] <<allocatable>>
+  -edges_on_cell: integer[::] <<allocatable>>
+  -verts_on_edge: integer[::] <<allocatable>>
+  -vert_coords: real[::] <<allocatable>>
+  -cell_coords: real[::] <<allocatable>>
+
+  -north_pole: real[2]
+  -null_island: real[2]
+
+  +<<create>>gencube_ps_constructor(\n\t<<in>> mesh_name: string,\n\t<<in>> edge_cells: integer,\n\t<<in>> nsmooth: integer,\n\t<<in>> coord_sys: integer,\n\t<<in, optional>> rotate_mesh: integer,\n\t<<in, optional>> target_north_pole: real[2],\n\t<<in, optional>> target_null_island: real[2],\n\t<<in, optional>> stretch_factor: real,\n\t<<in, optional>> target_mesh_names: string[:]\n\t<<in, optional>> target_edge_cells: integer[:] ): gencube_ps_type
+
+  +calc_adjacency ( <<out, allocatable>> cell_next: integer[::] )
+  +calc_face_to_vert ( <<out, allocatable>> verts_on_cell: integer[::] )
+  +calc_edges( \n\t<<out, allocatable>> edges_on_cell: integer[::],\n\t<<out, allocatable>> verts_on_edge: integer[::] )
+  +calc_coords( \n\t<<out, allocatable>> vert_coords: real[::],\n\t<<out>> coord_units_x: string,\n\t<<out>> coord_units_y: string )
+  +calc_cell_centres()
+
+  +generate( ... )
+  +get_metadata( ... )
+  +get_dimensions( ... )
+  +get_coordinates( ... )
+  +get_connectivity( ... )
+  +get_global_mesh_maps( ... )
+
+  +write_mesh()
+  +orient_lfric( <<in>> panel_rotation_array:integer[:] )
+  +smooth()
+  +stretch_mesh()
+
+}
+
+gencube_ps_mod::gencube_ps_type -|> ugrid_generator_mod::ugrid_generator_type

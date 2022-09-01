@@ -1,0 +1,18 @@
+&one_of_each_test
+   a_dim        = 2
+   some_string  = 'chocolate teapot'
+   an_enum      = 'second'
+   whole_number = 13
+   angle_rad    = 0.1396
+   switch       = .true.
+   closed_array = 0.2, 0.3, 0.4
+   open_array   = 1, 2, 3, 4, 5
+   bounded_array_local_dim = 0.3, 0.4
+   bounded_array1_namelist_dim = 0.3, 0.4, 0.5
+   bounded_array2_namelist_dim = 0.5, 0.6, 0.7
+   bounded_array_source_dim    = 0.1, 0.6, 0.7, 0.9
+/
+
+&another_list
+  some_other_dim = 3
+/

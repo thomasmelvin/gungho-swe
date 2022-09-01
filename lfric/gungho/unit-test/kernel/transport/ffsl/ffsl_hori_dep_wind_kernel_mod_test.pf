@@ -1,0 +1,140 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2017 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> Test the calculation of the winds required for the FFSL transport scheme from
+!> the Piola winds used in GungHo. The values are multiplied by detJ at the W2
+!> dof locations.
+
+module ffsl_hori_dep_wind_kernel_mod_test
+
+  use constants_mod,                       only : i_def, r_def
+  use get_unit_test_m3x3_q3x3x3_sizes_mod, only : get_w2_m3x3_q3x3x3_size
+  use get_unit_test_m3x3_dofmap_mod,       only : get_w2_m3x3_dofmap
+  use flux_direction_mod,                  only : x_direction, y_direction
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: ffsl_hori_dep_wind_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type ffsl_hori_dep_wind_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(ffsl_hori_dep_wind_test_type), intent(inout) :: this
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(ffsl_hori_dep_wind_test_type), intent(inout) :: this
+
+  end subroutine tearDown
+
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use ffsl_hori_dep_wind_kernel_mod, only: ffsl_hori_dep_wind_code
+
+    implicit none
+
+    class(ffsl_hori_dep_wind_test_type), intent(inout) :: this
+
+    real(kind=r_def)             :: answer, physical_wind_value
+    real(kind=r_def), parameter  :: tol = 1.0e-12_r_def
+
+    integer(i_def) :: nlayers, ncells, ncell_3d, cell, icell
+    integer(i_def) :: ndf_w2, undf_w2
+    integer(i_def) :: dim_space, dim_space_diff
+    integer(i_def) :: nqp_h, nqp_v
+
+    integer(i_def) :: i, j, k
+
+    integer(i_def), allocatable :: map_w2(:,:)
+    real(kind=r_def), allocatable :: u_departure_wind(:)
+    real(kind=r_def), allocatable :: u_piola(:)
+    real(kind=r_def), allocatable :: detj_at_w2(:)
+
+    nlayers = 3
+    call get_w2_m3x3_q3x3x3_size( ndf_w2, undf_w2, ncells, &
+                                  dim_space, dim_space_diff, &
+                                  nqp_h, nqp_v, &
+                                  nlayers )
+    call get_w2_m3x3_dofmap(map_w2)
+
+    allocate(u_departure_wind(undf_w2))
+    allocate(u_piola(undf_w2))
+    allocate(detj_at_w2(undf_w2))
+
+    u_departure_wind(:) = 0.0_r_def
+
+    u_piola(:)  =  0.0_r_def
+    u_piola( 1) =  3.0_r_def
+    u_piola( 4) = -3.0_r_def
+    u_piola( 7) =  3.0_r_def
+    u_piola(10) = -3.0_r_def
+    u_piola(13) =  3.0_r_def
+    u_piola(14) =  3.0_r_def
+
+    detj_at_w2(:) = 12.0_r_def
+
+    physical_wind_value = 3.0_r_def
+
+    cell = 1
+
+    call ffsl_hori_dep_wind_code(nlayers,                           &
+                                 u_departure_wind,                  &
+                                 u_piola,                           &
+                                 detj_at_w2,                        &
+                                 ndf_w2, undf_w2, map_w2(:, cell),  &
+                                 x_direction                        &
+                                 )
+
+    answer = physical_wind_value/(12.0_r_def)
+
+    @assertEqual(answer, u_departure_wind(map_w2(1, cell)), tol)
+    @assertEqual(-answer, u_departure_wind(map_w2(2, cell)), tol)
+    @assertEqual(answer, u_departure_wind(map_w2(3, cell)), tol)
+    @assertEqual(-answer, u_departure_wind(map_w2(4, cell)), tol)
+
+    call ffsl_hori_dep_wind_code(nlayers,                           &
+                                 u_departure_wind,                  &
+                                 u_piola,                           &
+                                 detj_at_w2,                        &
+                                 ndf_w2, undf_w2, map_w2(:, cell),  &
+                                 y_direction                        &
+                                )
+
+    @assertEqual(-answer, u_departure_wind(map_w2(1, cell)), tol)
+    @assertEqual(answer, u_departure_wind(map_w2(2, cell)), tol)
+    @assertEqual(-answer, u_departure_wind(map_w2(3, cell)), tol)
+    @assertEqual(answer, u_departure_wind(map_w2(4, cell)), tol)
+
+    deallocate(map_w2)
+    deallocate(u_departure_wind)
+    deallocate(u_piola)
+    deallocate(detj_at_w2)
+
+  end subroutine test_all
+
+end module ffsl_hori_dep_wind_kernel_mod_test

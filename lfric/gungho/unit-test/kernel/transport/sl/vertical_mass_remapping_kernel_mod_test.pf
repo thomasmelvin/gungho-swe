@@ -1,0 +1,193 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2020 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!
+
+!> Test the vertical_mass_remapping_kernel.
+!>
+module vertical_mass_remapping_kernel_mod_test
+
+  use constants_mod, only : i_def, r_def
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+
+  public :: test_all
+
+  @TestCase
+  type, public, extends(TestCase) :: vertical_mass_remapping_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type vertical_mass_remapping_test_type
+
+contains
+ !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+  use feign_config_mod,      only : feign_transport_config
+  use transport_config_mod,  only : operators_fv,                  &
+                                    runge_kutta_method_ssp2,       &
+                                    slice_order_cubic,             &
+                                    vertical_sl_order_quintic,     &
+                                    ffsl_flux_splitting_full,      &
+                                    ffsl_advective_splitting_full, &
+                                    max_vert_cfl_calc_uniform,     &
+                                    moisture_eqn_advective,        &
+                                    ffsl_scheme_three_dim
+
+    implicit none
+
+    class(vertical_mass_remapping_test_type), intent(inout) :: this
+
+    call feign_transport_config( operators = operators_fv,                                 &
+                                 runge_kutta_method = runge_kutta_method_ssp2,             &
+                                 fv_vertical_order = 2,                                    &
+                                 fv_horizontal_order = 2,                                  &
+                                 consistent_metric  = .false.,                             &
+                                 oned_reconstruction = .false.,                            &
+                                 cfl_mol_1d_stab = 1.0_r_def,                              &
+                                 cfl_mol_2d_stab = 1.0_r_def,                              &
+                                 cfl_mol_3d_stab = 1.0_r_def,                              &
+                                 slice_order = slice_order_cubic,                          &
+                                 vertical_sl_order = vertical_sl_order_quintic,            &
+                                 use_density_predictor = .false.,                          &
+                                 ffsl_flux_splitting = ffsl_flux_splitting_full,           &
+                                 ffsl_advective_splitting = ffsl_advective_splitting_full, &
+                                 moisture_eqn=moisture_eqn_advective,                      &
+                                 dry_field_name='tracer',                                  &
+                                 profile_size = 1,                                         &
+                                 field_names = (/'tracer'/),                               &
+                                 scheme = (/1/),                                           &
+                                 splitting = (/1/),                                        &
+                                 horizontal_method = (/1/),                                &
+                                 vertical_method = (/1/),                                  &
+                                 monotone = (/1/),                                         &
+                                 log_space = (/.false./),                                  &
+                                 enforce_min_value = (/.false./),                          &
+                                 min_value = (/0.0_r_def/),                                &
+                                 max_vert_cfl_calc = max_vert_cfl_calc_uniform,            &
+                                 ffsl_scheme = ffsl_scheme_three_dim,                      &
+                                 reversible = (/.false./)                                  &
+                                 )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod,  only: final_configuration
+
+    implicit none
+
+    class(vertical_mass_remapping_test_type), intent(inout) :: this
+
+    call final_configuration()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use, intrinsic :: iso_fortran_env,      only : real64
+    use vertical_mass_remapping_kernel_mod, only : vertical_mass_remapping_code
+    use transport_config_mod,               only : slice_order_cubic
+
+    implicit none
+
+    class(vertical_mass_remapping_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: tol = 1.0e-12_r_def    ! r_def 64bit tolerance
+    real(r_def) :: answer, tst, use_tol
+
+    integer(i_def), parameter :: nlayers = 10
+    integer(i_def), parameter :: ndf_w2 = 6
+    integer(i_def), parameter :: nfaces_h  = 4
+    integer(i_def), parameter :: undf_w2 = nfaces_h*nlayers & ! Horizontal dofs
+                                         + nlayers + 1        ! + vertical dofs
+    integer(i_def), parameter :: ndf_w3  = 1
+    integer(i_def), parameter :: undf_w3 = nlayers
+
+    integer(i_def), dimension(ndf_w2) :: map_w2
+    integer(i_def), dimension(ndf_w3) :: map_w3
+    real(r_def), dimension(undf_w2)   :: dep_pts_z
+    real(r_def), dimension(undf_w3)   :: mass_in, mass_out
+    real(r_def), dimension(4)         :: cubic_param, cubic_integ
+    real(r_def)     :: dt_here, wind_const, xl, xr
+    integer(i_def)  :: df, i, remap_order
+
+    ! Create the dof map for any number of layers
+    ! Dofs are contiguous in the vertical and so each entry is
+    ! offset by nlayers
+
+    do df = 1, nfaces_h
+      map_w2(df) = 1 + (df-1)*nlayers
+    end do
+
+    ! Vertical dofs are contiguous and so
+    ! map(6) needs to be 1 more than map(5)
+
+    map_w2(nfaces_h+1) = 1 + nfaces_h*nlayers
+    map_w2(ndf_w2)     = map_w2(nfaces_h+1) + 1
+    map_w3(:) = 1
+
+    ! Set 6 parameters to define a unique global quintic function f(x)
+     cubic_param(:) = (/1.0_r_def,  2.0_r_def,  3.0_r_def, 4.0_r_def/)
+     cubic_integ(1) = 1.0_r_def/4.0_r_def
+     cubic_integ(2) = 1.0_r_def/3.0_r_def
+     cubic_integ(3) = 1.0_r_def/2.0_r_def
+     cubic_integ(4) = 1.0_r_def
+
+    ! Set the interpolation weights (quinctic, cubic, linear) for a displacement of 0.5
+
+    wind_const = 1.0_r_def
+    dt_here = 0.5_r_def
+    dep_pts_z = wind_const*dt_here
+
+    do i = 1, nlayers
+      xl = real(i-1_i_def,r_def)
+      xr = real(i        ,r_def)
+      mass_in(i) = cubic_integ(1) * cubic_param(1) * (xr**4 - xl**4) +  &
+                   cubic_integ(2) * cubic_param(2) * (xr**3 - xl**3) +  &
+                   cubic_integ(3) * cubic_param(3) * (xr**2 - xl**2) +  &
+                   cubic_integ(4) * cubic_param(4) * (xr    - xl   )
+      xl = xl - wind_const*dt_here
+      xr = xr - wind_const*dt_here
+      xl = min( max(0.0_r_def, xl), real(nlayers) )
+      xr = min( max(0.0_r_def, xr), real(nlayers) )
+      mass_out(i) = cubic_integ(1) * cubic_param(1) * (xr**4 - xl**4) +  &
+                    cubic_integ(2) * cubic_param(2) * (xr**3 - xl**3) +  &
+                    cubic_integ(3) * cubic_param(3) * (xr**2 - xl**2) +  &
+                    cubic_integ(4) * cubic_param(4) * (xr    - xl   )
+    end do
+
+
+    ! call mass remap with cubic-order
+
+    remap_order = slice_order_cubic
+
+    call vertical_mass_remapping_code( nlayers,                 &
+                                       dep_pts_z,               &
+                                       mass_in,                 &
+                                       remap_order,             &
+                                       ndf_w2, undf_w2, map_w2, &
+                                       ndf_w3, undf_w3, map_w3  )
+    if ( r_def == real64 ) then
+       use_tol = tol
+    else
+       use_tol = 10.0_r_def*spacing( maxval(mass_in) )
+    end if
+    do i = 1,nlayers
+      @assertEqual(mass_out(i), mass_in(i) , use_tol)
+    end do
+
+  end subroutine test_all
+
+end module vertical_mass_remapping_kernel_mod_test

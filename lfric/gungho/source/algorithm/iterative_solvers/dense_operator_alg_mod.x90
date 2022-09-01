@@ -1,0 +1,212 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> @brief A linear operator with a W3 Mass matrix in the upper diagonal block
+!!        and a W0 mass matrix in the lower diagonal block, i.e. it is dense.
+!>
+!> @details An extension of the abstract linear_operator with mass matrices in
+!!          the upper (W3) and lower (W0) blocks. The apply method is over-ridden
+!!          with LMA kernels being applied in the upper and lower blocks. The
+!!          constructor uses the LMA assembly kernels. An extra procedure -
+!!          extract_diagonal goes beyond the abstract interfaces so that the
+!!          diagonal can be extracted although it is not used by this type.
+
+module dense_operator_alg_mod
+
+  ! Using w_scalar generic scalar mass matrix code for w0
+  use compute_mass_matrix_kernel_w_scalar_mod, &
+                                     only : compute_mass_matrix_kernel_w_scalar_type
+  use compute_mass_matrix_kernel_w3_mod, &
+                                     only : compute_mass_matrix_kernel_w3_type
+  use constants_mod,                 only : r_def, i_def
+  use field_mod,                     only : field_type
+  use field_vector_mod,              only : field_vector_type
+  use function_space_mod,            only : function_space_type
+  use function_space_collection_mod, only : function_space_collection
+  use linear_operator_mod,           only : abstract_linear_operator_type
+  use log_mod,                       only : log_event, LOG_LEVEL_ERROR, &
+                                            log_scratch_space
+  use mesh_mod,                      only : mesh_type
+  use matrix_vector_kernel_mod,      only : matrix_vector_kernel_type
+  use dg_inc_matrix_vector_kernel_mod, only : dg_inc_matrix_vector_kernel_type
+  use mm_diagonal_kernel_mod,        only : mm_diagonal_kernel_type
+  use operator_mod,                  only : operator_type
+  use quadrature_xyoz_mod,           only : quadrature_xyoz_type
+  use vector_mod,                    only : abstract_vector_type
+
+  implicit none
+  private
+
+  type, public, extends(abstract_linear_operator_type) :: dense_operator_type
+
+    private
+    !> LMA operator Mass matrix for the W0 field
+    type(operator_type) :: mass_w0
+    !> LMA operator Mass matrix for the W3 field
+    type(operator_type) :: mass_w3
+
+  contains
+    !> Over-ride the abstract interface
+    !> param[in,out] self A linear operator
+    !> param[in] x A vector the linear operator is applied to
+    !> param[in,out] y A vector, the result
+    procedure, public  :: apply => apply_dense_op
+    !> Applies the operator as LMA matrix matrix-vector kernels in the diagonal blocks
+    procedure, private :: apply_dense_op
+    !> Extracts the diagonal values of the mass matrices as fields and returns the
+    !! field_vector
+    procedure, public  :: extract_diagonal
+    !> Destroys the object
+    final              :: destroy_dense_op
+  end type dense_operator_type
+
+  interface dense_operator_type
+    module procedure dense_operator_constructor
+  end interface
+
+contains
+  !> @brief Construct a <code>dense_operator</code> object.
+  !>
+  !> @param[in] fv A field_vector of size 2
+  !> @param[in] chi The coordinate field
+  !> @param[in] panel_id The field with mesh panel IDs
+  !> @param[in] qr The quadrature object
+  !> @return self The constructed dense operator
+  function dense_operator_constructor( fv, qr, chi, panel_id ) result(self)
+
+    implicit none
+
+    class(abstract_vector_type),      intent(in) :: fv
+    type( field_type ), dimension(3), intent(in) :: chi
+    type( field_type ),               intent(in) :: panel_id
+    type(quadrature_xyoz_type),       intent(in) :: qr
+
+    type(dense_operator_type) :: self
+
+    type(function_space_type), pointer :: fs_wa => null()
+    type(function_space_type), pointer :: fs_wb => null()
+    type(mesh_type), pointer :: mesh => null()
+    integer(kind=i_def) :: elem, fs_label
+
+    select type (fv)
+
+    type is (field_vector_type)
+      ! Check we have the correct number of fields in the type
+      if (size(fv%vector) /= 2 ) then
+        write(log_scratch_space, '(A, I1)')  &
+              "dense_operator_alg_mod: nfields expected 2, but got ", size(fv%vector)
+        call log_event(log_scratch_space, LOG_LEVEL_ERROR)
+      end if
+
+      mesh => fv%vector(1)%get_mesh()
+
+      ! Make the mass_w0 operator
+      elem = fv%vector(1)%get_element_order()
+      fs_label = fv%vector(1)%which_function_space()
+      fs_wa => function_space_collection%get_fs(mesh, elem, fs_label)
+      call self%mass_w0%initialise(fs_wa, fs_wa)
+
+      ! Make the mass_w3 operator
+      elem = fv%vector(2)%get_element_order()
+      fs_label = fv%vector(2)%which_function_space()
+      fs_wb => function_space_collection%get_fs(mesh, elem, fs_label)
+      call self%mass_w3%initialise(fs_wb, fs_wb)
+
+      call invoke(                                                                 &
+        compute_mass_matrix_kernel_w_scalar_type(self%mass_w0, chi, panel_id, qr), &
+        compute_mass_matrix_kernel_w3_type(self%mass_w3, chi, panel_id, qr) )
+
+    class default
+
+      write(log_scratch_space, '(A)') "dense_operator_alg_mod: incorrect vector_type as argument fv"
+      call log_event(log_scratch_space, LOG_LEVEL_ERROR)
+
+    end select
+
+    nullify( mesh )
+
+  end function dense_operator_constructor
+
+  !> @brief Applies the LMA mass matrices to the vector, y = M x.
+  !>
+  !> @param[in,out] self The dense operator
+  !> @param[in] x Field vector to be read, size 2
+  !> @param[in,out] y Field vector to be written, size 2
+  subroutine apply_dense_op(self, x, y)
+
+    implicit none
+
+    class(dense_operator_type),  intent(inout) :: self
+    class(abstract_vector_type), intent(in)    :: x
+    class(abstract_vector_type), intent(inout) :: y
+
+    ! Workaround for PSyclone to get pointers of the correct type for x and y
+    type(field_type), pointer :: x_vec_1 => null(), &
+                                 y_vec_1 => null(), &
+                                 x_vec_2 => null(), &
+                                 y_vec_2 => null()
+
+    select type (x)
+
+    type is (field_vector_type)
+
+      select type (y)
+
+      type is (field_vector_type)
+        ! Get pointers to x and y abstract types
+        x_vec_1 => x%get_field(1)
+        y_vec_1 => y%get_field(1)
+        x_vec_2 => x%get_field(2)
+        y_vec_2 => y%get_field(2)
+
+        call y%set_scalar(0.0_r_def)
+        call invoke( &
+             matrix_vector_kernel_type(y_vec_1, x_vec_1, self%mass_w0),       &
+             dg_inc_matrix_vector_kernel_type(y_vec_2, x_vec_2, self%mass_w3) &
+             )
+      class default
+        write(log_scratch_space, '(A)') "dense_operator_alg_mod: incorrect vector_type as argument y"
+        call log_event(log_scratch_space, LOG_LEVEL_ERROR)
+
+      end select
+
+    class default
+      write(log_scratch_space, '(A)') "dense_operator_alg_mod: incorrect vector_type as argument x"
+      call log_event(log_scratch_space, LOG_LEVEL_ERROR)
+
+    end select
+
+    nullify( x_vec_1, y_vec_1, x_vec_2, y_vec_2 )
+
+  end subroutine apply_dense_op
+
+  !> @brief Extracts the diagonal fields from the upper and lower mass matrix blocks.
+  !>
+  !> @param[in] self The dense operator
+  !> @param[in,out] diag The field vector to contain the diagonal field values
+  subroutine extract_diagonal(self, diag)
+
+    implicit none
+
+    class(dense_operator_type), intent(in)    :: self
+    type(field_vector_type),    intent(inout) :: diag
+
+    call invoke( &
+         mm_diagonal_kernel_type(diag%vector(1), self%mass_w0), &
+         mm_diagonal_kernel_type(diag%vector(2), self%mass_w3)  &
+         )
+
+  end subroutine extract_diagonal
+
+  !> @brief Finalizer for the dense operator.
+  !>
+  !> @param[in,out] self The dense operator
+  subroutine destroy_dense_op(self)
+    implicit none
+    type(dense_operator_type), intent(inout) :: self
+  end subroutine destroy_dense_op
+
+end module dense_operator_alg_mod

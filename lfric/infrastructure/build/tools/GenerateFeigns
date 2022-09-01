@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+##############################################################################
+# Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+# For further details please refer to the file LICENCE.original which you
+# should have received as part of this distribution.
+##############################################################################
+# pylint: disable=invalid-name
+"""
+Reads in a set of namelist description files, produces a Fortran module of frig
+functions for use in unit testing.
+"""
+import argparse
+import logging
+from pathlib import Path
+
+from configurator import __version__
+import configurator.namelistdescription as namelist
+import configurator.namelistfeigner
+
+
+def main():
+    """
+    Entry point. Handles command-line arguments.
+    """
+    parser = argparse.ArgumentParser(add_help=False,
+                                     description=__doc__)
+    parser.add_argument('-help', '-h', '--help', action='help',
+                        help='Show this help message and exit')
+    parser.add_argument('-version', action='version',
+                        version=f'%(prog)s {__version__}')
+    parser.add_argument('-verbose', action='store_true',
+                        help='Provide a running commentry')
+    parser.add_argument('-output', metavar='path',
+                        type=Path, default=Path('feign_config_mod.f90'),
+                        help='Resulting output file')
+    parser.add_argument('meta_filename', metavar='description-file',
+                        nargs=1, help='The metadata file to load')
+
+    args = parser.parse_args()
+
+    if args.verbose:
+        handler = logging.StreamHandler()
+        logging.getLogger('configurator').addHandler(handler)
+        logging.getLogger('configurator').setLevel(logging.WARNING)
+
+    module_name = args.output.stem
+
+    meta_filename = args.meta_filename[0]
+
+    feigner = configurator.namelistfeigner.NamelistFeigner(module_name)
+
+    meta_parser = namelist.NamelistConfigDescription()
+    feigner.add_namelist(meta_parser.process_config(meta_filename))
+
+    feigner.write_module(args.output)
+
+
+if __name__ == '__main__':
+    main()

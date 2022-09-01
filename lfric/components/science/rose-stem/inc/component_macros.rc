@@ -1,0 +1,211 @@
+{# NULL TASK MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro null_task_graph() %}
+    [[[R1]]]
+      null_task1 => null_task2
+{%- endmacro %}
+
+{%- macro null_tasks() %}
+  [[null_task1]]
+    script = "echo Null Task: No scheduled task in graph, check suite_control.rc"
+
+  [[null_task2]]
+    script = "echo Null Task: No scheduled task in graph, check suite_control.rc"
+{%- endmacro %}
+
+
+
+{# VALIDATE ROSE METADATA MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro validate_rose_meta_graph( projectName, appName=None ) %}
+
+{%-   if appName %}
+{%-     set taskName=appName %}
+{%-   else %}
+{%-     set taskName=projectName %}
+{%-   endif %}
+
+{%-   if 'validate_metadata' in RUN_TECHNICAL %}
+    [[[R1]]]
+    export_source => validate_{{taskName}}_rose-meta
+{%-   endif %}
+{%- endmacro %}
+
+{%- macro validate_rose_meta_task( projectName, family, setup,
+                                   appName=None ) %}
+
+{%-   if appName %}
+{%-     set taskName=appName %}
+{%-     set taskInput=projectName+':'+appName %}
+{%-   else %}
+{%-     set taskName=projectName %}
+{%-     set taskInput=projectName+':none' %}
+{%-   endif %}
+
+{%-   if 'validate_' + taskName + '_rose-meta' in scheduledTasks %}
+  [[validate_{{taskName}}_rose-meta]]
+    inherit = {{family}}
+    script = $SOURCE_ROOT/bin/validate_rose_meta {{taskInput}}
+{%-   endif %}
+{%- endmacro %}
+
+
+{# API DOCUMENTATION MACROS #}
+{#---------------------------------------------------------------------------#}
+
+{%- macro api_documentation_graph( componentName, publish=False ) %}
+{%-   if 'documentation' in RUN_TECHNICAL %}
+    [[[R1]]]
+    export_source => {{componentName}}_api_documentation
+{%-     if publish %}
+    {{componentName}}_api_documentation => publish_{{componentName}}_api_documentation
+    publish_{{componentName}}_api_documentation:finish => publish_node
+    {{componentName}}_api_documentation => publish_{{componentName}}_api_log
+    publish_{{componentName}}_api_log:finish => publish_node
+{%-     endif %}
+{%-   endif %}
+{%- endmacro %}
+
+{#- In order to allow the document generation and publication to appear in
+ #  different family groups this macro takes both as arguments.
+ #
+ #  TODO: There may be a better way to handle this.
+ #}
+{%- macro api_documentation_task( componentName, doc_family, pub_family,
+                                   doc_setup, pub_target ) %}
+
+{%-   if componentName + '_api_documentation' in scheduledTasks %}
+  [[{{componentName}}_api_documentation]]
+    inherit = {{doc_family}}
+    pre-script = """
+                 {{ '\n'
+                    | command_list( doc_setup['base'],
+                                    doc_setup['tech'],
+                                    doc_setup['reveal'],
+                                    'mkdir -p $DOCUMENT_DIR' ) }}
+                 """
+    script = make -C $SOURCE_DIRECTORY/{{componentName}} document-api VERBOSE=1
+    post-script = """
+                  # Future publisher stages need this information
+                  RELATIVE_LOG_ROOT=$(echo $CYLC_TASK_LOG_ROOT | sed "s|$HOME/||")
+                  echo $RELATIVE_LOG_ROOT > $DOCUMENT_DIR/api.log.path
+                  """
+
+    [[[environment]]]
+      DOCUMENT_DIR = $OUTPUT_ROOT/{{componentName}}/documents/api
+{%-   endif %}
+
+
+{%-   if 'publish_' + componentName + '_api_log' in scheduledTasks %}
+  [[publish_{{componentName}}_api_log]]
+    inherit = {{pub_family}}
+    pre-script = """
+                 {{ensureDestination()}}
+                 mkdir -p $OUTPUT_DIRECTORY/api
+                 cd $OUTPUT_DIRECTORY/api
+                 RELATIVE_DESTINATION_DIRECTORY=`echo $DOCUMENT_DIR | sed "s|$HOME/||"`
+                 scp {{pub_target['hostname']}}:$RELATIVE_DESTINATION_DIRECTORY/api.log.path .
+                 scp {{pub_target['hostname']}}:$(cat api.log.path).status .
+                 scp {{pub_target['hostname']}}:$(cat api.log.path).out .
+                 scp {{pub_target['hostname']}}:$(cat api.log.path).err .
+                 """
+    script = rose task-run --app-key=publish_doxygen
+
+    [[[environment]]]
+      DOCUMENT_DIR     = $OUTPUT_ROOT/{{componentName}}/documents/api
+      LOG_STATUS       = $DESTINATION_DIRECTORY/api/job.status
+      LOG_ERR          = $DESTINATION_DIRECTORY/api/job.err
+      OUTPUT_DIRECTORY = $OUTPUT_ROOT/{{SECONDARY_TARGET['compiler']}}_fast-debug
+{%-   endif %}
+
+
+{%-   if 'publish_' + componentName + '_api_documentation' in scheduledTasks %}
+  [[publish_{{componentName}}_api_documentation]]
+    inherit = {{pub_family}}
+    pre-script = """
+                 {{ensureDestination()}}
+                 """
+    script = rose task-run --app-key=publish --command-key=directory
+
+    [[[environment]]]
+      DIRECTORY   = $OUTPUT_ROOT/{{componentName}}/documents/api
+      DESTINATION = {{publish_destination}}/documentation/api
+{%-   endif %}
+{%- endmacro %}
+
+
+{# UML DOCUMENTATION MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro uml_documentation_graph( componentName, publish=False ) %}
+{%-   if 'documentation' in RUN_TECHNICAL %}
+    [[[R1]]]
+    export_source => {{componentName}}_uml_documentation
+{%-     if publish %}
+    {{componentName}}_uml_documentation => publish_{{componentName}}_uml_documentation
+    publish_{{componentName}}_uml_documentation:finish => publish_node
+{%-     endif %}
+{%-   endif %}
+{%- endmacro %}
+
+
+{#- In order to allow the document generation and publication to appear in
+ #  different family groups this macro takes both as arguments.
+ #
+ #  TODO: There may be a better way to handle this.
+ #}
+{%- macro uml_documentation_task(componentName, doc_family, pub_family, setup) %}
+
+{%-   if componentName + '_uml_documentation' in scheduledTasks %}
+  [[{{componentName}}_uml_documentation]]
+    inherit = {{doc_family}}
+    pre-script = """
+                 {{ '\n'
+                    | command_list( setup['base'],
+                                    setup['tech'],
+                                    setup['reveal'],
+                                    'mkdir -p $DOCUMENT_DIR' ) }}
+                 """
+    script = make -C $SOURCE_DIRECTORY/{{componentName}} document-uml VERBOSE=1
+
+    [[[environment]]]
+      DOCUMENT_DIR = $OUTPUT_ROOT/{{componentName}}/documents/uml
+{%-   endif %}
+
+
+{%-   if 'publish_' + componentName + '_uml_documentation' in scheduledTasks %}
+  [[publish_{{componentName}}_uml_documentation]]
+    inherit = {{pub_family}}
+    pre-script = """
+                 {{ensureDestination()}}
+                 """
+    script = rose task-run --app-key=publish --command-key=directory
+
+    [[[environment]]]
+      DIRECTORY   = $OUTPUT_ROOT/{{componentName}}/documents/uml
+      DESTINATION = {{publish_destination}}/documentation/uml
+{%-   endif %}
+{%- endmacro %}
+
+{# SCRIPT MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro verboseMake() %}
+{%-   if VERBOSE_TASKS is defined %}VERBOSE=1{% endif %}
+{%- endmacro %}
+
+{%- macro ensureDestination() %}
+    mkdir -p $DESTINATION
+{%- endmacro %}
+
+{%- macro deleteDirectory( directory ) %}
+  test -w "{{directory}}" -o ! -e "{{directory}}" && rm -rf {{directory}} || ( echo ** Unable to delete "{{directory}}", not writable >&2; false )
+{%- endmacro %}
+
+{# PUBLISH NODE MACRO #}
+{#---------------------------------------------------------------------------#}
+{%- macro publish_node_task(family) %}
+{%- if 'publish_node' in scheduledTasks %}
+    [[publish_node]]
+        inherit = {{family}}
+        script = true
+{%- endif %}
+{%- endmacro %}

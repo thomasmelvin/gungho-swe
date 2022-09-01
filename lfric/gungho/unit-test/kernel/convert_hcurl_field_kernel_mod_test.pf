@@ -1,0 +1,225 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+module convert_hcurl_field_kernel_mod_test
+
+  use constants_mod,                       only : i_def, r_def
+  use get_unit_test_m3x3_q3x3x3_sizes_mod, only : get_w0_m3x3_q3x3x3_size, &
+                                                  get_w1_m3x3_q3x3x3_size, &
+                                                  get_w3_m3x3_q3x3x3_size
+  use get_unit_test_m3x3_dofmap_mod,       only : get_w0_m3x3_dofmap, &
+                                                  get_w1_m3x3_dofmap, &
+                                                  get_w3_m3x3_dofmap
+  use get_unit_test_w1nodal_basis_mod,     only : get_w1_w1nodal_basis, &
+                                                  get_w0_w1nodal_diff_basis, &
+                                                  get_w0_w1nodal_basis
+  use get_unit_test_3x3x3_chi_mod,         only : get_w0_3x3x3_field
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: convert_hcurl_field_kernel_test_type, test_all
+
+  @TestCase
+  type, extends(TestCase) :: convert_hcurl_field_kernel_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type convert_hcurl_field_kernel_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use formulation_config_mod,    only : eos_method_sampled,      &
+                                          moisture_formulation_dry
+    use finite_element_config_mod, only : cellshape_quadrilateral, &
+                                          coord_system_xyz
+    use feign_config_mod,          only : feign_finite_element_config, &
+                                          feign_formulation_config
+
+    implicit none
+
+    class(convert_hcurl_field_kernel_test_type), intent(inout) :: this
+
+    call feign_finite_element_config(           &
+             cellshape=cellshape_quadrilateral, &
+             coord_order=0_i_def,               &
+             coord_system=coord_system_xyz,     &
+             element_order=0_i_def,             &
+             rehabilitate=.true.,               &
+             vorticity_in_w1=.false. )
+
+    call feign_formulation_config( l_multigrid           = .false.,              &
+                                   rotating              = .true.,               &
+                                   moisture_formulation  =                       &
+                                   moisture_formulation_dry,                     &
+                                   use_physics           = .false.,              &
+                                   use_multires_coupling = .false.,              &
+                                   shallow               = .false.,              &
+                                   use_wavedynamics      = .true.,               &
+                                   dry_static_adjust     = .false.,              &
+                                   exner_from_eos        = .false.,              &
+                                   eos_method            = eos_method_sampled,   &
+                                   init_exner_bt         = .true.,               &
+                                   dlayer_on             = .false.,              &
+                                   si_momentum_equation  = .true.,               &
+                                   vector_invariant      = .true.                &
+                                  )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod,        only: final_configuration
+
+    implicit none
+
+    class(convert_hcurl_field_kernel_test_type), intent(inout) :: this
+
+    call final_configuration()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use, intrinsic :: iso_fortran_env, only : real64
+    use convert_hcurl_field_kernel_mod, only: convert_hcurl_field_code
+
+    implicit none
+
+    class(convert_hcurl_field_kernel_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: tol = 1.0e-10_r_def  ! r_def 64bit
+    real(r_def), parameter :: dx = 6000.0_r_def, &
+                              dy = 1000.0_r_def, &
+                              dz = 2000.0_r_def
+
+    real(r_def) :: answer
+    real(r_def) :: use_tol
+
+    integer(i_def) :: nlayers, ncells, ncell_3d, cell, icell
+    integer(i_def) :: ndf_w0, undf_w0, ndf_w1, undf_w1, ndf_pid, undf_pid
+    integer(i_def) :: dim_space, dim_space_diff
+    integer(i_def) :: nqp_h, nqp_v
+
+    integer(i_def) :: i, j, k
+
+    integer(i_def), allocatable :: map_w0(:,:)
+    integer(i_def), allocatable :: map_w1(:,:)
+    integer(i_def), allocatable :: map_pid(:,:)
+    real(r_def), allocatable :: panel_id(:)
+    real(r_def), allocatable :: basis_w0(:,:,:)
+    real(r_def), allocatable :: diff_basis_w0(:,:,:)
+    real(r_def), allocatable :: basis_w1(:,:,:)
+
+    real(r_def), allocatable :: chi1(:), chi2(:), chi3(:)
+    real(r_def), allocatable :: phys1(:), phys2(:), phys3(:)
+    real(r_def), allocatable :: comp(:)
+
+    nlayers=3
+    call get_w0_m3x3_q3x3x3_size( ndf_w0, undf_w0, ncells, &
+                                  dim_space, dim_space_diff, &
+                                  nqp_h, nqp_v, &
+                                  nlayers )
+    call get_w1_m3x3_q3x3x3_size( ndf_w1, undf_w1, ncells, &
+                                  dim_space, dim_space_diff, &
+                                  nqp_h, nqp_v, &
+                                  nlayers )
+    call get_w3_m3x3_q3x3x3_size( ndf_pid, undf_pid, ncells, &
+                                  dim_space, dim_space_diff, &
+                                  nqp_h, nqp_v, 1 )
+    call get_w0_m3x3_dofmap(map_w0)
+    call get_w1_m3x3_dofmap(map_w1)
+    call get_w3_m3x3_dofmap(map_pid)
+    call get_w0_w1nodal_basis(basis_w0)
+    call get_w0_w1nodal_diff_basis(diff_basis_w0)
+    call get_w1_w1nodal_basis(basis_w1)
+
+    ! Compute coordinates
+    allocate(chi1(undf_w0))
+    allocate(chi2(undf_w0))
+    allocate(chi3(undf_w0))
+    allocate(panel_id(undf_pid))
+
+    call get_w0_3x3x3_field(chi1, chi2, chi3, dx, dy, dz, &
+                            map_w0, nlayers)
+
+    panel_id(:) = (/ 1_r_def /)
+
+    ! Create the data
+    cell = 5
+    allocate(phys1(undf_w1))
+    allocate(phys2(undf_w1))
+    allocate(phys3(undf_w1))
+    allocate(comp(undf_w1))
+    phys1(:) = 0.0_r_def
+    phys2(:) = 0.0_r_def
+    phys3(:) = 0.0_r_def
+    comp(:) = 0.0_r_def
+    comp(map_w1(1, cell)) = 1.0_r_def*dy
+    comp(map_w1(2, cell)) = 3.0_r_def*dx
+    comp(map_w1(6, cell)) = -6.0_r_def*dz
+
+    call convert_hcurl_field_code(nlayers,                         &
+                                  phys1,                           &
+                                  phys2,                           &
+                                  phys3,                           &
+                                  comp,                            &
+                                  chi1,                            &
+                                  chi2,                            &
+                                  chi3,                            &
+                                  panel_id,                        &
+                                  ndf_w1, undf_w1, map_w1(:,cell), &
+                                  basis_w1,                        &
+                                  ndf_w0, undf_w0, map_w0(:,cell), &
+                                  basis_w0,                        &
+                                  diff_basis_w0,                   &
+                                  ndf_pid, undf_pid, map_pid       &
+                                 )
+
+    answer = 1.0_r_def
+    @assertEqual(answer, phys2(map_w1(1, cell)), tol)
+    answer = 3.0_r_def
+    @assertEqual(answer, phys1(map_w1(2, cell)), tol)
+    answer = 0.0_r_def
+    @assertEqual(answer, phys2(map_w1(3, cell)), tol)
+    @assertEqual(answer, phys1(map_w1(4, cell)), tol)
+    @assertEqual(answer, phys3(map_w1(5, cell)), tol)
+    answer = -6.0_r_def
+    if ( r_def == real64 ) then
+      use_tol = tol
+    else
+      use_tol = 10.0_r_def*spacing(phys3(map_w1(6, cell)) )
+    end if
+    @assertEqual(answer, phys3(map_w1(6, cell)), use_tol)
+
+    deallocate(map_w0)
+    deallocate(map_w1)
+    deallocate(map_pid)
+    deallocate(basis_w0)
+    deallocate(diff_basis_w0)
+    deallocate(basis_w1)
+
+    deallocate(chi1)
+    deallocate(chi2)
+    deallocate(chi3)
+    deallocate(panel_id)
+    deallocate(phys1)
+    deallocate(phys2)
+    deallocate(phys3)
+    deallocate(comp)
+
+  end subroutine test_all
+
+end module convert_hcurl_field_kernel_mod_test

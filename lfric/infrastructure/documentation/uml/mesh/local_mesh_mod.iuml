@@ -1,0 +1,88 @@
+' (c) Crown copyright 2019 Met Office. All rights reserved.
+' The file LICENCE, distributed with this code, contains details of the terms
+' under which the code may be used.
+
+class local_mesh_mod::local_mesh_type {
+  -mesh_name: string
+  -geometry: integer
+  -topology: integer
+  -coord_sys: integer
+  -nverts_per_cell: integer
+  -nverts_per_edge: integer
+  -nedges_per_cell: integer
+  -num_cells_in_layer: integer
+  -global_cell_id: integer[:] <<allocatable>>
+  -n_unique_vertices: integer
+  -n_unique_edges: integer
+  -vert_coords: integer[::] <<allocatable>>
+  -vert_on_cell: integer[::] <<allocatable>>
+  -edge_on_cell: integer[::] <<allocatable>>
+  -vert_on_cell_gid: integer[::] <<allocatable>>
+  -edge_on_cell_gid: integer[::] <<allocatable>>
+  -vert_cell_owner: integer[:] <<allocatable>>
+  -edge_cell_owner: integer[:] <<allocatable>>
+  -cell_next: integer[::] <<allocatable>>
+  -cell_owner: integer[:] <<allocatable>>
+  -num_inner: integer[:] <<allocatable>>
+  -last_inner_cell: integer[:] <<allocatable>>
+  -inner_depth: integer
+  -num_edge: integer
+  -last_edge_cell: integer
+  -num_halo: integer[:] <<allocatable>>
+  -last_halo_cell: integer[:] <<allocatable>>
+  -halo_depth: integer
+  -num_ghost: integer
+  -last_ghost_cell: integer
+  -ncells_global_mesh: integer
+  -local_mesh_map_collection: local_mesh_map_collection_type <<allocatable>>
+  -npanels: integer
+
+  +<<destroy>> local_mesh_destructor()
+  +clear()
+
+  +initialise_full(<<in>>global_mesh: global_mesh_type, <<in>>partition: partition_type, <<in>><<optional>>mesh_name: string)
+  +initialise_unit_test()
+  +initialise() <<generic>>: initialise_full(...), initialise_unit_test(...)
+  +init_cell_owner()
+  +clear()
+  +get_mesh_name(): string
+
+  +is_geometry_spherical(): logical
+  +is_geometry_planar(): logical
+  +is_topology_non_periodic(): logical
+  +is_topology_channel(): logical
+  +is_topology_periodic(): logical
+  +is_coord_sys_xyz(): logical
+  +is_coord_sys_ll(): logical
+
+  +get_nverts_per_cell(): integer
+  +get_nverts_per_edge(): integer
+  +get_nedges_per_cell(): integer
+  +get_num_cells_in_layer(): integer
+  +get_edge_gid_on_cell(<<in>>iedge: integer, <<in>>icell: integer): integer
+  +get_vert_gid_on_cell(<<in>>ivert: integer, <<in>>icell: integer): integer
+  +get_vert_coords(<<in>>vert_lid: integer, <<out>>vert_coords(:): integer)
+  +get_n_unique_vertices(): integer
+  +get_n_unique_edges(): integer
+  +get_edge_on_cell(<<in>>iedge: integer, <<in>>icell: integer): integer
+  +get_vert_on_cell(<<in>>ivert: integer, <<in>>icell: integer): integer
+  +get_vert_cell_owner(<<in>>vert: integer): integer
+  +get_edge_cell_owner(<<in>>edge: integer): integer
+  +get_cell_next(<<in>>cell_lid: integer, <<out>>cell_next(:): integer)
+  +get_inner_depth(): integer
+  +get_num_cells_inner(): integer
+  +get_last_inner_cell(): integer
+  +get_num_cells_edge(): integer
+  +get_last_edge_cell(): integer
+  +get_halo_depth(): integer
+  +get_num_cells_halo(): integer
+  +get_last_halo_cell(): integer
+  +get_num_cells_ghost(): integer
+  +get_cell_owner(): integer
+  +get_num_panels_global_mesh(): integer
+  +get_ncells_global_mesh(): integer
+  +get_gid_from_lid(<<in>>lid: integer): integer
+  +get_lid_from_gid(<<in>>gid: integer): integer
+  +add_local_mesh_map(<<in>>target_local_mesh_id: integer, <<in>>map{:::}: integer)
+  +get_local_mesh_map(<<in>>target_local_mesh_id: integer): local_mesh_map_type<<pointer>>
+}

@@ -1,0 +1,45 @@
+' (c) Crown copyright 2019 Met Office. All rights reserved.
+' The file LICENCE, distributed with this code, contains details of the terms
+' under which the code may be used.
+
+
+abstract class field_parent_mod::field_parent_type {
+  -vspace : function_space_type <<pointer>>
+  -halo_routing : halo_routing_type <<pointer>>
+  -halo_dirty : integer[]<<allocatable>>
+  -name : string
+  -ndata_first : logical
+  -cpl_id : integer[]<<allocatable>>
+
+  +field_parent_initialiser( <<in>>vector_space : function_space_type, <<in optional>> name : string, <<in optional>> ndata_first : logical,<<in optional>> )
+  +field_parent_proxy_initialiser(field_proxy : field_proxy_type) :
+  +copy_field_parent(<<out>> dest: field_parent_type)
+  +field_parent_final()
+  +which_function_space() : integer
+  +get_function_space() : function_space_type <<pointer>>
+  +get_mesh() : mesh_type <<pointer>>
+  +get_mesh_id() : integer
+  +get_element_order() : integer
+  +get_name() : string
+  +get_cpl_id( <<in>>i_multidata_lev: integer) : integer
+  +set_cpl_id( <<in>>dcpl_id: integer, <<in>>i_multidata_lev: integer)
+}
+
+abstract class field_parent_mod::field_parent_proxy_type {
+  +vspace: function_space_type <<pointer>>
+  +halo_routing : halo_routing_type <<pointer>>
+  +halo_dirty: integer[] <<pointer>>
+  +ndata_first : logical <<pointer>>
+  +cpl_id : integer[]
+
+  +max_halo_depth() : integer
+  +get_halo_routing( ) halo_routing: halo_routing_type <<pointer>>
+  +is_dirty( <<in>>depth: integer ) : logical
+  +set_dirty()
+  +set_clean( <<in>>depth: integer )
+  +is_ndata_first() : logical
+}
+
+field_parent_mod::field_parent_type <- field_parent_mod::field_parent_proxy_type
+
+

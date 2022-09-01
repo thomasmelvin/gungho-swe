@@ -1,0 +1,96 @@
+@startuml
+
+skinparam classAttributeIconSize 0
+
+package "linked_list_data_mod" {
+ abstract class linked_list_data_type {
+ }
+}
+
+package "pure_abstract_field_mod" {
+ abstract class pure_abstract_field_type {
+ }
+
+ pure_abstract_field_type -up-^ linked_list_data_type
+}
+
+package "field_parent_mod" {
+ abstract class field_parent_type {
+   -halo_dirty : integer[]<<allocatable>>
+
+   +field_parent_proxy_initialiser(...) :
+ }
+
+ abstract class field_parent_proxy_type {
+   +halo_dirty: integer[] <<pointer>>
+ }
+
+ field_parent_type -up-^ pure_abstract_field_type
+ field_parent_proxy_type -left-> field_parent_type
+}
+
+
+package "field_r64_mod" {
+ class field_r64_type {
+   -data : real64[] <<allocatable>>
+
+   +get_proxy() : field_proxy_type
+ }
+
+ class field_r64_proxy_type {
+   +data: real64[] <<pointer>>
+ }
+
+ class field_r64_pointer_type {
+   +field_ptr: field_r64_type <<pointer>>
+ }
+
+ field_r64_pointer_type -up-^ pure_abstract_field_type
+ field_r64_type -up-^ field_parent_type
+ field_r64_proxy_type -up-^ field_parent_proxy_type
+ field_r64_proxy_type -left-> field_r64_type
+ field_r64_type -left-o field_r64_pointer_type
+}
+
+package "integer_field_mod" {
+ class integer_field_type {
+   -data : integer[] <<allocatable>>
+
+   +get_proxy() : field_proxy_type
+ }
+
+ class integer_field_proxy_type {
+   +data: integer[] <<pointer>>
+ }
+
+ class integer_field_pointer_type {
+   +integer_field_ptr: integer_field_type <<pointer>>
+ }
+
+ integer_field_pointer_type -up-^ pure_abstract_field_type
+ integer_field_type -up-^ field_parent_type
+ integer_field_proxy_type -up-^ field_parent_proxy_type
+ integer_field_proxy_type -left-> integer_field_type
+ integer_field_type -left-o integer_field_pointer_type
+}
+
+package "field_mod" {
+ class field_type {
+ }
+
+ class field_proxy_type {
+ }
+
+ class field_pointer_type {
+ }
+
+ field_type --- field_r64_type
+ field_proxy_type --- field_r64_proxy_type
+ field_pointer_type --- field_r64_pointer_type
+}
+
+field_r64_type -[hidden]--> integer_field_type
+field_r64_proxy_type -[hidden]--> integer_field_proxy_type
+field_r64_pointer_type -[hidden]--> integer_field_pointer_type
+
+@enduml

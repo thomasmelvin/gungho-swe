@@ -1,0 +1,129 @@
+!-------------------------------------------------------------------------------
+! (C) Crown copyright 2017 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-------------------------------------------------------------------------------
+
+!>@brief Calculate predictors required by fast physics
+module calc_phys_predictors_alg_mod
+
+  use clock_mod,                only: clock_type
+  use constants_mod,            only: r_def
+  use field_mod,                only: field_type
+  use field_collection_mod,     only: field_collection_type
+  use derived_config_mod,       only: bundle_size
+  use mesh_mod,                 only: mesh_type
+  use moist_dyn_mod,            only: num_moist_factors
+  use field_indices_mod,        only: igh_u, igh_t
+  use formulation_config_mod,   only: dlayer_on, use_wavedynamics
+
+  use physics_mappings_alg_mod,   only: map_physics_winds
+  use extract_w_kernel_mod,       only: extract_w_kernel_type
+  use mass_matrix_solver_alg_mod, only: mass_matrix_solver_alg
+  use rhs_alg_mod,                only: rhs_alg
+  use geometric_constants_mod,    only: get_da_at_w2
+
+  use io_config_mod,             only: subroutine_timers
+  use timer_mod,                 only: timer
+
+  implicit none
+
+  private
+
+  public :: calc_phys_predictors_alg
+
+contains
+
+  !> @brief Calculate the latest estimate of theta and winds for use
+  !>        by the fast physics (convection and boundary layer)
+  !> @param[in,out] derived_fields   Group of derived fields
+  !> @param[in,out] rhs_np1          State vector to compute
+  !> @param[in]     rhs_adv          State vector after advection
+  !> @param[in]     rhs_n            State vector at time n
+  !> @param[in]     state            Current prognostic state
+  !> @param[in]     state_after_slow State after slow physics
+  !> @param[in]     moist_dyn        Factors relating to moist dynamics
+  !> @param[in]     varalpha         Alpha weight (may be varied in spinup)
+  !> @param[in]     clock            The model clock
+  !> @param[in]     dt               The model timestep length
+subroutine calc_phys_predictors_alg(derived_fields, rhs_np1,                &
+                                       rhs_adv, rhs_n, state, state_after_slow,&
+                                       moist_dyn, varalpha, clock, dt)
+
+    implicit none
+    ! Prognostic fields
+    type( field_collection_type ), intent(inout) :: derived_fields
+    type( field_type ), intent(inout) :: rhs_np1(bundle_size)
+
+    type( field_type ), intent(in)    :: state(bundle_size)
+    type( field_type ), intent(in)    :: state_after_slow(bundle_size)
+    type( field_type ), intent(in)    :: rhs_adv(bundle_size)
+    type( field_type ), intent(in)    :: rhs_n(bundle_size)
+    type( field_type ), intent(in)    :: moist_dyn(num_moist_factors)
+
+    real(kind=r_def), intent(in):: varalpha
+
+    class(clock_type), intent(in) :: clock
+    real(kind=r_def),  intent(in) :: dt
+
+    type( mesh_type ),  pointer :: mesh => null()
+
+    type( field_type ), pointer :: theta_star => null()
+    type( field_type ), pointer :: u_star => null()
+    type( field_type ), pointer :: u_in_w3_star => null()
+    type( field_type ), pointer :: v_in_w3_star => null()
+    type( field_type ), pointer :: w_in_w3_star => null()
+    type( field_type ), pointer :: u_physics_star => null()
+
+    type( field_type ), pointer :: dA => null()
+
+    type( field_type ) :: du, dtheta
+
+    if ( subroutine_timers ) call timer("calc_phys_predictors")
+
+    theta_star => derived_fields%get_field('theta_star')
+    u_star     => derived_fields%get_field('u_star')
+
+    if (use_wavedynamics .and. (.not. clock%is_spinning_up())) then
+      ! Note that if spinning up the dynamics, then explicit predictors are used.
+
+      ! theta_star can be directly guessed from advection terms
+      call dtheta%initialise( rhs_adv(igh_t)%get_function_space() )
+      call invoke( X_plus_Y(dtheta, rhs_adv(igh_t), rhs_n(igh_t)) )
+      call mass_matrix_solver_alg(theta_star, dtheta)
+
+      ! Compute u_star = u_np1 + M^-1(-rhs_np1 + rhs_n + rhs_a)
+      call rhs_alg(rhs_np1, -varalpha*dt, state, state, moist_dyn, .false., dlayer_on, dt)
+      call du%initialise( rhs_adv(igh_u)%get_function_space() )
+      call invoke( setval_c(du, 0.0_r_def),                                 &
+                   inc_aX_plus_Y(-1.0_r_def, rhs_np1(igh_u), rhs_n(igh_u)), &
+                   inc_X_plus_Y(rhs_np1(igh_u), rhs_adv(igh_u)) )
+      call mass_matrix_solver_alg(du, rhs_np1(igh_u) )
+      call invoke( X_plus_Y(u_star, du, state(igh_u)) )
+    else
+      ! predictors are just the current state
+      call invoke( setval_X(theta_star, state_after_slow(igh_t)), &
+                   setval_X(u_star, state_after_slow(igh_u) ))
+    end if !use_wavedynamics
+
+    ! map physics predictors into required spaces
+    u_in_w3_star => derived_fields%get_field('u_in_w3_star')
+    v_in_w3_star => derived_fields%get_field('v_in_w3_star')
+    w_in_w3_star => derived_fields%get_field('w_in_w3_star')
+    call map_physics_winds(u_in_w3_star, v_in_w3_star, w_in_w3_star, &
+                           u_star)
+
+    u_physics_star  => derived_fields%get_field('u_physics_star')
+
+    mesh => u_physics_star%get_mesh()
+    dA => get_da_at_w2( mesh%get_id() )
+
+    call invoke(X_divideby_Y(u_physics_star, u_star, dA))
+
+    nullify( mesh )
+
+    if ( subroutine_timers ) call timer("calc_phys_predictors")
+
+  end subroutine calc_phys_predictors_alg
+
+end module calc_phys_predictors_alg_mod

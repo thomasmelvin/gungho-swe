@@ -1,0 +1,106 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief Calculates density when advected vertically using FFSL.
+
+module ffsl_vert_advective_alg_mod
+
+  use constants_mod,                    only: r_def, LARGE_REAL_NEGATIVE
+  use ffsl_divergence_alg_mod,          only: ffsl_divergence_alg
+  use field_mod,                        only: field_type
+  use flux_direction_mod,               only: x_direction, z_direction
+  use function_space_mod,               only: function_space_type
+  use ffsl_vert_conservative_alg_mod,   only: ffsl_vert_conservative_alg
+
+  implicit none
+
+  private
+  public :: ffsl_vert_advective_alg
+
+contains
+
+  !> @brief Calculates density when advected vertically using FFSL.
+  !> @details Uses the flux form semi-Lagrangian (FFSL) scheme to calculate the
+  !!          density which solves the advection equation
+  !!          drho/dt + u dot grad(rho) = 0 in the vertical.
+  !!          The wind u is taken outside of the divergence term.
+  !> @param[in,out] rho_adv           Advected density at time level n+1
+  !> @param[in]     rho               Density at time level n
+  !> @param[in]     dep_pts           Winds at time level n
+  !> @param[in]     detj_at_w2        Det(J) values at W2 points
+  !> @param[in]     cell_orientation  Cell orientation
+  !> @param[in]     dt                Time step length
+  subroutine  ffsl_vert_advective_alg( rho_adv,           &
+                                       rho,               &
+                                       dep_pts,           &
+                                       detj_at_w2,        &
+                                       cell_orientation,  &
+                                       dt )
+
+    implicit none
+
+    type(field_type),    intent(inout)  :: rho_adv
+    type(field_type),    intent(in)     :: rho
+    type(field_type),    intent(in)     :: dep_pts
+    type(field_type),    intent(in)     :: detj_at_w2
+    type(field_type),    intent(in)     :: cell_orientation
+    real(r_def),         intent(in)     :: dt
+
+    type(field_type) :: rho_n
+    type(field_type) :: rho_np1
+    type(field_type) :: rho_constant_1
+    type(field_type) :: rho_constant_1_np1
+    type(field_type) :: mass_flux
+    type(field_type) :: increment
+
+    type(function_space_type), pointer :: w3_fs     => null()
+    type(function_space_type), pointer :: w2_fs     => null()
+
+    w2_fs => dep_pts%get_function_space()
+    w3_fs => rho%get_function_space()
+
+    call rho_n%initialise( vector_space = w3_fs )
+    call rho_np1%initialise( vector_space = w3_fs )
+    call rho_constant_1%initialise( vector_space = w3_fs )
+    call rho_constant_1_np1%initialise( vector_space = w3_fs )
+    call mass_flux%initialise( vector_space = w2_fs )
+    call increment%initialise( vector_space = w3_fs )
+
+    ! To calculate the advective step we use the following equation
+    !
+    ! rho_advected = (rho_n - dt*div(mass_flux(rho=rho_n)))/(rho=1 - dt*div(mass_flux(rho=1)))
+    !
+    ! See Putman and Lin, 2007, equations (17) and (18) for more details.
+
+    !
+    ! Part 1. Calculate rho_n - dt*div(mass_flux(rho=rho_n))
+    !
+    call invoke( setval_c(mass_flux, LARGE_REAL_NEGATIVE) )
+    call ffsl_vert_conservative_alg(mass_flux, rho, dep_pts, dt)
+    call ffsl_divergence_alg(increment, mass_flux, detj_at_w2, &
+                             cell_orientation, z_direction)
+
+    call invoke( X_minus_bY(rho_np1, rho, dt, increment), &
+    !
+    ! Part 2. Calculate (rho=1) - dt*div(mass_flux(rho=1))
+    !
+                 setval_c(rho_constant_1, 1.0_r_def),     &
+                 setval_c(mass_flux, LARGE_REAL_NEGATIVE) )
+    call ffsl_vert_conservative_alg(mass_flux, rho_constant_1, dep_pts, dt)
+    call ffsl_divergence_alg(increment, mass_flux, detj_at_w2, &
+                             cell_orientation, z_direction)
+
+    call invoke( X_minus_bY(rho_constant_1_np1,             &
+                            rho_constant_1, dt, increment), &
+    !
+    ! Part 3. Division
+    !
+                 X_divideby_Y(rho_adv, rho_np1, rho_constant_1_np1) )
+
+    nullify( w2_fs, w3_fs )
+
+  end subroutine ffsl_vert_advective_alg
+
+end module ffsl_vert_advective_alg_mod

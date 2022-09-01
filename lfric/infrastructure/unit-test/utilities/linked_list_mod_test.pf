@@ -1,0 +1,156 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the linked_list module
+!>
+module linked_list_mod_test
+
+  use pFUnit_Mod
+
+  use linked_list_int_mod, only : linked_list_int_type
+  use linked_list_mod,     only : linked_list_type, &
+                                  before, &
+                                  linked_list_item_type
+  use constants_mod, only       : i_def
+
+  implicit none
+
+  private
+
+  public :: test_linked_list
+
+
+  @TestCase
+  type, extends(TestCase), public :: linked_list_test_type
+    private
+    type(linked_list_type)               :: test_list
+    type(linked_list_item_type), pointer :: test_item => null()
+    integer(i_def) :: test_value1, test_value2, test_value3
+    logical :: is_associated
+    logical :: item_exists
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_linked_list
+  end type linked_list_test_type
+
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(linked_list_test_type), intent(inout) :: this
+
+    this%test_list = linked_list_type()
+    this%is_associated = .false.
+    this%item_exists = .false.
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(linked_list_test_type), intent(inout) :: this
+
+    call this%test_list%clear()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_linked_list(this)
+
+  implicit none
+
+  class(linked_list_test_type), intent(inout) :: this
+
+  ! Create some test integer values to add to the list
+
+  this%test_value1 = 27
+  this%test_value2 = 93
+  this%test_value3 = 8
+
+
+  ! Add first value to the list
+  call this%test_list%insert_item(linked_list_int_type(this%test_value1))
+
+  ! get the head of the list so we can retrieve the stored item
+
+  this%test_item => this%test_list%get_head()
+
+  ! check what we stored is what we meant to
+  @assertEqual( this%test_value1, this%test_item%payload%get_id() )
+
+
+  ! Test if an item exists in the list (when it doesn't)
+
+  this%item_exists = this%test_list%item_exists(this%test_value2)
+
+  @assertFalse( this%item_exists )
+
+  ! Test if an item exists in the list (when it does)
+
+  this%item_exists = this%test_list%item_exists(this%test_value1)
+
+  @assertTrue( this%item_exists )
+
+  ! Add a second value to the list and
+  ! test the number of items in the list
+
+  call this%test_list%insert_item(linked_list_int_type(this%test_value2))
+
+  @assertEqual( 2, this%test_list%get_length() )
+
+  ! Add a third value to the list inserting before the head of the list
+
+  this%test_item => this%test_list%get_head()
+
+  call this%test_list%insert_item(linked_list_int_type(this%test_value3), &
+                                                       insert_point=this%test_item, &
+                                                       placement=before)
+
+  ! Check that the new head of the list is what we just inserted
+
+  this%test_item => this%test_list%get_head()
+
+  @assertEqual(this%test_value3, this%test_item%payload%get_id()  )
+
+  ! Check that an item can be removed from the list
+  ! Remove at the middle entry from the list (which should contain test_value1)
+  this%test_item => this%test_item%next
+  call this%test_list%remove_item(this%test_item)
+
+  ! Test that the list length has dropped back down to 2
+  @assertEqual( 2, this%test_list%get_length() )
+  ! Test that the removed item is no longer in the list
+  this%item_exists = this%test_list%item_exists(this%test_value1)
+  @assertFalse( this%item_exists )
+
+  ! Test that the list is properly cleared
+
+  call this%test_list%clear()
+  this%test_item => this%test_list%get_head()
+  this%is_associated=associated(this%test_item)
+  @assertFalse( this%is_associated )
+
+  @assertEqual( 0, this%test_list%get_length() )
+
+  ! Now insert something into the cleared list and check that it
+  ! continues to function as expected.
+  call this%test_list%insert_item(linked_list_int_type(this%test_value2))
+  @assertEqual( 1, this%test_list%get_length() )
+  @assertTrue( associated(this%test_list%get_head()) )
+  @assertTrue( associated(this%test_list%get_current()) )
+  @assertTrue( associated(this%test_list%get_tail()) )
+
+  end subroutine test_linked_list
+
+end module linked_list_mod_test

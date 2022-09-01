@@ -1,0 +1,19 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+@startuml
+
+!include look.iuml
+!include io/file_mod.iuml
+!include io/ugrid_2d_mod.iuml
+!include io/ugrid_file_mod.iuml
+!include io/ugrid_generator_mod.iuml
+!include io/ncdf_quad_mod.iuml
+
+gen_planar_mod::gen_planar_type -|> ugrid_generator_mod::ugrid_generator_type
+gen_lbc_mod::gen_lbc_type       -|> ugrid_generator_mod::ugrid_generator_type
+gencube_ps_mod::gencube_ps_type -|> ugrid_generator_mod::ugrid_generator_type
+
+@enduml
+

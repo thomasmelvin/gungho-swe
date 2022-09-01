@@ -1,0 +1,326 @@
+{# Macros used in the rose stem suite.rc #}
+
+{#- ######################################################################## #}
+{#- MACROS                                                                   #}
+{#- ######################################################################## #}
+
+{#- RUN_APPLICATION #}
+{#- Main macro that is called for all apps. the first two arguments are      #}
+{#- required and give the app name and the configuration to use              #}
+
+{%- macro run_application( appName, configuration,
+                           plotstr=None, resolutions=[('')],
+                           run_with_compilers=[TARGET_SCIENCE_COMPILER],
+                           support_meshes=[''], env=None, checkkgo=True,
+                           publish=False ) %}
+
+{%    set crun = 1 %}
+{%    if env %}
+{%      if 'crun' in env.keys() %}
+{%        set crun = env['crun'] %}
+{%      endif %}
+{%    endif %}
+
+{%-   set appLabel = appName + '_' + configuration %}
+
+{%-   if appLabel not in appConfigsCompilerRuns.keys() %}
+{%-     do appConfigsCompilerRuns.update({appLabel : run_with_compilers})%}
+{%-   else %}
+{%-     do appConfigsCompilerRuns[appLabel].extend( run_with_compilers ) %}
+{%-   endif%}
+
+{%-   for compiler in appConfigsCompilerRuns[appLabel] %}
+{%-     set label = compiler|lower + '_fast-debug' %}
+{%-     for resolution in resolutions %}
+{%-       set res_value, dt_values, res_label, dt_labels, res_opt = resolution | get_resolution_labels() %}
+{%-       for i in range(0,dt_values|length) %}
+{%-         set appName_res_label = appLabel ~ res_label ~ dt_labels[i] %}
+
+{%-         if crun > 1  %}
+         [[[R{{crun}}/P1/{{crun}}]]]
+            graph = """
+            run_{{appName_res_label}}_{{label}}[-P1] => run_{{appName_res_label}}_{{label}}
+                 """
+         [[[R1/P{{crun}}/{{crun}}]]]
+            graph = """
+{%-           if checkkgo %}
+{%-             if TARGET_SCIENCE_COMPILER in TARGET_PERFORM_KGO_TESTS  %}
+            run_{{appName_res_label}}_{{label}} => check_{{appName_res_label}}_{{label}}
+{%-             endif %}
+{%-           endif %}
+{%-           if plotstr %}
+{%-             do plot_config.update( {appLabel : plotstr} ) %}
+            run_{{appName_res_label}}_{{label}} => plot_{{appName_res_label}}_{{label}}
+{%-             if publish %}
+            plot_{{appName_res_label}}_{{label}} => publish_{{appName_res_label}}_{{label}}_plots
+{%-             endif %}
+{%-           endif %}
+                 """
+{%-         endif %}
+
+        [[[R1]]]
+            graph = """
+            export_source => compile_{{projectName}}_with_{{label}}
+            export_source => compile_mesh_tools_with_{{label}}
+{%-         if publish %}
+            compile_{{projectName}}_with_{{label}}:finish => publish_{{label}}_compile
+{%-         endif %}
+
+{%-         if TARGET_SCIENCE_COMPILER in TARGET_PERFORM_RUN %}
+{%-           if res_label != '' %}
+            compile_mesh_tools_with_{{label}} => generate_mesh{{res_label}}_{{label}}
+            generate_mesh{{res_label}}_{{label}} => run_{{appName_res_label}}_{{label}}
+{%-           endif %}
+{%-           if support_meshes != [''] %}
+{%-             for mesh_name in support_meshes %}
+            compile_mesh_tools_with_{{label}} => generate_mesh_{{mesh_name|replace('.','p')}}_{{label}}
+            generate_mesh_{{mesh_name|replace('.','p')}}_{{label}} => run_{{appName_res_label}}_{{label}}
+{%-             endfor %}
+{%-           endif %}
+{%-         endif %}
+
+            compile_{{projectName}}_with_{{label}} => run_{{appName_res_label}}_{{label}}
+
+{%-         if checkkgo %}
+{%-           if TARGET_SCIENCE_COMPILER in TARGET_PERFORM_RUN %}
+{%-             if TARGET_SCIENCE_COMPILER in TARGET_PERFORM_KGO_TESTS and crun < 2  %}
+            run_{{appName_res_label}}_{{label}} => check_{{appName_res_label}}_{{label}}
+{%-             endif %}
+{%-           endif %}
+{%-         endif %}
+
+{%-         if publish %}
+            run_{{appName_res_label}}_{{label}}:finish => publish_{{appName_res_label}}_{{label}}
+{%-         endif %}
+{%-         if plotstr and crun < 2 %}
+{%-           do plot_config.update( {appLabel : plotstr} ) %}
+            run_{{appName_res_label}}_{{label}} => plot_{{appName_res_label}}_{{label}}
+{%-           if publish %}
+            plot_{{appName_res_label}}_{{label}} => publish_{{appName_res_label}}_{{label}}_plots
+{%-           endif %}
+{%-         endif %}
+                 """
+{%-       endfor %} {# i #}
+{%-     endfor %} {# resolution #}
+{%-   endfor %} {# appConfigsCompilerRuns #}
+{%- endmacro %} {# run_application #}
+
+{#- #########################################################################}
+{%- macro canned_test(appName) %}
+      [[[R1]]]
+{%-   if appName and appName not in appsToRun %}
+{%-     do appsToRun.append(appName) %}
+{%-   endif %}
+{%-   set label = TARGET_SCIENCE_COMPILER | lower + '_' + 'fast-debug' %}
+{%-   if TARGET_SCIENCE_COMPILER in TARGET_PERFORM_RUN %}
+            export_source => compile_{{projectName}}_with_{{label}}
+            compile_{{projectName}}_with_{{label}} => run_{{appName}}_canned_test_{{label}}
+{%-   endif %}
+{%- endmacro %}
+
+{#- #########################################################################}
+{%- macro cleanliness() %}
+      [[[R1]]]
+{%-   set label =  TARGET_TECHNICAL_COMPILER | lower + '_fast-debug' %}
+            export_source => compile_{{projectName}}_with_{{label}}
+            export_source => validate_{{projectName}}_rose-meta
+{%-   if 'cleanliness' in TECHNICAL_DEVELOPER_TESTS %}
+{#- The following line removed due to a bug brought to light by #730. #}
+{#- Ticket #762 has been created to fix this.                         #}
+{#-         compile_{{projectName}}_with_{{label}} => check_for_unused_source #}
+
+{%-   endif %}
+{%- endmacro %}
+
+{#- Documentation, it's next to cleanliness ##################################}
+
+{%- macro godliness(publish=False) %}
+      [[[R1]]]
+{%-   if 'documentation' in TECHNICAL_DEVELOPER_TESTS %}
+            export_source => api_documentation
+            export_source => uml_documentation
+            export_source => design_documentation
+{%-     if publish %}
+            api_documentation    => publish_api_documentation
+            api_documentation    => publish_api_log
+            design_documentation => publish_design_documentation
+            uml_documentation    => publish_uml_documentation
+{%-     endif %}
+{%-   endif %}
+{%- endmacro %}
+
+{#- #########################################################################}
+{%- macro publish_commit() %}
+      [[[R1]]]
+            PUBLISH:finish-all => publish_index
+            publish_index      => mirror_results_local
+{%-   if MIRROR_UPLOAD_URL %}
+            publish_index      => mirror_results_remote
+{%-   endif %}
+{%- endmacro %}
+
+{#- #########################################################################}
+{%- macro schedule() %}
+{%-   for group in groupsToRun %}
+{%-     if group in groups.keys() %}
+{%-       for mission in groups[group] %}
+{{          mission | executeMacro() }}
+{%-       endfor %}
+{%-     endif %}
+{%-   endfor %}
+{%- endmacro %}
+
+{#- #########################################################################}
+{%- macro setTaskEnv(scheduledTasksDict) %}
+{%-   for group in groupsToRun %}
+{%-     if group in groups.keys() %}
+{%-       for mission in groups[group] %}
+{%-         set appName, key, envDict, macroName = mission | getEnvMacro() %}
+{%-         if macroName == 'run_application' %}
+{%-           if appName not in appsToRun %}
+{%-             do appsToRun.append(appName) %}
+{%-           endif %}
+{%            set appKey = key + '_' + science_label %}
+{%-           do scheduledTasksDict.update({appKey: envDict}) %}
+{%-         endif %}
+{%-       endfor %}
+{%-     endif %}
+{%-   endfor %}
+{%- endmacro %}
+
+{#- #########################################################################}
+{%- macro setCrunInfo(crunInfo,scheduledTasksDict) %}
+{%-   for key, envDict in scheduledTasksDict.items() %}
+{%-     if 'crun' in envDict.keys() %}
+{%        if envDict['crun'] > crunInfo['maxcrun']  %}
+{%-         do crunInfo.update({'maxcrun':envDict['crun']})  -%}
+{%-       endif  -%}
+{%-     endif %}
+{%-   endfor %}
+{%- endmacro %}
+
+{#- #########################################################################}
+{%- macro setResolutions(resolution_choices, support_meshes) %}
+{%-   for group in groupsToRun %}
+{%-     if group in groups.keys() %}
+{%-       for mission in groups[group] %}
+
+{%-         set appKey, resList, resDict, resSupportMeshes = mission | get_resolution_macro() %}
+
+{%-         if appKey %}
+
+{%            if resList %}
+{%-             if appKey not in resolution_choices.keys() %}
+{%-               do resolution_choices.update({appKey:[]})  -%}
+{%-             endif %}
+{%-             for res in resList %}
+{%-               if res not in resolution_choices[appKey] %}
+{%-                 do resolution_choices[appKey].append(res) -%}
+{%-               endif %}
+{%-             endfor %}
+{%-           endif %}
+
+{%            if resSupportMeshes %}
+{%-             if appKey not in support_meshes.keys() %}
+{%-               do support_meshes.update({appKey:[]})  -%}
+{%-             endif %}
+{%-             for res in resSupportMeshes %}
+{%-               if res not in support_meshes[appKey] %}
+{%-                 do support_meshes[appKey].append(res) -%}
+{%-               endif %}
+{%-             endfor %}
+{%-           endif %}
+
+{%-         endif %}
+{%-       endfor %} {# mission #}
+{%-     endif %}
+{%-   endfor %} {# group #}
+{%- endmacro %} {# setResolutions #}
+
+{#- #########################################################################}
+{%- macro deleteDirectory( directory ) %}
+test -w "{{directory}}" -o ! -e "{{directory}}" && rm -rf {{directory}} || ( echo ** Unable to delete "{{directory}}", not writable >&2; false )
+{%- endmacro %}
+
+{#- #########################################################################}
+{%- macro verboseMake() %}
+{%- if VERBOSE_TASKS is defined %}VERBOSE=1{% endif %}
+{%- endmacro %}
+
+{#- #########################################################################}
+{%- macro ensureDestination() %}
+                     mkdir -p $DESTINATION
+{%- endmacro %}
+
+{#- #########################################################################}
+{%- macro check_compilers( appName, configuration, build, resolution=(''),
+                           precisions=[rdef_default], publish=False,
+                           checkkgo=True ) %}
+      [[[R1]]]
+
+{%-   set perform_run = [] %}
+{%-   set appLabel = appName + '_' + configuration %}
+
+{%-   set science_key = appName + '_' + configuration + '_' + science_label %}
+{%-   set environment = scheduledTasksDict[science_key] %}
+
+{%-   for compiler in compilers %}
+{%-     for precision in precisions %}
+{%-       set application_key = appName + '_' + configuration + '_'
+                                + compiler + '_' + precision + '_bit'
+                                + build %}
+{%-       do scheduledTasksDict.update({application_key: environment}) %}
+{%-     endfor %} {# precision #}
+{%-   endfor %} {# compiler #}
+
+{%-   if build == 'fast-debug' %}
+{%-     do perform_run.extend( TARGET_PERFORM_RUN ) %}
+{%-   elif build == 'full-debug' %}
+{%-     do perform_run.extend( TARGET_PERFORM_DEBUG_RUN ) %}
+{%-   endif %}
+
+{%-   set run_with_compilers = perform_run | reject("==", "none") %}
+{%-   if appLabel not in appConfigsCompilerRuns.keys() %}
+{%-     do appConfigsCompilerRuns.update({appLabel : run_with_compilers})%}
+{%-   else %}
+{%-     set difference = run_with_compilers | reject("in", appConfigsCompilerRuns[appLabel]) %}
+{%-     do appConfigsCompilerRuns[appLabel].extend(difference) %}
+{%-   endif%}
+
+{%-   set mesh_label = TARGET_MESH_COMPILER|lower + '_'
+                       + mesh_rdef + '-bit_' + mesh_build|lower %}
+
+{%-   for compiler in compiler_setup.keys() %}
+{%-     for precision in precisisions %}
+
+{%-       set label = compiler|lower + '_' + precision + '-bit_' +build|lower %}
+            export_source => compile_{{projectName}}_with_{{label}}
+            export_source => compile_mesh_tools_with_{{mesh_label}}
+
+{{        unit_tests_graph( compiler, precision ) }}
+
+{%-       if publish %}
+            compile_{{projectName}}_with_{{label}}:finish => publish_{{label}}_compile
+            publish_{{label}}_compile => publish_node
+{%-       endif %}
+
+{%-       if compiler in perform_run %}
+{%-         set res_value, dt_values, res_label, dt_labels, res_opt = resolution | get_resolution_labels() %}
+{%-         for i in range(0, dt_values|length) %}
+{%-           set appLabel_res = appLabel ~ res_label ~ dt_labels[i] %}
+            compile_mesh_tools_with_{{label}} => generate_mesh{{res_label}}_{{label}}
+            generate_mesh{{res_label}}_{{label}} => run_{{appLabel_res}}_{{label}}
+            compile_{{projectName}}_with_{{label}} => run_{{appLabel_res}}_{{label}}
+{%-           if publish %}
+            run_{{appLabel_res}}_{{label}}:finish => publish_{{appLabel_res}}_{{label}}
+{%-           endif %}
+{%-           if compiler in TARGET_PERFORM_KGO_TESTS %}
+{%-             if checkkgo %}
+            run_{{appLabel_res}}_{{label}} => check_{{appLabel_res}}_{{label}}
+{%-             endif %}
+{%-           endif %}
+{%-         endfor %} {# i #}
+{%-       endif %}
+{%-     endfor %} {# precision #}
+{%-   endfor %} {# compiler #}
+{%- endmacro %}

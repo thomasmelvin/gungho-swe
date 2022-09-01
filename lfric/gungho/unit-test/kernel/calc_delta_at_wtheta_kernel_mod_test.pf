@@ -1,0 +1,87 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2018 Met Office. All rights reserved.
+! For further details please refer to the file COPYRIGHT.txt
+! which you should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the grid edge calculation
+!>
+module calc_delta_at_wtheta_kernel_mod_test
+
+  use constants_mod, only : i_def, r_def
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: calc_delta_at_wtheta_test_type
+    private
+  contains
+    procedure test_all
+  end type calc_delta_at_wtheta_test_type
+
+contains
+
+  @test
+  subroutine test_all( this )
+
+    use calc_delta_at_wtheta_kernel_mod, only : calc_delta_at_wtheta_code
+
+    implicit none
+
+    class(calc_delta_at_wtheta_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter       :: tol = 1.0e-9_r_def
+    real(kind=r_def), dimension(4)    :: answer
+
+    ! Mesh
+    integer(kind=i_def), parameter :: nlayers = 3
+
+    ! W2 Space
+    integer(kind=i_def), parameter              :: ndf2  = 4_i_def
+    integer(kind=i_def), parameter              :: undf2 = 12_i_def
+    integer(kind=i_def), dimension(ndf2)        :: map2
+    real(kind=r_def),    dimension(undf2)       :: dx_at_w2
+    ! Wtheta Space
+    integer(kind=i_def), parameter              :: ndftheta  = 2_i_def
+    integer(kind=i_def), parameter              :: undftheta = 4_i_def
+    integer(kind=i_def), dimension(ndftheta)    :: maptheta
+    real(kind=r_def),    dimension(undftheta)   :: delta_at_wtheta
+
+    integer(kind=i_def) :: i, k
+
+
+
+    do i = 1,ndftheta
+      maptheta(i) = i
+    end do
+    do i = 1,ndf2
+      map2(i) = 1 + (i-1)*nlayers
+    end do
+
+    do k = 0, nlayers-1
+      do i = 1, ndf2
+        dx_at_w2(map2(i) + k) = real(i + k)
+      end do
+    end do
+
+
+     call calc_delta_at_wtheta_code( nlayers, &
+                          delta_at_wtheta,    &
+                          dx_at_w2,           &
+                          ndftheta,           &
+                          undftheta,          &
+                          maptheta,           &
+                          ndf2,               &
+                          undf2,              &
+                          map2 )
+
+    answer = (/ 1.0,1.0,2.0,3.0 /)
+    @assertEqual(answer,delta_at_wtheta,tol)
+
+  end subroutine test_all
+
+end module calc_delta_at_wtheta_kernel_mod_test

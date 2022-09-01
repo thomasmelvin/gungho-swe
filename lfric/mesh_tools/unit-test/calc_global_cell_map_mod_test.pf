@@ -1,0 +1,454 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2017 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief pFunit tests for the calc_global_cell_map module
+!>
+module calc_global_cell_map_mod_test
+
+  use calc_global_cell_map_mod, only: calc_global_cell_map
+  use constants_mod,            only: r_def, i_def, l_def, &
+                                      str_max_filename, str_def
+  use gen_planar_mod,           only: gen_planar_type
+  use gencube_ps_mod,           only: gencube_ps_type
+  use log_mod,                  only: log_event, log_scratch_space, &
+                                      LOG_LEVEL_ERROR
+
+  use reference_element_mod,    only: reference_cube_type
+  use pFUnit_Mod
+  use ugrid_generator_mod,      only: ugrid_generator_type
+
+  use mesh_config_mod,          only: geometry_planar,   &
+                                      topology_periodic, &
+                                      topology_channel,  &
+                                      coord_sys_xyz,     &
+                                      coord_sys_ll
+
+  implicit none
+
+  private
+  public :: calc_global_cell_map_test_type,       &
+            test_coarse_to_fine_sphere,           &
+            test_fine_to_coarse_sphere,           &
+            test_coarse_to_fine_plane_bi,         &
+            test_fine_to_coarse_plane_bi,         &
+            test_coarse_to_fine_plane_periodic_x, &
+            test_fine_to_coarse_plane_periodic_x, &
+            test_coarse_to_fine_plane_periodic_y, &
+            test_fine_to_coarse_plane_periodic_y
+
+
+  @testCase
+  type, extends( TestCase ) :: calc_global_cell_map_test_type
+    private
+
+    integer(i_def) :: nsmooth         = 0
+    integer(i_def) :: coarse_ncells   = 4
+    integer(i_def) :: fine_ncells     = 8
+    integer(i_def) :: coarse_ncells_x = 2
+    integer(i_def) :: coarse_ncells_y = 2
+    integer(i_def) :: fine_ncells_x   = 4
+    integer(i_def) :: fine_ncells_y   = 6
+    real(r_def)    :: domain_x        = 10.0
+    real(r_def)    :: domain_y        = 10.0
+
+    integer(i_def), allocatable ::  cell_map(:,:,:)
+
+    type(gen_planar_type) :: coarse_plane_bi
+    type(gen_planar_type) :: fine_plane_bi
+    type(gen_planar_type) :: coarse_plane_periodic_x
+    type(gen_planar_type) :: fine_plane_periodic_x
+    type(gen_planar_type) :: coarse_plane_periodic_y
+    type(gen_planar_type) :: fine_plane_periodic_y
+
+    type(gencube_ps_type) :: coarse_sphere
+    type(gencube_ps_type) :: fine_sphere
+
+  contains
+    procedure :: setUp
+    procedure :: tearDown
+    procedure :: test_coarse_to_fine_sphere
+    procedure :: test_fine_to_coarse_sphere
+    procedure :: test_coarse_to_fine_plane_bi
+    procedure :: test_fine_to_coarse_plane_bi
+    procedure :: test_coarse_to_fine_plane_periodic_x
+    procedure :: test_fine_to_coarse_plane_periodic_x
+    procedure :: test_coarse_to_fine_plane_periodic_y
+    procedure :: test_fine_to_coarse_plane_periodic_y
+
+  end type calc_global_cell_map_test_type
+
+  integer(i_def), parameter :: CoarseToFineMapSphere(2,2,96) = reshape( &
+      [   1,    2,   9,    10,            3,    4,   11,   12,  &
+          5,    6,   13,   14,            7,    8,   15,   16,  &
+         17,   18,   25,   26,           19,   20,   27,   28,  &
+         21,   22,   29,   30,           23,   24,   31,   32,  &
+         33,   34,   41,   42,           35,   36,   43,   44,  &
+         37,   38,   45,   46,           39,   40,   47,   48,  &
+         49,   50,   57,   58,           51,   52,   59,   60,  &
+         53,   54,   61,   62,           55,   56,   63,   64,  &
+         65,   66,   73,   74,           67,   68,   75,   76,  &
+         69,   70,   77,   78,           71,   72,   79,   80,  &
+         81,   82,   89,   90,           83,   84,   91,   92,  &
+         85,   86,   93,   94,           87,   88,   95,   96,  &
+         97,   98,  105,  106,           99,  100,  107,  108,  &
+        101,  102,  109,  110,          103,  104,  111,  112,  &
+        113,  114,  121,  122,          115,  116,  123,  124,  &
+        117,  118,  125,  126,          119,  120,  127,  128,  &
+        137,  129,  138,  130,          139,  131,  140,  132,  &
+        141,  133,  142,  134,          143,  135,  144,  136,  &
+        153,  145,  154,  146,          155,  147,  156,  148,  &
+        157,  149,  158,  150,          159,  151,  160,  152,  &
+        169,  161,  170,  162,          171,  163,  172,  164,  &
+        173,  165,  174,  166,          175,  167,  176,  168,  &
+        185,  177,  186,  178,          187,  179,  188,  180,  &
+        189,  181,  190,  182,          191,  183,  192,  184,  &
+        201,  193,  202,  194,          203,  195,  204,  196,  &
+        205,  197,  206,  198,          207,  199,  208,  200,  &
+        217,  209,  218,  210,          219,  211,  220,  212,  &
+        221,  213,  222,  214,          223,  215,  224,  216,  &
+        233,  225,  234,  226,          235,  227,  236,  228,  &
+        237,  229,  238,  230,          239,  231,  240,  232,  &
+        249,  241,  250,  242,          251,  243,  252,  244,  &
+        253,  245,  254,  246,          255,  247,  256,  248,  &
+        258,  266,  257,  265,          260,  268,  259,  267,  &
+        262,  270,  261,  269,          264,  272,  263,  271,  &
+        274,  282,  273,  281,          276,  284,  275,  283,  &
+        278,  286,  277,  285,          280,  288,  279,  287,  &
+        290,  298,  289,  297,          292,  300,  291,  299,  &
+        294,  302,  293,  301,          296,  304,  295,  303,  &
+        306,  314,  305,  313,          308,  316,  307,  315,  &
+        310,  318,  309,  317,          312,  320,  311,  319,  &
+        321,  322,  329,  330,          323,  324,  331,  332,  &
+        325,  326,  333,  334,          327,  328,  335,  336,  &
+        337,  338,  345,  346,          339,  340,  347,  348,  &
+        341,  342,  349,  350,          343,  344,  351,  352,  &
+        353,  354,  361,  362,          355,  356,  363,  364,  &
+        357,  358,  365,  366,          359,  360,  367,  368,  &
+        369,  370,  377,  378,          371,  372,  379,  380,  &
+        373,  374,  381,  382,          375,  376,  383,  384 ], (/2,2,96/))
+
+  integer(i_def), parameter :: FineToCoarseMapSphere(1,1,384) = reshape(        &
+    [ 1,  1,  2,  2,  3,  3,  4,  4,  1,  1,  2,  2,  3,  3,  4,  4,  5,  5,  &
+      6,  6,  7,  7,  8,  8,  5,  5,  6,  6,  7,  7,  8,  8,  9,  9,  10, 10, &
+      11, 11, 12, 12, 9,  9,  10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, &
+      16, 16, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, &
+      17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 22, 22, 23, 23, 24, 24, 21, 21, &
+      22, 22, 23, 23, 24, 24, 25, 25, 26, 26, 27, 27, 28, 28, 25, 25, 26, 26, &
+      27, 27, 28, 28, 29, 29, 30, 30, 31, 31, 32, 32, 29, 29, 30, 30, 31, 31, &
+      32, 32, 33, 33, 34, 34, 35, 35, 36, 36, 33, 33, 34, 34, 35, 35, 36, 36, &
+      37, 37, 38, 38, 39, 39, 40, 40, 37, 37, 38, 38, 39, 39, 40, 40, 41, 41, &
+      42, 42, 43, 43, 44, 44, 41, 41, 42, 42, 43, 43, 44, 44, 45, 45, 46, 46, &
+      47, 47, 48, 48, 45, 45, 46, 46, 47, 47, 48, 48, 49, 49, 50, 50, 51, 51, &
+      52, 52, 49, 49, 50, 50, 51, 51, 52, 52, 53, 53, 54, 54, 55, 55, 56, 56, &
+      53, 53, 54, 54, 55, 55, 56, 56, 57, 57, 58, 58, 59, 59, 60, 60, 57, 57, &
+      58, 58, 59, 59, 60, 60, 61, 61, 62, 62, 63, 63, 64, 64, 61, 61, 62, 62, &
+      63, 63, 64, 64, 65, 65, 66, 66, 67, 67, 68, 68, 65, 65, 66, 66, 67, 67, &
+      68, 68, 69, 69, 70, 70, 71, 71, 72, 72, 69, 69, 70, 70, 71, 71, 72, 72, &
+      73, 73, 74, 74, 75, 75, 76, 76, 73, 73, 74, 74, 75, 75, 76, 76, 77, 77, &
+      78, 78, 79, 79, 80, 80, 77, 77, 78, 78, 79, 79, 80, 80, 81, 81, 82, 82, &
+      83, 83, 84, 84, 81, 81, 82, 82, 83, 83, 84, 84, 85, 85, 86, 86, 87, 87, &
+      88, 88, 85, 85, 86, 86, 87, 87, 88, 88, 89, 89, 90, 90, 91, 91, 92, 92, &
+      89, 89, 90, 90, 91, 91, 92, 92, 93, 93, 94, 94, 95, 95, 96, 96, 93, 93, &
+      94, 94, 95, 95, 96, 96 ], (/1,1,384/) )
+
+  integer(i_def), parameter :: CoarseToFineMapPlane(2,3,4) = reshape( &
+     [ 1,  2,  5,  6,  9, 10, &
+       3,  4,  7,  8, 11, 12, &
+      13, 14, 17, 18, 21, 22, &
+      15, 16, 19, 20, 23, 24], (/2,3,4/) )
+
+  integer(i_def), parameter :: FineToCoarseMapPlane(1,1,24) = reshape( &
+    [ 1,  1,  2,  2,  1,  1,  2,  2,  1,  1,  2,  2,  &
+      3,  3,  4,  4,  3,  3,  4,  4,  3,  3,  4,  4 ], (/1,1,24/) )
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class( calc_global_cell_map_test_type ), intent( inout ) :: this
+
+    character(str_def) :: mesh_name
+
+    type(reference_cube_type) :: cube_element
+    cube_element = reference_cube_type()
+
+    mesh_name = 'coarse_sphere'
+    this%coarse_sphere = gencube_ps_type                            &
+                             ( mesh_name  = mesh_name,              &
+                               edge_cells = this%coarse_ncells,     &
+                               nsmooth    = this%nsmooth,           &
+                               coord_sys  = coord_sys_ll )
+
+    mesh_name = 'fine_sphere'
+    this%fine_sphere   = gencube_ps_type                            &
+                             ( mesh_name  = mesh_name,              &
+                               edge_cells = this%fine_ncells,       &
+                               nsmooth    = this%nsmooth,           &
+                               coord_sys  = coord_sys_ll )
+
+    mesh_name = 'coarse_plane_bi'
+    this%coarse_plane_bi = gen_planar_type                          &
+                           ( reference_element = cube_element,      &
+                             mesh_name    = mesh_name,              &
+                             geometry     = geometry_planar,        &
+                             topology     = topology_periodic,      &
+                             edge_cells_x = this%coarse_ncells_x,   &
+                             edge_cells_y = this%coarse_ncells_y,   &
+                             periodic_x   = .true.,                 &
+                             periodic_y   = .true.,                 &
+                             domain_x     = this%domain_x,          &
+                             domain_y     = this%domain_y,          &
+                             coord_sys    = coord_sys_xyz )
+
+    mesh_name = 'fine_plane_bi'
+    this%fine_plane_bi = gen_planar_type                            &
+                           ( reference_element = cube_element,      &
+                             mesh_name    = mesh_name,              &
+                             geometry     = geometry_planar,        &
+                             topology     = topology_periodic,      &
+                             edge_cells_x = this%fine_ncells_x,     &
+                             edge_cells_y = this%fine_ncells_y,     &
+                             periodic_x   = .true.,                 &
+                             periodic_y   = .true.,                 &
+                             domain_x     = this%domain_x,          &
+                             domain_y     = this%domain_y,          &
+                             coord_sys    = coord_sys_xyz )
+
+
+
+    mesh_name = 'coarse_plane_periodic_x'
+    this%coarse_plane_periodic_x = gen_planar_type                &
+                           ( reference_element = cube_element,    &
+                             mesh_name    = mesh_name,            &
+                             geometry     = geometry_planar,      &
+                             topology     = topology_channel,     &
+                             edge_cells_x = this%coarse_ncells_x, &
+                             edge_cells_y = this%coarse_ncells_y, &
+                             periodic_x   = .true.,               &
+                             periodic_y   = .false.,              &
+                             domain_x     = this%domain_x,        &
+                             domain_y     = this%domain_y,        &
+                             coord_sys    = coord_sys_xyz )
+
+
+    mesh_name = 'fine_plane_periodic_x'
+    this%fine_plane_periodic_x = gen_planar_type                &
+                           ( reference_element = cube_element,  &
+                             mesh_name    = mesh_name,          &
+                             geometry     = geometry_planar,    &
+                             topology     = topology_channel,   &
+                             edge_cells_x = this%fine_ncells_x, &
+                             edge_cells_y = this%fine_ncells_y, &
+                             periodic_x   = .true.,             &
+                             periodic_y   = .false.,            &
+                             domain_x     = this%domain_x,      &
+                             domain_y     = this%domain_y,      &
+                             coord_sys    = coord_sys_xyz )
+
+    mesh_name = 'coarse_plane_periodic_y'
+    this%coarse_plane_periodic_y = gen_planar_type                &
+                           ( reference_element = cube_element,    &
+                             mesh_name    = mesh_name,            &
+                             geometry     = geometry_planar,      &
+                             topology     = topology_channel,     &
+                             edge_cells_x = this%coarse_ncells_x, &
+                             edge_cells_y = this%coarse_ncells_y, &
+                             periodic_x   = .false.,              &
+                             periodic_y   = .true.,               &
+                             domain_x     = this%domain_x,        &
+                             domain_y     = this%domain_y,        &
+                             coord_sys    = coord_sys_xyz )
+
+
+    mesh_name = 'fine_plane_periodic_y'
+    this%fine_plane_periodic_y = gen_planar_type                &
+                           ( reference_element = cube_element,  &
+                             mesh_name    = mesh_name,          &
+                             geometry     = geometry_planar,    &
+                             topology     = topology_channel,   &
+                             edge_cells_x = this%fine_ncells_x, &
+                             edge_cells_y = this%fine_ncells_y, &
+                             periodic_x   = .false.,            &
+                             periodic_y   = .true.,             &
+                             domain_x     = this%domain_x,      &
+                             domain_y     = this%domain_y,      &
+                             coord_sys    = coord_sys_xyz )
+
+    return
+  end subroutine setUp
+
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class( calc_global_cell_map_test_type ), intent( inout ) :: this
+
+    if (allocated(this%cell_map)) deallocate(this%cell_map)
+
+    return
+  end subroutine tearDown
+
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_coarse_to_fine_sphere( this )
+
+    implicit none
+
+    class( calc_global_cell_map_test_type ), intent( inout ) :: this
+    integer(i_def) :: panel_rotations(6) = (/ 0, 0, 1, 1, -1, 0 /)
+
+    call calc_global_cell_map( this%coarse_sphere, &
+                               this%fine_ncells,   &
+                               this%fine_ncells,   &
+                               this%cell_map,      &
+                               panel_rotations     )
+
+    @assertEqual ( CoarseToFineMapSphere, this%cell_map )
+
+    return
+  end subroutine test_coarse_to_fine_sphere
+
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_fine_to_coarse_sphere( this )
+
+    implicit none
+
+    class( calc_global_cell_map_test_type ), intent( inout ) :: this
+    integer(i_def) :: panel_rotations(6) = (/ 0, 0, 1, 1, -1, 0 /)
+
+    call calc_global_cell_map( this%fine_sphere,   &
+                               this%coarse_ncells, &
+                               this%coarse_ncells, &
+                               this%cell_map,      &
+                               panel_rotations     )
+
+    @assertEqual ( FineToCoarseMapSphere, this%cell_map )
+
+    return
+  end subroutine test_fine_to_coarse_sphere
+
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_coarse_to_fine_plane_bi( this )
+
+    implicit none
+
+    class( calc_global_cell_map_test_type ), intent( inout ) :: this
+
+    call calc_global_cell_map( this%coarse_plane_bi, &
+                               this%fine_ncells_x,   &
+                               this%fine_ncells_y,   &
+                               this%cell_map )
+
+    @assertEqual ( CoarseToFineMapPlane, this%cell_map )
+
+    return
+  end subroutine test_coarse_to_fine_plane_bi
+
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_fine_to_coarse_plane_bi( this )
+
+    implicit none
+
+    class( calc_global_cell_map_test_type ), intent( inout ) :: this
+
+    call calc_global_cell_map( this%fine_plane_bi,   &
+                               this%coarse_ncells_x, &
+                               this%coarse_ncells_y, &
+                               this%cell_map )
+
+    @assertEqual ( FineToCoarseMapPlane, this%cell_map )
+
+    return
+  end subroutine test_fine_to_coarse_plane_bi
+
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_coarse_to_fine_plane_periodic_x( this )
+
+    implicit none
+
+    class( calc_global_cell_map_test_type ), intent( inout ) :: this
+
+    call calc_global_cell_map( this%coarse_plane_periodic_x, &
+                               this%fine_ncells_x,           &
+                               this%fine_ncells_y,           &
+                               this%cell_map )
+
+    @assertEqual ( CoarseToFineMapPlane, this%cell_map )
+
+    return
+  end subroutine test_coarse_to_fine_plane_periodic_x
+
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_fine_to_coarse_plane_periodic_x( this )
+
+    implicit none
+
+    class( calc_global_cell_map_test_type ), intent( inout ) :: this
+
+    call calc_global_cell_map( this%fine_plane_periodic_x,   &
+                               this%coarse_ncells_x,         &
+                               this%coarse_ncells_y,         &
+                               this%cell_map )
+
+    @assertEqual ( FineToCoarseMapPlane, this%cell_map )
+
+    return
+  end subroutine test_fine_to_coarse_plane_periodic_x
+
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_coarse_to_fine_plane_periodic_y( this )
+
+    implicit none
+
+    class( calc_global_cell_map_test_type ), intent( inout ) :: this
+
+    call calc_global_cell_map( this%coarse_plane_periodic_y, &
+                               this%fine_ncells_x,           &
+                               this%fine_ncells_y,           &
+                               this%cell_map )
+
+    @assertEqual ( CoarseToFineMapPlane, this%cell_map )
+
+    return
+  end subroutine test_coarse_to_fine_plane_periodic_y
+
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_fine_to_coarse_plane_periodic_y( this )
+
+    implicit none
+
+    class( calc_global_cell_map_test_type ), intent( inout ) :: this
+
+    call calc_global_cell_map( this%fine_plane_periodic_y, &
+                               this%coarse_ncells_x,       &
+                               this%coarse_ncells_y,       &
+                               this%cell_map )
+
+    @assertEqual ( FineToCoarseMapPlane, this%cell_map )
+
+    return
+  end subroutine test_fine_to_coarse_plane_periodic_y
+
+end module calc_global_cell_map_mod_test

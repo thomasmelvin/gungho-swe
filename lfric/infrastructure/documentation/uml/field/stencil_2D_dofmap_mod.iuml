@@ -1,0 +1,16 @@
+' (c) Crown copyright 2020 Met Office. All rights reserved.
+' The file LICENCE, distributed with this code, contains details of the terms
+' under which the code may be used.
+
+class stencil_2D_dofmap_mod::stencil_2D_dofmap_type {
+  -dofmap : integer[::::] <<allocatable>>
+  -dofmap_size : integer[::] <<allocatable>>
+
+  <<create>>stencil_2D_dofmap_constructor( <<in>>st_shape : integer, <<in>>st_depth : integer, <<in>>ndf : integer, <<in>>mesh <<pointer>> : mesh_type, <<in>>master_dofmap : master_dofmap_type  ) : stencil_2D_dofmap_type
+
+  +get_dofmap(<<in>>cell : integer) : integer[:::] <<pointer>>
+  +get_whole_dofmap() : integer[::::] <<pointer>>
+  +get_stencil_sizes() : integer[::] <<pointer>>
+  +clear()
+  <<destroy>>stencil_2D_dofmap_destructor()
+}

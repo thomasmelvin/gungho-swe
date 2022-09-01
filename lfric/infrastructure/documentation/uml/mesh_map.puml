@@ -1,0 +1,30 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+@startuml
+
+!include look.iuml
+!include mesh/mesh_map_collection_mod.iuml
+!include mesh/mesh_map_mod.iuml
+!include mesh/global_mesh_map_collection_mod.iuml
+!include mesh/global_mesh_map_mod.iuml
+
+class global_mesh_collection_mod::global_mesh_collection_type {
+}
+class global_mesh_mod::global_mesh_type {
+}
+class mesh_collection_mod::mesh_collection_type {
+}
+class mesh_mod::mesh_type {
+}
+
+global_mesh_collection_mod::global_mesh_collection_type o-> "*" global_mesh_mod::global_mesh_type
+global_mesh_mod::global_mesh_type o-> global_mesh_map_collection_mod::global_mesh_map_collection_type
+global_mesh_map_collection_mod::global_mesh_map_collection_type o-> "*" global_mesh_map_mod::global_mesh_map_type
+
+mesh_collection_mod::mesh_collection_type o-> "*" mesh_mod::mesh_type
+mesh_mod::mesh_type o-> mesh_map_collection_mod::mesh_map_collection_type
+mesh_map_collection_mod::mesh_map_collection_type o-> "*" mesh_map_mod::mesh_map_type
+
+@enduml

@@ -1,0 +1,27 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+@startuml
+
+!include look.iuml
+!include mesh/extrusion_mod.iuml
+!include mesh/global_mesh_mod.iuml
+!include mesh/local_mesh_mod.iuml
+!include mesh/partition_mod.iuml
+!include mesh/ugrid_mesh_data_mod.iuml
+
+mesh_mod::mesh_type o-> partition_mod::partition_type
+mesh_mod::mesh_type o-> local_mesh_mod::local_mesh_type
+mesh_mod::mesh_type -> extrusion_mod::extrusion_type
+
+ugrid_mesh_data_mod::ugrid_mesh_data_type - global_mesh_mod::global_mesh_type
+global_mesh_mod::global_mesh_type - mesh_mod::mesh_type
+global_mesh_mod::global_mesh_type - partition_mod::partition_type
+local_mesh_mod::local_mesh_type - global_mesh_mod::global_mesh_type
+local_mesh_mod::local_mesh_type - partition_mod::partition_type
+linked_list_data_mod::linked_list_data_type <|-- global_mesh_mod::global_mesh_type
+linked_list_data_mod::linked_list_data_type <|-- mesh_mod::mesh_type
+
+
+@enduml

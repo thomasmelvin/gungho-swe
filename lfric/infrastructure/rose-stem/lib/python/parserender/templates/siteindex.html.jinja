@@ -1,0 +1,102 @@
+{%- macro changed(page) %}
+{%-   set changed = page.hasChanged() %}
+{%-   if changed is not none -%}
+{{'changed' if changed else 'unchanged'}}
+{%-   endif %}
+{%- endmacro %}
+{%- macro old(page) %}
+{%-   set timestamp = page.getTimestamp() %}
+{%-   if timestamp is not none -%}
+{{'current' if timestamp > oldthreshold else 'aged'}}
+{%-   endif %}
+{%- endmacro %}
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML Basic 1.1//EN"
+                      "http://www.w3.org/TR/xhtml-basic/xhtml-basic11.dtd">
+<html>
+  <head>
+    <title>LFRic Nightly Build Report</title>
+    <style type="text/css">
+      h1 { text-align: center; }
+      .s2 { margin-left: 1em; }
+      .s3 { margin-left: 2em; }
+      .s4 { margin-left: 3em; }
+      .s5 { margin-left: 4em; }
+      .build { margin-left: 1em; padding: 1ex; font-size: 50%; background-color: #eee; }
+      .run   { margin-left: 1em; padding: 1ex; font-size: 50%; background-color: #eee; }
+      .error { background-color: #f00; }
+      a.changed         { background-color: #dd5; }
+      a.unchanged       { background-color: #efe; }
+      a.current.link    { color: #00e; }
+      a.current.visited { color: #529; }
+      a.aged:link       { color: #ddd; }
+      a.aged:visited    { color: #999; }
+    </style>
+  </head>
+  <body>
+    <h1>LFRic Nightly Build Report</h1>
+{%- set currentLevel = [] %}
+{%- for node, tail in tree.descend() %}
+{%-   set level = tail|length %}
+{%-   set indent = level + 1 %}
+{%-   if node.getType() == 'root' %}{########################################}
+{%-     do currentLevel.append( 0 ) %}
+    <p class="internal">
+{%-     if cronout %}
+      Last updated {{crontimestamp}} (<a href="{{cronout}}"> log </a>)
+{%-     endif %}
+{%-     if suiteurl %}
+      Suite <a href="{{suiteurl}}">run details</a>
+{%-     endif %}
+    </p>
+{%-   elif node.getType() == 'directory' %}{#################################}
+{%-     if level < currentLevel[-1] %}
+{%-       for count in range(currentLevel[-1]) %}
+{%-         set nextLevel = currentLevel.pop() %}
+{{'  '*(nextLevel+1)}}</div>
+{%-         if nextLevel <= level %}
+{%-           do currentLevel.append( nextLevel ) %}
+{%-           break %}
+{%-         endif %}
+{%-       endfor %}
+{%-     elif level == currentLevel[-1] %}
+{%-       set nextLevel = currentLevel.pop() %}
+{{'  '*(nextLevel+1)}}</div>
+{%-       do currentLevel.append( nextLevel ) %}
+{%-     else %}{# level > currentLevel[-1] #}
+{%-       do currentLevel.append( level ) %}
+{%-     endif %}
+{{'  '*indent}}<h{{level+1}}>
+{%-     set indexPage = node.getIndexPage() %}
+{%-     if indexPage -%}
+          <a href="{{indexPage.urlPath()}}">{{node.name}}</a>
+{%-     else -%}
+          {{node.name}}
+{%-     endif %}
+{%-     set buildPage = node.getBuildPage() %}
+{%-     if buildPage -%}
+          <a class="build {{changed(buildPage)}} {{old(buildPage)}}" href="{{buildPage.urlPath()}}">Build log</a>
+{%-     endif %}
+{%-     set runPage = node.getRunPage() %}
+{%-     if runPage -%}
+          <a class="run {{changed(runPage)}} {{old(runPage)}}" href="{{runPage.urlPath()}}">Run log</a>
+{%-     endif -%}
+          </h{{level+1}}>
+{{'  '*indent}}<div class="s{{level+1}}">
+{%-   elif node.getType() == 'page' %}{######################################}
+{%-     if not node.isHidden() %}
+{{'  '*indent}}<div class="page">
+{{'  '*indent}}  <p><a href="{{node.urlPath()}}">{{node.name}}</a></p>
+{{'  '*indent}}</div>
+{%-     endif %}
+{%-   else %}{###############################################################}
+{{'  '*indent}}<p class="error">Unrecognised node type "{{node.getType()}}" in descent.</p>
+{%-   endif %}
+{%- endfor %}
+{%- for count in range(currentLevel[-1]) %}
+{%-   set nextLevel = currentLevel.pop() %}
+{%-   if nextLevel > 0 %}
+{{'  '*(nextLevel+1)}}</div>
+{%-   endif %}
+{%- endfor %}
+  </body>
+</html>

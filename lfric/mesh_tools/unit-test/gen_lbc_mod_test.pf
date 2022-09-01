@@ -1,0 +1,624 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief     Tests for mesh_tools/source/support/gen_lbc_mod.F90
+!>
+module gen_lbc_mod_test
+
+  use constants_mod,  only: i_def, r_def, str_def, l_def, str_longlong
+
+  use gen_lbc_mod,    only: gen_lbc_type
+  use gen_planar_mod, only: gen_planar_type
+
+  use global_mesh_map_collection_mod, only: global_mesh_map_collection_type
+  use global_mesh_map_mod,            only: global_mesh_map_type
+
+  use reference_element_mod, only: reference_cube_type, &
+                                   W, S, E, N
+
+  use mesh_config_mod, only: coord_sys_xyz,   &
+                             geometry_planar, &
+                             topology_non_periodic
+
+  use pFUnit_mod
+
+  implicit none
+
+  private
+
+  public :: test_rim3_9x8, &
+            test_rim2_6x5, &
+            test_rim1_3x4
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  integer(i_def), target :: rim3_9x8_cells(16) = [  1,  7, 14, 18, &
+                                                   19, 24, 30, 33, &
+                                                   34, 40, 47, 51, &
+                                                   52, 57, 63, 66 ]
+
+  integer(i_def), target :: rim3_9x8_cell_cell(4,16) = &
+      reshape( [ -1,  7,  2, -1, -1, 13,  8,  1,       &
+                 13, 61, 15,  8, 17, -2, 31, 12,       &
+                 24, 20, -1, -1, 29, 25, 19, -1,       &
+                 12, 31, 25, 29, -2, 48, 28, 32,       &
+                 35, -1, -1, 40, 41, 34, -1, 46,       &
+                 48, 41, 46, 28, 64, 45, 50, -2,       &
+                 -1, -1, 57, 53, 52, -1, 62, 58,       &
+                 58, 62, 45, 64, 61, 65, -2, 15 ], [4,16] )
+
+  integer(i_def), target :: rim3_9x8_vert_cell(4,16) = reshape(           &
+      [  7,  8,  2,  1, 13, 14,  8,  7, 20, 21, 15, 14, 24, 43, 42, 18,   &
+        31, 26, 25, 30, 36, 31, 30, 35, 42, 37, 36, 41, 66, 65, 39, 44,   &
+        46, 45, 51, 52, 52, 51, 57, 58, 59, 58, 64, 65, 86, 62, 68, 87,   &
+        69, 74, 75, 70, 74, 79, 80, 75, 80, 85, 86, 81, 83, 88, 22, 21 ], &
+      [4,16] )
+
+  integer(i_def), target :: rim3_9x8_edge_cell(4,16) = reshape( &
+      [   7,  13,   8,   1,  19,  25,  20,  13,   &
+         32,  38,  33,  26,  36,  42,  75,  30,   &
+         53,  49,  43,  48,  63,  59,  53,  58,   &
+         74,  70,  64,  69,  77, 116,  67,  72,   &
+         85,  78,  84,  90,  97,  90,  96, 102,   &
+        110, 103, 109, 115, 152, 107, 113, 119,   &
+        120, 125, 130, 126, 130, 135, 140, 136,   &
+        141, 146, 151, 147, 144, 149, 154,  39 ], &
+      [4,16] )
+
+  integer(i_def), target :: rim3_9x8_lbc_lam(1,1,16) = reshape( &
+      [  1, 10, 20, 24,   &
+         9,  8, 16, 43,   &
+        72, 63, 53, 49,   &
+        64, 65, 57, 30 ], &
+      [1,1,16] )
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  integer(i_def), target :: rim2_6x5_cells(12) = [ 1,  5,  8, &
+                                                   9, 12, 14, &
+                                                  15, 19, 22, &
+                                                  23, 26, 28 ]
+
+  integer(i_def), target :: rim2_6x5_cell_cell(4,12) = reshape( &
+      [ -1,  5,  2, -1, -1, 25,  6,  1,  &
+         7, -2, 13,  4, 12, 10, -1, -1,  &
+         4, 13,  9, -1, -2, 20, 11, 13,  &
+        16, -1, -1, 19, 20, 15, -1, 11,  &
+        27, 18, 21, -2, -1, -1, 26, 24,  &
+        23, -1, 18, 27, 25, 27, -2,  6 ],&
+      [4,12] )
+
+  integer(i_def), target :: rim2_6x5_vert_cell(4,12) = reshape(          &
+      [  5,  6,  2,  1,  9, 10,  6,  5, 12, 21, 20,  8, 17, 14, 13, 16,  &
+        20, 17, 16, 19, 32, 31, 18, 21, 23, 22, 26, 27, 27, 26, 30, 31,  &
+        41, 29, 33, 42, 34, 37, 38, 35, 37, 40, 41, 38, 39, 42, 11, 10 ],&
+      [4,12] )
+
+  integer(i_def), target :: rim2_6x5_edge_cell(4,12) = reshape(          &
+      [  5,  9,  6,  1, 13, 17, 14,  9, 16, 20, 34, 12, 27, 25, 21, 24,  &
+        33, 31, 27, 30, 35, 53, 29, 32, 41, 36, 40, 44, 49, 44, 48, 52,  &
+        69, 47, 51, 55, 56, 59, 62, 60, 62, 65, 68, 66, 64, 67, 70, 18 ],&
+      [4,12] )
+
+  integer(i_def), target :: rim2_6x5_lbc_lam(1,1,12) = reshape( &
+      [ 1, 7, 10, 6, 5, 17, 30, 24, 21, 25, 26, 14 ], [1,1,12] )
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  integer(i_def), target :: rim1_3x4_cells(10) = [ 1, 2, 3, 4, 5, &
+                                                   6, 7, 8, 9, 10 ]
+
+  integer(i_def), target :: rim1_3x4_cell_cell(4,10) = &
+      reshape( [ -1, 10,  2, -1,  1, -2,  3, -1,       &
+                  2,  4, -1, -1, -2,  5, -1,  3,       &
+                 -2,  6, -1,  4,  7, -1, -1,  5,       &
+                  8, -1,  6, -2, -1, -1,  7,  9,       &
+                 -1,  8, -2, 10, -1,  9, -2,  1 ], [4,10] )
+
+  integer(i_def), target :: rim1_3x4_vert_cell(4,10) = reshape(         &
+      [  3,  4,  2,  1,  4,  9,  8,  2,  9,  6,  5,  8, 10,  7,  6,  9, &
+        14, 13,  7, 10, 12, 11, 13, 14, 18, 12, 14, 19, 15, 18, 19, 16, &
+        16, 19, 20, 17, 17, 20,  4,  3 ],                               &
+      [4,10] )
+
+  integer(i_def), target :: rim1_3x4_edge_cell(4,10) = reshape(         &
+      [  3,  5,  4,  1,  4,  6, 13,  2, 13, 11,  7, 10, 14, 12,  8, 11, &
+        15, 20,  9, 12, 19, 16, 18, 20, 28, 17, 19, 21, 22, 25, 28, 26, &
+        23, 26, 29, 27, 24, 27, 30,  5 ],                               &
+      [4,10] )
+
+  integer(i_def), target :: rim1_3x4_lbc_lam(1,1,10) = reshape( &
+      [ 1, 2, 3, 6, 9, 12, 11, 10, 7, 4 ], [1,1,10] )
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  @TestCase
+  type, public, extends(TestCase) :: test_lbc_type
+    private
+
+    character(str_def)    :: lbc_name
+    integer(i_def)        :: rim_depth
+    type(gen_lbc_type)    :: lbc_strategy
+
+    integer(i_def) :: lbc_n_verts
+    integer(i_def) :: lbc_n_edges
+    integer(i_def) :: lbc_n_faces
+    integer(i_def) :: lbc_verts_per_face
+    integer(i_def) :: lbc_edges_per_face
+    integer(i_def) :: lbc_verts_per_edge
+
+
+
+    integer(i_def), allocatable :: test_cell_cell(:,:)
+    integer(i_def), allocatable :: test_vert_cell(:,:)
+    integer(i_def), allocatable :: test_edge_cell(:,:)
+    integer(i_def), allocatable :: test_vert_edge(:,:)
+
+  contains
+    procedure :: SetUp
+    procedure :: tearDown
+
+    procedure :: test_rim3_9x8
+    procedure :: test_rim2_6x5
+    procedure :: test_rim1_3x4
+
+  end type test_lbc_type
+
+contains
+
+
+  subroutine setUp(this)
+    implicit none
+
+    class(test_lbc_type), intent(inout) :: this
+  end subroutine setUp
+
+
+  subroutine tearDown(this)
+    implicit none
+    class(test_lbc_type), intent(inout) :: this
+    call this%lbc_strategy%clear()
+  end subroutine tearDown
+
+ @test
+ subroutine test_rim3_9x8(this)
+
+   implicit none
+
+   class(test_lbc_type), intent(inout) :: this
+
+   type(gen_planar_type)     :: planar_strategy
+   type(gen_lbc_type)        :: lbc_strategy
+   type(reference_cube_type) :: cube_element
+
+   type(global_mesh_map_collection_type), pointer :: global_mesh_maps => null()
+   type(global_mesh_map_type),            pointer :: LBC_LAM_global_mesh_map  => null()
+
+   integer(i_def), allocatable :: cell_cell(:,:)
+   integer(i_def), allocatable :: vert_cell(:,:)
+   integer(i_def), allocatable :: edge_cell(:,:)
+   integer(i_def), allocatable :: vert_edge(:,:)
+   integer(i_def) :: n_verts
+   integer(i_def) :: n_edges
+   integer(i_def) :: n_faces
+   integer(i_def) :: cell_map(1,1,1)
+
+   integer(i_def) :: nodes_per_face
+   integer(i_def) :: edges_per_face
+   integer(i_def) :: nodes_per_edge
+   integer(i_def) :: max_faces_per_node
+   integer(i_def) :: i
+
+   integer(i_def), pointer :: cells(:)               => null()
+   integer(i_def), pointer :: kgo_cell_cell(:,:)     => null()
+   integer(i_def), pointer :: kgo_vert_cell(:,:)     => null()
+   integer(i_def), pointer :: kgo_edge_cell(:,:)     => null()
+   integer(i_def), pointer :: kgo_vert_edge(:,:)     => null()
+   integer(i_def), pointer :: kgo_lbc_lam_map(:,:,:) => null()
+
+   character(str_def) :: name = 'rim3_9x8'
+   logical(l_def)     :: periodic_x   = .false.
+   logical(l_def)     :: periodic_y   = .false.
+   integer(i_def)     :: edge_cells_x = 9
+   integer(i_def)     :: edge_cells_y = 8
+   real(r_def)        :: domain_x     = 9.0
+   real(r_def)        :: domain_y     = 8.0
+   integer(i_def)     :: rim_depth    = 3
+
+   character(str_def) :: test_str(5)
+   integer(i_def)     :: test_int(5)
+   logical(l_def)     :: test_log(5)
+
+   character(str_longlong) :: big_test_str
+
+   ! Set cells for kgos
+   cells           => rim3_9x8_cells
+   kgo_cell_cell   => rim3_9x8_cell_cell
+   kgo_vert_cell   => rim3_9x8_vert_cell
+   kgo_edge_cell   => rim3_9x8_edge_cell
+   kgo_lbc_lam_map => rim3_9x8_lbc_lam
+
+   cube_element    = reference_cube_type()
+   planar_strategy = gen_planar_type( reference_element=cube_element, &
+                                      mesh_name=name,                 &
+                                      geometry=geometry_planar,       &
+                                      topology=topology_non_periodic, &
+                                      coord_sys=coord_sys_xyz,        &
+                                      edge_cells_x=edge_cells_x,      &
+                                      edge_cells_y=edge_cells_y,      &
+                                      periodic_x=periodic_x,          &
+                                      periodic_y=periodic_y,          &
+                                      domain_x=domain_x,              &
+                                      domain_y=domain_y )
+
+   lbc_strategy = gen_lbc_type(planar_strategy, rim_depth )
+
+   call lbc_strategy%generate()
+
+   call lbc_strategy%get_dimensions( num_nodes = n_verts,                 &
+                                     num_edges = n_edges,                 &
+                                     num_faces = n_faces,                 &
+                                     num_nodes_per_face = nodes_per_face, &
+                                     num_edges_per_face = edges_per_face, &
+                                     num_nodes_per_edge = nodes_per_edge, &
+                                     max_num_faces_per_node =             &
+                                                       max_faces_per_node )
+
+    @assertEqual( 4, max_faces_per_node )
+
+    allocate( cell_cell( edges_per_face, n_faces) )
+    allocate( vert_cell( nodes_per_face, n_faces) )
+    allocate( edge_cell( edges_per_face, n_faces) )
+    allocate( vert_edge( 2, n_edges) )
+
+    ! Retrieve connectivity
+    call lbc_strategy%get_connectivity( face_face_connectivity = cell_cell, &
+                                        face_node_connectivity = vert_cell, &
+                                        face_edge_connectivity = edge_cell, &
+                                        edge_node_connectivity = vert_edge  )
+
+
+    ! Retrieve global mesh maps
+    nullify(global_mesh_maps)
+    global_mesh_maps => lbc_strategy%get_global_mesh_maps()
+    @assertAssociated(global_mesh_maps)
+
+    ! Retrieve the LBC(host=1) => LAM(target=2) map
+    LBC_LAM_global_mesh_map  => global_mesh_maps%get_global_mesh_map(1,2)
+
+    @assertEqual( 1,       LBC_LAM_global_mesh_map%get_source_id() )
+    @assertEqual( 2,       LBC_LAM_global_mesh_map%get_target_id() )
+    @assertEqual( n_faces, LBC_LAM_global_mesh_map%get_nsource_cells() )
+    @assertEqual( 1,       LBC_LAM_global_mesh_map%get_ntarget_cells_per_source_cell() )
+
+    ! Perform connectivity/Mapping Tests
+    do i=1, size(cells)
+      @assertEqual( kgo_cell_cell(:,i),   cell_cell(:,cells(i)) )
+      @assertEqual( kgo_vert_cell(:,i),   vert_cell(:,cells(i)) )
+      @assertEqual( kgo_edge_cell(:,i),   edge_cell(:,cells(i)) )
+      call LBC_LAM_global_mesh_map%get_cell_map([cells(i)], cell_map)
+      @assertEqual( kgo_lbc_lam_map(:,:,i), cell_map(:,:,1) )
+    end do
+
+
+    call lbc_strategy%get_metadata( mesh_name=test_str(1),    &
+                                    geometry=test_str(2),     &
+                                    topology=test_str(3),     &
+                                    coord_sys=test_str(4),    &
+                                    periodic_x=test_log(1),   &
+                                    periodic_y=test_log(2),   &
+                                    nmaps=test_int(1),        &
+                                    edge_cells_x=test_int(2), &
+                                    edge_cells_y=test_int(3), &
+                                    constructor_inputs=big_test_str )
+
+    @assertEqual( trim(name)//'-lbc', trim(test_str(1)) )
+    @assertEqual( 'planar',  trim(test_str(2)) )
+    @assertEqual( 'non_periodic', trim(test_str(3)) )
+    @assertEqual( 'xyz',     trim(test_str(4)) )
+    @assertEqual( 1,        test_int(1) )
+    @assertEqual( 9,        test_int(2) )
+    @assertEqual( 8,        test_int(3) )
+    @assertEqual( .false.,  test_log(1) )
+    @assertEqual( .false.,  test_log(2) )
+    @assertEqual( 'lam_strategy=<gen_planar_type,"rim3_9x8">;rim_depth=3', trim(big_test_str) )
+
+
+   ! Tidy up
+   call global_mesh_maps%clear()
+   call LBC_LAM_global_mesh_map%clear()
+
+   deallocate( cell_cell )
+   deallocate( vert_cell )
+   deallocate( edge_cell )
+   deallocate( vert_edge )
+
+   nullify( cells )
+   nullify( kgo_cell_cell )
+   nullify( kgo_vert_cell )
+   nullify( kgo_edge_cell )
+   nullify( kgo_vert_edge )
+   nullify( kgo_lbc_lam_map )
+   nullify( global_mesh_maps )
+   nullify( LBC_LAM_global_mesh_map )
+
+ end subroutine
+
+
+ @test
+ subroutine test_rim2_6x5(this)
+
+   implicit none
+
+   class(test_lbc_type), intent(inout) :: this
+
+   type(gen_planar_type)     :: planar_strategy
+   type(gen_lbc_type)        :: lbc_strategy
+   type(reference_cube_type) :: cube_element
+
+   type(global_mesh_map_collection_type), pointer :: global_mesh_maps => null()
+   type(global_mesh_map_type),            pointer :: LBC_LAM_global_mesh_map  => null()
+
+   integer(i_def), allocatable :: cell_cell(:,:)
+   integer(i_def), allocatable :: vert_cell(:,:)
+   integer(i_def), allocatable :: edge_cell(:,:)
+   integer(i_def), allocatable :: vert_edge(:,:)
+
+   integer(i_def) :: n_verts
+   integer(i_def) :: n_edges
+   integer(i_def) :: n_faces
+   integer(i_def) :: cell_map(1,1,1)
+
+   integer(i_def) :: nodes_per_face
+   integer(i_def) :: edges_per_face
+   integer(i_def) :: nodes_per_edge
+   integer(i_def) :: max_faces_per_node
+   integer(i_def) :: i
+
+   integer(i_def), pointer :: cells(:)               => null()
+   integer(i_def), pointer :: kgo_cell_cell(:,:)     => null()
+   integer(i_def), pointer :: kgo_vert_cell(:,:)     => null()
+   integer(i_def), pointer :: kgo_edge_cell(:,:)     => null()
+   integer(i_def), pointer :: kgo_vert_edge(:,:)     => null()
+   integer(i_def), pointer :: kgo_lbc_lam_map(:,:,:) => null()
+
+   character(str_def) :: name = 'rim2_6x5'
+   logical(l_def)     :: periodic_x   = .false.
+   logical(l_def)     :: periodic_y   = .false.
+   integer(i_def)     :: edge_cells_x = 6
+   integer(i_def)     :: edge_cells_y = 5
+   real(r_def)        :: domain_x     = 6.0
+   real(r_def)        :: domain_y     = 5.0
+   integer(i_def)     :: rim_depth    = 2
+
+   ! Setup
+
+   ! Set cells for kgos
+   cells           => rim2_6x5_cells
+   kgo_cell_cell   => rim2_6x5_cell_cell
+   kgo_vert_cell   => rim2_6x5_vert_cell
+   kgo_edge_cell   => rim2_6x5_edge_cell
+   kgo_lbc_lam_map => rim2_6x5_lbc_lam
+
+   cube_element    = reference_cube_type()
+   planar_strategy = gen_planar_type( reference_element=cube_element, &
+                                      mesh_name=name,                 &
+                                      geometry=geometry_planar,       &
+                                      topology=topology_non_periodic, &
+                                      coord_sys=coord_sys_xyz,        &
+                                      periodic_x=periodic_x,          &
+                                      periodic_y=periodic_y,          &
+                                      domain_x=domain_x,              &
+                                      domain_y=domain_y,              &
+                                      edge_cells_x=edge_cells_x,      &
+                                      edge_cells_y=edge_cells_y  )
+
+   lbc_strategy = gen_lbc_type(planar_strategy, rim_depth )
+
+   call lbc_strategy%generate()
+
+    call lbc_strategy%get_dimensions( num_nodes = n_verts,                 &
+                                      num_edges = n_edges,                 &
+                                      num_faces = n_faces,                 &
+                                      num_nodes_per_face = nodes_per_face, &
+                                      num_edges_per_face = edges_per_face, &
+                                      num_nodes_per_edge = nodes_per_edge, &
+                                      max_num_faces_per_node =             &
+                                                      max_faces_per_node )
+
+    @assertEqual( 4, max_faces_per_node )
+
+    allocate( cell_cell( edges_per_face, n_faces) )
+    allocate( vert_cell( nodes_per_face, n_faces) )
+    allocate( edge_cell( edges_per_face, n_faces) )
+    allocate( vert_edge( 2, n_edges) )
+
+    ! Retrieve connectivity
+    call lbc_strategy%get_connectivity( face_face_connectivity = cell_cell, &
+                                        face_node_connectivity = vert_cell, &
+                                        face_edge_connectivity = edge_cell, &
+                                        edge_node_connectivity = vert_edge  )
+
+
+    ! Retrieve global mesh maps
+    nullify(global_mesh_maps)
+    global_mesh_maps => lbc_strategy%get_global_mesh_maps()
+    @assertAssociated(global_mesh_maps)
+
+    ! Retrieve the LBC(host=1) => LAM(target=2) map
+    LBC_LAM_global_mesh_map  => global_mesh_maps%get_global_mesh_map(1,2)
+
+    @assertEqual( 1,       LBC_LAM_global_mesh_map%get_source_id() )
+    @assertEqual( 2,       LBC_LAM_global_mesh_map%get_target_id() )
+    @assertEqual( n_faces, LBC_LAM_global_mesh_map%get_nsource_cells() )
+    @assertEqual( 1,       LBC_LAM_global_mesh_map%get_ntarget_cells_per_source_cell() )
+
+    ! Perform connectivity/Mapping Tests
+    do i=1, size(cells)
+      @assertEqual( kgo_cell_cell(:,i),   cell_cell(:,cells(i)) )
+      @assertEqual( kgo_vert_cell(:,i),   vert_cell(:,cells(i)) )
+      @assertEqual( kgo_edge_cell(:,i),   edge_cell(:,cells(i)) )
+      call LBC_LAM_global_mesh_map%get_cell_map([cells(i)], cell_map)
+      @assertEqual( kgo_lbc_lam_map(:,:,i), cell_map(:,:,1) )
+    end do
+
+   ! Tidy up
+   call global_mesh_maps%clear()
+   call LBC_LAM_global_mesh_map%clear()
+
+   deallocate( cell_cell )
+   deallocate( vert_cell )
+   deallocate( edge_cell )
+   deallocate( vert_edge )
+
+   nullify( cells )
+   nullify( kgo_cell_cell )
+   nullify( kgo_vert_cell )
+   nullify( kgo_edge_cell )
+   nullify( kgo_vert_edge )
+   nullify( kgo_lbc_lam_map )
+   nullify( global_mesh_maps )
+   nullify( LBC_LAM_global_mesh_map )
+
+  end subroutine test_rim2_6x5
+
+ @test
+ subroutine test_rim1_3x4(this)
+
+   implicit none
+
+   class(test_lbc_type), intent(inout) :: this
+
+   type(gen_planar_type)     :: planar_strategy
+   type(gen_lbc_type)        :: lbc_strategy
+   type(reference_cube_type) :: cube_element
+
+
+   type(global_mesh_map_collection_type), pointer :: global_mesh_maps => null()
+   type(global_mesh_map_type),            pointer :: LBC_LAM_global_mesh_map  => null()
+
+   integer(i_def), allocatable :: cell_cell(:,:)
+   integer(i_def), allocatable :: vert_cell(:,:)
+   integer(i_def), allocatable :: edge_cell(:,:)
+   integer(i_def), allocatable :: vert_edge(:,:)
+
+   integer(i_def) :: n_verts
+   integer(i_def) :: n_edges
+   integer(i_def) :: n_faces
+   integer(i_def) :: cell_map(1,1,1)
+
+   integer(i_def) :: nodes_per_face
+   integer(i_def) :: edges_per_face
+   integer(i_def) :: nodes_per_edge
+   integer(i_def) :: max_faces_per_node
+   integer(i_def) :: i
+
+   integer(i_def), pointer :: cells(:)               => null()
+   integer(i_def), pointer :: kgo_cell_cell(:,:)     => null()
+   integer(i_def), pointer :: kgo_vert_cell(:,:)     => null()
+   integer(i_def), pointer :: kgo_edge_cell(:,:)     => null()
+   integer(i_def), pointer :: kgo_vert_edge(:,:)     => null()
+   integer(i_def), pointer :: kgo_lbc_lam_map(:,:,:) => null()
+
+   character(str_def) :: name = 'rim1_3x4'
+   logical(l_def)     :: periodic_x   = .false.
+   logical(l_def)     :: periodic_y   = .false.
+   integer(i_def)     :: edge_cells_x = 3
+   integer(i_def)     :: edge_cells_y = 4
+   real(r_def)        :: domain_x     = 3.0
+   real(r_def)        :: domain_y     = 4.0
+   integer(i_def)     :: rim_depth    = 1
+
+   ! Set cells for kgos
+   cells           => rim1_3x4_cells
+   kgo_cell_cell   => rim1_3x4_cell_cell
+   kgo_vert_cell   => rim1_3x4_vert_cell
+   kgo_edge_cell   => rim1_3x4_edge_cell
+   kgo_lbc_lam_map => rim1_3x4_lbc_lam
+
+   cube_element    = reference_cube_type()
+   planar_strategy = gen_planar_type( reference_element=cube_element, &
+                                      mesh_name=name,                 &
+                                      geometry=geometry_planar,       &
+                                      topology=topology_non_periodic, &
+                                      coord_sys=coord_sys_xyz,        &
+                                      edge_cells_x=edge_cells_x,      &
+                                      edge_cells_y=edge_cells_y,      &
+                                      periodic_x=periodic_x,          &
+                                      periodic_y=periodic_y,          &
+                                      domain_x=domain_x,              &
+                                      domain_y=domain_y )
+
+   lbc_strategy = gen_lbc_type(planar_strategy, rim_depth )
+
+   call lbc_strategy%generate()
+
+    call lbc_strategy%get_dimensions( num_nodes = n_verts,                 &
+                                      num_edges = n_edges,                 &
+                                      num_faces = n_faces,                 &
+                                      num_nodes_per_face = nodes_per_face, &
+                                      num_edges_per_face = edges_per_face, &
+                                      num_nodes_per_edge = nodes_per_edge, &
+                                      max_num_faces_per_node =             &
+                                                      max_faces_per_node )
+
+    @assertEqual( 4, max_faces_per_node )
+
+    allocate( cell_cell( edges_per_face, n_faces) )
+    allocate( vert_cell( nodes_per_face, n_faces) )
+    allocate( edge_cell( edges_per_face, n_faces) )
+    allocate( vert_edge( 2, n_edges) )
+
+    ! Retrieve connectivity
+    call lbc_strategy%get_connectivity( face_face_connectivity = cell_cell, &
+                                        face_node_connectivity = vert_cell, &
+                                        face_edge_connectivity = edge_cell, &
+                                        edge_node_connectivity = vert_edge  )
+
+
+    ! Retrieve global mesh maps
+    nullify(global_mesh_maps)
+    global_mesh_maps => lbc_strategy%get_global_mesh_maps()
+    @assertAssociated(global_mesh_maps)
+
+    ! Retrieve the LBC(host=1) => LAM(target=2) map
+    LBC_LAM_global_mesh_map  => global_mesh_maps%get_global_mesh_map(1,2)
+
+    @assertEqual( 1,       LBC_LAM_global_mesh_map%get_source_id() )
+    @assertEqual( 2,       LBC_LAM_global_mesh_map%get_target_id() )
+    @assertEqual( n_faces, LBC_LAM_global_mesh_map%get_nsource_cells() )
+    @assertEqual( 1,       LBC_LAM_global_mesh_map%get_ntarget_cells_per_source_cell() )
+
+    ! Perform connectivity/Mapping Tests
+    do i=1, size(cells)
+
+      @assertEqual( kgo_cell_cell(:,i),   cell_cell(:,cells(i)) )
+      @assertEqual( kgo_vert_cell(:,i),   vert_cell(:,cells(i)) )
+      @assertEqual( kgo_edge_cell(:,i),   edge_cell(:,cells(i)) )
+      call LBC_LAM_global_mesh_map%get_cell_map([cells(i)], cell_map)
+      @assertEqual( kgo_lbc_lam_map(:,:,i), cell_map(:,:,1) )
+    end do
+
+   ! Tidy up
+   call global_mesh_maps%clear()
+   call LBC_LAM_global_mesh_map%clear()
+
+   deallocate( cell_cell )
+   deallocate( vert_cell )
+   deallocate( edge_cell )
+   deallocate( vert_edge )
+
+   nullify( cells )
+   nullify( kgo_cell_cell )
+   nullify( kgo_vert_cell )
+   nullify( kgo_edge_cell )
+   nullify( kgo_vert_edge )
+   nullify( kgo_lbc_lam_map )
+   nullify( global_mesh_maps )
+   nullify( LBC_LAM_global_mesh_map )
+
+  end subroutine test_rim1_3x4
+
+end module gen_lbc_mod_test

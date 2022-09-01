@@ -1,0 +1,81 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class function_space_mod::function_space_type {
+    -basis_index: integer[::] <<allocatable>>
+    -basis_order: integer[::] <<allocatable>>
+    -basis_vector: real[::] <<allocatable>>
+    -basis_x: real[:::] <<allocatable>>
+    -dim_space: integer
+    -dim_space_diff: integer
+    -dofmap_list: linked_list
+    -dof_on_vert_boundary: integer[::]
+    -element_order: integer
+    -fs: integer
+    -fs_order: integer
+    -ndata: integer
+    -global_dof_id: integer[] <<allocatable>>
+    -global_cell_dof_id_2d: integer[] <<allocatable>>
+    -global_edge_dof_id_2d: integer[] <<allocatable>>
+    -global_vert_dof_id_2d: integer[] <<allocatable>>
+    -last_dof_annexed: integer
+    -last_dof_halo: integer[] <<allocatable>>
+    -last_dof_owned: integer
+    -master_dofmap: master_dofmap
+    -mesh: mesh_type <<pointer>>
+    -ndof_cell: integer
+    -ndof_edge: integer
+    -ndof_exterior: integer
+    -ndof_face: integer
+    -ndof_glob: integer
+    -ndof_interior: integer
+    -ndof_vert: integer
+    -ndof_vol: integer
+    -nodal_coords: real[::] <<allocatable>>
+    -fractional_levels: double precision[:] <<allocatable>>
+    -readonly: logical
+
+    <<create>>+fs_constructor( <<in>>mesh_id: integer, <<in>>element_order: integer, <<in>>gungho_fs: integer, <<in, optional>>ndata: integer ) : function_space_type
+    <<destroy>>+function_space_destructor()
+
+    +clear()
+    +compute_basis_function( <<out>>basis: real[::::], <<in>>ndf: integer, <<in>>qp_h: integer, <<in>>qp_v: integer, <<in>>x_qp: real[::], <<in>>z_qp[] )
+    +compute_diff_basis_function( <<out>>dbasis: real[::::], <<in>>ndf: integer, <<in>>qp_h: integer, <<in>>qp_v: integer, <<in>>x_qp::real[::], <<in>>z_qp: real[] )
+    +call_function( <<in>> function_to_call: integer, <<in>> df: integer, <<in>> xi: real(:) ) : real[:]
+    +evaluate_basis( <<in>>df: integer, <<in>>xi: real[3] ) : real[]
+    +evaluate_diff_basis( <<in>>df: integer, <<in>>xi: real[3] ) : real[]
+    +get_boundary_dofs() : integer <<pointer>>
+    +get_cell_dofmap( <<in>>cell_lid: integer ) : integer[] <<pointer>>
+    +get_colours( <<out>>ncolours: integer, <<out>>ncells_per_colour: integer[] <<pointer>>, <<out>>colour_map: integer[::] <<pointer>> )
+    +get_dim_space() : integer
+    +get_dim_space_diff() : integer
+    +get_element_order(): integer
+    +get_fs_order() : integer
+    +get_ndata() : integer
+    +get_global_dof_id( <<inout>>global_dof_id: integer[] )
+    +get_global_cell_dof_id_2d( <<out>>global_cell_dof_id_2d: integer[] )
+    +get_global_edge_dof_id_2d( <<out>>global_edge_dof_id_2d: integer[] )
+    +get_global_vert_dof_id_2d( <<out>>global_vert_dof_id_2d: integer[] )
+    +get_last_dof_halo() : integer
+    +get_last_dof_halo( <<in>>depth: integer ) : integer
+    +get_last_dof_owned() : integer
+    +get_last_dof_annexed() : integer
+    +get_mesh(): mesh_type <<pointer>>
+    +get_mesh_id(): integer
+    +get_ncell() : integer
+    +get_ncolours(): integer
+    +get_ndf() : integer
+    +get_ndof_glob() : integer
+    +get_nodes() : real[::] <<pointer>>
+    +get_nlayers() : integer
+    +get_levels() : double precision[:] <<pointer>>
+    +is_readonly() : logical
+    +is_writable() : logical
+    +get_stencil_dofmap( <<in>>stencil_shape: integer, <<in>>stencil_size: integer ) : stencil_dofmap <<pointer>>
+    +get_undf() : integer
+    +set_colours()
+    +which() : integer
+}
+
+linked_list_data_mod::linked_list_data_type <|-- function_space_mod::function_space_type

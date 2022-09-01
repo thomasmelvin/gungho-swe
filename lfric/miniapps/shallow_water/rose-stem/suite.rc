@@ -1,0 +1,5 @@
+#!jinja2
+%include inc/common_macros.rc
+%include inc/common_miniapp_macros.rc
+%include suite_control.rc
+%include inc/common_suite.rc

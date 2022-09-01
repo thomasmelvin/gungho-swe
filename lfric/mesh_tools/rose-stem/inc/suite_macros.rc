@@ -1,0 +1,73 @@
+{#- ######################################################################## #}
+{#- MACROS                                                                   #}
+{#- ######################################################################## #}
+
+{%- macro publish_commit() %}
+  [[[R1/P1/$]]]
+     # Repeat once in the final cycle
+     graph = """
+             publish_node => publish_index
+            publish_index      => mirror_results_local
+{%-   if MIRROR_UPLOAD_URL %}
+            publish_index      => mirror_results_remote
+{%-   endif %}
+             """
+
+  [[[^/P1]]]
+    # Repeat every cycle from the start
+    graph = """
+            publish_node[-P1] => publish_node
+            """
+{%- endmacro %}
+
+{#- #########################################################################}
+{%- macro check_compilers( build, precisions=[rdef_default], publish=False ) %}
+[[[R1]]]
+  graph = """
+{%-   for compiler in get_target_property(PRIMARY_TARGET,
+                                          'setup')['compiler'].keys() %}
+{%-     for precision in precisions %}
+
+{%-       if precision not in rdef_build_precisions %}
+{%-          do rdef_build_precisions.append(precision) -%}
+{%-       endif %}
+
+{%-       set label = compiler | lower + '_' + precision + '-bit_'+ build | lower%}
+{%-       set perform_run = RUN_WITH %}
+
+            export_source => compile_{{projectName}}_with_{{label}}
+
+{%-       if publish %}
+            compile_{{projectName}}_with_{{label}}:finish => publish_{{label}}_compile
+            publish_{{label}}_compile:finish => publish_node
+{%-       endif %}
+
+{%-       if compiler in perform_run %}
+
+{{          unit_tests_graph( compiler, precision ) }}
+
+{%-         for mesh in mesh_types %}
+            compile_{{projectName}}_with_{{label}} => generate_{{mesh}}_{{label}}
+{%-           if compiler in KGO_TEST_WITH %}
+            generate_{{mesh}}_{{label}} => check_mesh_{{mesh}}_{{label}}
+{%-           endif %}
+            generate_{{mesh}}_{{label}} => summarise_{{mesh}}_{{label}}
+            summarise_{{mesh}}_{{label}} => check_summary_{{mesh}}_{{label}}
+{%-         endfor %}
+
+{%-       endif %} {# perform_run #}
+
+{%-     endfor %} {# precision #}
+{%-   endfor %} {# compiler #}
+{%- endmacro %}
+
+{#- #########################################################################}
+{%- macro schedule() %}
+{%-   for group in groupsToRun %}
+{%-     if group in groups.keys() %}
+{%-       for mission in groups[group] %}
+{{          mission | execute_macro() }}
+{%-       endfor %}
+{%-     endif %}
+{%-   endfor %}
+{%- endmacro %}

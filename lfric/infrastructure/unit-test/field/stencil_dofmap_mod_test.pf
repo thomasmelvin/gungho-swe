@@ -1,0 +1,424 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+! Test the stencil_dofmap representation
+!
+module stencil_dofmap_mod_test
+
+  use constants_mod,   only : i_def, i_native
+  use pFUnit_Mod
+  use stencil_dofmap_mod,  only: stencil_dofmap_type, STENCIL_POINT, &
+                                                      STENCIL_1DX,   &
+                                                      STENCIL_CROSS, &
+                                                      STENCIL_1DY, &
+                                                      STENCIL_REGION
+  use local_mesh_mod,      only: local_mesh_type
+  use master_dofmap_mod,   only: master_dofmap_type
+  use mesh_collection_mod, only: mesh_collection_type, &
+                                 mesh_collection
+  use mesh_mod,            only: mesh_type, PLANE_BI_PERIODIC
+
+  implicit none
+
+  private
+
+  ! Set arbitrary number of dofs per cell
+  integer(kind=i_def),parameter :: NDF = 3
+
+  public :: stencil_dofmap_test_type, stencil_dofmap_test_constructor, &
+            get_parameters, test_stencil_dofmaps
+
+
+  @TestCase(testParameters={get_parameters()}, constructor=stencil_dofmap_test_constructor)
+
+  type, extends(ParameterizedTestCase) :: stencil_dofmap_test_type
+    private
+    integer(i_native), public :: stencil
+    integer(i_def),    public :: st_extent
+    integer(i_def),    public :: st_expected_size
+
+    integer(i_def),    public        :: mesh_id
+    type(master_dofmap_type),public  :: master_dofmap
+
+    type(local_mesh_type)     :: unit_test_local_mesh
+  contains
+    private
+    procedure, public :: setUp
+    procedure, public :: tearDown
+    procedure, public :: test_stencil_dofmaps
+    procedure         :: get_local_mesh_ptr
+
+  end type stencil_dofmap_test_type
+
+  @testParameter
+  type, public, extends(AbstractTestParameter) :: stencil_parameter_type
+    integer(i_native), public :: stencil
+    integer(i_def),    public :: st_extent
+    integer(i_def),    public :: st_expected_size
+  contains
+    procedure :: toString => parameter_to_string
+  end type stencil_parameter_type
+
+contains
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  ! Create a string that describes each particular test and prints if the test fails
+  function parameter_to_string( this ) result(string)
+
+    implicit none
+
+    class(stencil_parameter_type), intent(in) :: this
+    character(:), allocatable :: string
+    character(20) :: tmp
+
+    select case (this%stencil)
+      case ( STENCIL_POINT )
+        tmp = 'point '
+      case ( STENCIL_CROSS )
+        tmp = 'cross '
+      case ( STENCIL_1DX )
+        tmp = '1dx   '
+      case ( STENCIL_1DY )
+        tmp = '1dy   '
+      case ( STENCIL_REGION )
+        tmp = 'region'
+    end select
+
+    ! The string describes the stencil type and extent
+    write(tmp(7:),'(A,I1)')'ext=',this%st_extent
+    string = trim(tmp)
+
+  end function parameter_to_string
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  ! Define the series of tests to run
+  function get_parameters() result(parameters)
+
+    implicit none
+
+    type(stencil_parameter_type) :: parameters(5)
+
+    parameters = [ stencil_parameter_type(STENCIL_CROSS,1,5),              &
+                   stencil_parameter_type(STENCIL_1DX,1,3),                &
+                   stencil_parameter_type(STENCIL_1DY,1,3),                &
+                   stencil_parameter_type(STENCIL_REGION,1,9),             &
+                   stencil_parameter_type(STENCIL_POINT,0,1) ]
+
+  end function get_parameters
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  function stencil_dofmap_test_constructor( testParameter ) result( new_test )
+
+    implicit none
+
+    type(stencil_parameter_type), intent( in ) :: testParameter
+    type(stencil_dofmap_test_type) :: new_test
+
+    new_test%stencil            = testParameter%stencil
+    new_test%st_extent          = testParameter%st_extent
+    new_test%st_expected_size   = testParameter%st_expected_size
+
+  end function stencil_dofmap_test_constructor
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use master_dofmap_mod,   only: master_dofmap_type
+
+    implicit none
+    integer(i_def)                              :: mesh_dimension_x, mesh_dimension_y
+    integer(i_def)                              :: ncells, cell, df
+    integer(i_def), allocatable, dimension(:,:) :: master_map_init, &
+                                                   master_map_copy
+
+    class(stencil_dofmap_test_type), intent( inout ) :: this
+
+    type(local_mesh_type), pointer              :: unit_test_local_mesh_ptr
+    type(mesh_type)                             :: unit_test_mesh
+
+    type(mesh_type), pointer                    :: mesh => null()
+
+    ! Create top level mesh collection
+    mesh_collection = mesh_collection_type()
+
+    call this%unit_test_local_mesh%initialise()
+    unit_test_local_mesh_ptr => this%get_local_mesh_ptr()
+
+    ! Dummy mesh mod has 9 cells, 3 layers and is uniform in vertical
+    unit_test_mesh = mesh_type( PLANE_BI_PERIODIC, unit_test_local_mesh_ptr )
+    this%mesh_id = mesh_collection%add_new_mesh( unit_test_mesh )
+
+    mesh => mesh_collection%get_mesh( this%mesh_id )
+    mesh_dimension_x = 3
+    mesh_dimension_y = 3
+
+    ! Allocate the maps
+    ncells = mesh_dimension_x * mesh_dimension_y
+
+    allocate( master_map_init(ndf,0:ncells))
+    ! Number all the dofs. Numbers are arbitrary. But aligning with cell number makes
+    ! error messages easier to understand
+    do cell = 1,ncells
+      do df = 1,ndf
+        master_map_init(df,cell) = cell + (df - 1) * 10
+      end do
+    end do
+    this%master_dofmap = master_dofmap_type(master_map_init)
+    deallocate( master_map_init )
+
+    ! Check mesh size is as assumed in the subsequent stencil tests
+    @assertEqual(ncells,mesh%get_ncells_2d())
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(stencil_dofmap_test_type), intent( inout ) :: this
+
+    call mesh_collection%clear()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  function get_local_mesh_ptr(this) result(unit_test_local_mesh_ptr)
+    implicit none
+    class(stencil_dofmap_test_type), intent(inout), target :: this
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    unit_test_local_mesh_ptr => this%unit_test_local_mesh
+  end function get_local_mesh_ptr
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+ @test
+ subroutine test_stencil_dofmaps(this)
+    use stencil_dofmap_mod,  only: stencil_dofmap_type, STENCIL_POINT, &
+                                                        STENCIL_1DX,   &
+                                                        STENCIL_CROSS, &
+                                                        STENCIL_1DY,   &
+                                                        STENCIL_REGION
+    use master_dofmap_mod,   only: master_dofmap_type
+
+   implicit none
+   class(stencil_dofmap_test_type), intent( inout ) :: this
+
+   type(stencil_dofmap_type)                   :: stencil_dofmap
+   type(mesh_type), pointer                    :: mesh => null()
+
+   integer(i_def), pointer :: master_map_copy(:,:)  => null()
+   integer(i_def), pointer :: stencil_map(:,:) => null()
+   integer(i_def), pointer :: whole_map(:,:,:) => null()
+
+   ! Information about mesh
+   integer(i_def)  :: ncells
+   integer(i_def)  :: mesh_dimension_x, mesh_dimension_y
+   ! Counter variables
+   integer(i_def)  :: cell, df, extent, next_stencil_cell
+   ! Storage for cell numbers around centre cell
+   integer(i_def)  :: cell_left, cell_right, cell_down, cell_up, cell_ul, &
+                      cell_dl, cell_ur, cell_dr
+
+   ! Get information about test mesh and dofmap
+   mesh => mesh_collection%get_mesh( this%mesh_id )
+   ncells = mesh%get_ncells_2d()
+   mesh_dimension_x = nint(sqrt(real(ncells)))
+   mesh_dimension_y = nint(sqrt(real(ncells)))
+
+   ! Obtain a copy of the whole dofmap
+   master_map_copy => this%master_dofmap%get_whole_master_dofmap()
+
+   ! Create stencil of required type and extent
+   stencil_dofmap = stencil_dofmap_type(this%stencil,        &
+                                        this%st_extent,      &
+                                        ndf,mesh,            &
+                                        this%master_dofmap)
+
+   ! Get the whole dofmap which will be tested alongside the cell stencil dofmaps
+   whole_map => stencil_dofmap%get_whole_dofmap()
+
+   ! Test 1: Check that stencil is the expected size
+   @assertEqual(this%st_expected_size, stencil_dofmap%get_size())
+
+   ! Test 2: Check first stencil point of all stencils is same as dofmap
+   do cell = 1,ncells
+     stencil_map => stencil_dofmap%get_dofmap(cell)
+     do df = 1,ndf
+       ! Check map for cell
+       @assertEqual( master_map_copy(df,cell), stencil_map(df,1) )
+       ! Check map in whole map array
+       @assertEqual( master_map_copy(df,cell), whole_map(df,1,cell) )
+     end do
+   end do
+
+   ! Test 3: Check the rest of the stencil
+   ! Tests are dependent on the stencil type
+   ! Each test tests both cell-by-cell stencil and the whole map stencil
+   ! Tests assume a biperiodic mesh
+   ! No test is required for the point stencil
+   select case (this%stencil)
+
+     case(STENCIL_1DX)
+       do cell = 1,ncells
+         stencil_map => stencil_dofmap%get_dofmap(cell)
+         next_stencil_cell = 2
+         cell_left = go_left(cell, mesh_dimension_x)
+         cell_right = go_right(cell, mesh_dimension_x)
+         do extent = 1, this%st_extent
+           do df = 1,ndf
+             ! Check map for cell
+             @assertEqual(master_map_copy(df,cell_left), stencil_map(df,next_stencil_cell) )
+             @assertEqual(master_map_copy(df,cell_right), stencil_map(df,next_stencil_cell + 1) )
+             ! Check map in whole map array
+             @assertEqual(master_map_copy(df,cell_left), whole_map(df,next_stencil_cell,cell) )
+             @assertEqual(master_map_copy(df,cell_right), whole_map(df,next_stencil_cell + 1,cell) )
+           end do
+           next_stencil_cell = next_stencil_cell + 2
+           cell_left = go_left(cell_left, mesh_dimension_x)
+           cell_right = go_right(cell_right, mesh_dimension_x)
+         end do
+       end do
+
+     case(STENCIL_1DY)
+       do cell = 1,ncells
+         stencil_map => stencil_dofmap%get_dofmap(cell)
+         next_stencil_cell = 2
+         cell_down = go_down(cell, mesh_dimension_x, ncells)
+         cell_up = go_up(cell, mesh_dimension_x, ncells)
+         do extent = 1, this%st_extent
+           do df = 1,ndf
+             ! Check map for cell
+             @assertEqual(master_map_copy(df,cell_down), stencil_map(df,next_stencil_cell) )
+             @assertEqual(master_map_copy(df,cell_up), stencil_map(df,next_stencil_cell + 1) )
+             ! Check map in whole map array
+             @assertEqual(master_map_copy(df,cell_down), whole_map(df,next_stencil_cell,cell) )
+             @assertEqual(master_map_copy(df,cell_up), whole_map(df,next_stencil_cell + 1,cell) )
+           end do
+           next_stencil_cell = next_stencil_cell + 2
+           cell_up = go_up(cell_up, mesh_dimension_x, ncells)
+           cell_down = go_down(cell_down, mesh_dimension_x, ncells)
+         end do
+       end do
+
+     case(STENCIL_CROSS)
+       do cell = 1,ncells
+         stencil_map => stencil_dofmap%get_dofmap(cell)
+         next_stencil_cell = 2
+         cell_left = go_left(cell, mesh_dimension_x)
+         cell_down = go_down(cell, mesh_dimension_x, ncells)
+         cell_right = go_right(cell, mesh_dimension_x)
+         cell_up = go_up(cell, mesh_dimension_x, ncells)
+         do extent = 1, this%st_extent
+           do df = 1,ndf
+             ! Check map for cell
+             @assertEqual(master_map_copy(df,cell_left), stencil_map(df,next_stencil_cell) )
+             @assertEqual(master_map_copy(df,cell_down), stencil_map(df,next_stencil_cell + 1) )
+             @assertEqual(master_map_copy(df,cell_right), stencil_map(df,next_stencil_cell + 2) )
+             @assertEqual(master_map_copy(df,cell_up), stencil_map(df,next_stencil_cell + 3) )
+             ! Check map in whole map array
+             @assertEqual(master_map_copy(df,cell_left), whole_map(df,next_stencil_cell,cell) )
+             @assertEqual(master_map_copy(df,cell_down), whole_map(df,next_stencil_cell + 1,cell) )
+             @assertEqual(master_map_copy(df,cell_right), whole_map(df,next_stencil_cell + 2,cell) )
+             @assertEqual(master_map_copy(df,cell_up), whole_map(df,next_stencil_cell + 3,cell) )
+           end do
+           next_stencil_cell = next_stencil_cell + 4
+           cell_left = go_left(cell_left, mesh_dimension_x)
+           cell_right = go_right(cell_right, mesh_dimension_x)
+           cell_up = go_up(cell_up, mesh_dimension_x, ncells)
+           cell_down = go_down(cell_down, mesh_dimension_x, ncells)
+         end do
+       end do
+
+     case(STENCIL_REGION)
+       do cell = 1,ncells
+         stencil_map => stencil_dofmap%get_dofmap(cell)
+         next_stencil_cell = 2
+         cell_left = go_left(cell, mesh_dimension_x)
+         cell_down = go_down(cell, mesh_dimension_x, ncells)
+         cell_right = go_right(cell, mesh_dimension_x)
+         cell_up = go_up(cell, mesh_dimension_x, ncells)
+         cell_ul = go_up(cell_left, mesh_dimension_x, ncells)
+         cell_dl = go_left(cell_down, mesh_dimension_x)
+         cell_ur = go_right(cell_up, mesh_dimension_x)
+         cell_dr = go_down(cell_right, mesh_dimension_x, ncells)
+         do extent = 1, this%st_extent
+           do df = 1,ndf
+             ! Check map for cell
+             @assertEqual(master_map_copy(df,cell_left), stencil_map(df,next_stencil_cell) )
+             @assertEqual(master_map_copy(df,cell_dl), stencil_map(df,next_stencil_cell + 1) )
+             @assertEqual(master_map_copy(df,cell_down), stencil_map(df,next_stencil_cell + 2) )
+             @assertEqual(master_map_copy(df,cell_dr), stencil_map(df,next_stencil_cell + 3) )
+             @assertEqual(master_map_copy(df,cell_right), stencil_map(df,next_stencil_cell + 4) )
+             @assertEqual(master_map_copy(df,cell_ur), stencil_map(df,next_stencil_cell + 5) )
+             @assertEqual(master_map_copy(df,cell_up), stencil_map(df,next_stencil_cell + 6) )
+             @assertEqual(master_map_copy(df,cell_ul), stencil_map(df,next_stencil_cell + 7) )
+             ! Check map in whole map array
+             @assertEqual(master_map_copy(df,cell_left), whole_map(df,next_stencil_cell,cell) )
+             @assertEqual(master_map_copy(df,cell_dl), whole_map(df,next_stencil_cell + 1,cell) )
+             @assertEqual(master_map_copy(df,cell_down), whole_map(df,next_stencil_cell + 2,cell) )
+             @assertEqual(master_map_copy(df,cell_dr), whole_map(df,next_stencil_cell + 3,cell) )
+             @assertEqual(master_map_copy(df,cell_right), whole_map(df,next_stencil_cell + 4,cell) )
+             @assertEqual(master_map_copy(df,cell_ur), whole_map(df,next_stencil_cell + 5,cell) )
+             @assertEqual(master_map_copy(df,cell_up), whole_map(df,next_stencil_cell + 6,cell) )
+             @assertEqual(master_map_copy(df,cell_ul), whole_map(df,next_stencil_cell + 7,cell) )
+           end do
+         end do
+       end do
+
+     end select
+
+  end subroutine test_stencil_dofmaps
+
+  ! Function that traverses leftwards on biperiodic test mesh
+  function go_left(cell, mesh_dimension) result (next_cell)
+    implicit none
+    integer(i_def), intent(in) :: cell
+    integer(i_def), intent(in) :: mesh_dimension
+    integer(i_def)             :: next_cell
+
+    next_cell = cell - 1
+    if (mod(next_cell, mesh_dimension) == 0) next_cell = next_cell + mesh_dimension
+  end function go_left
+
+  ! Function that traverses rightwards on biperiodic test mesh
+  function go_right(cell, mesh_dimension) result (next_cell)
+    implicit none
+    integer(i_def), intent(in) :: cell
+    integer(i_def), intent(in) :: mesh_dimension
+    integer(i_def)             :: next_cell
+
+    next_cell = cell + 1
+    if (mod(cell, mesh_dimension) == 0) next_cell = next_cell - mesh_dimension
+  end function go_right
+
+  ! Function that traverses upwards on biperiodic test mesh
+  function go_up(cell, mesh_dimension, ncells) result (next_cell)
+    implicit none
+    integer(i_def), intent(in) :: cell
+    integer(i_def), intent(in) :: mesh_dimension
+    integer(i_def), intent(in) :: ncells
+    integer(i_def)             :: next_cell
+
+    next_cell = cell + mesh_dimension
+    if (next_cell > ncells) next_cell = next_cell - ncells
+
+  end function go_up
+
+  ! Function that traverses downwards on biperiodic test mesh
+  function go_down(cell, mesh_dimension, ncells) result (next_cell)
+    implicit none
+    integer(i_def), intent(in) :: cell
+    integer(i_def), intent(in) :: mesh_dimension
+    integer(i_def), intent(in) :: ncells
+    integer(i_def)             :: next_cell
+
+    next_cell = cell - mesh_dimension
+    if (next_cell < 1) next_cell = next_cell + ncells
+
+  end function go_down
+
+end module stencil_dofmap_mod_test

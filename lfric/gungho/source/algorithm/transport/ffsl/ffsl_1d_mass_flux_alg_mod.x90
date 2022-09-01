@@ -1,0 +1,102 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief Algorithm which calculates conservative mass fluxes in one direction only.
+
+module ffsl_1d_mass_flux_alg_mod
+
+  use constants_mod,                     only: r_def, i_def
+  use field_mod,                         only: field_type
+  use function_space_mod,                only: function_space_type
+  use subgrid_config_mod,                only: dep_pt_stencil_extent, &
+                                               rho_approximation_stencil_extent
+  use psykal_lite_mod,                   only: invoke_subgrid_coeffs, &
+                                               invoke_fv_mass_fluxes
+  use flux_direction_mod,                only: x_direction, y_direction
+
+  implicit none
+
+  private
+  public :: ffsl_1d_mass_flux_alg
+
+contains
+
+  !> @brief Calculates conservative mass fluxes using PPM in one direction only.
+  !> @details This algorithm calculates the conservative mass fluxes in a specified
+  !!          direction. The PPM technique is used which allows conservative mass
+  !!          mass fluxes for Courant numbers greater than 1 to be calculated.
+  !!          The subgrid representation of rho is first calculated for all cells
+  !!          in the direction which we are interested in, then the fluxes are
+  !!          calculated for each W2 nodal point at lowest order. The departure
+  !!          points is an input variable as well as the density. Output variable
+  !!          is the mass flux in one direction.
+  !> @param[in]     direction          Direction in which to calculate the mass fluxes
+  !> @param[in]     dep_pts            Departure points
+  !> @param[in]     cell_orientation   Orientation of cells, in particular halo cells
+  !> @param[in]     rho_x              Density values after advective update in x direction
+  !> @param[in]     rho_y              Density values after advective update in y direction
+  !> @param[in,out] mass_flux          1D conservative mass flux values in the specified direction
+  !> @param[in]     dt                 The model timestep length
+  subroutine ffsl_1d_mass_flux_alg( direction,        &
+                                    dep_pts,          &
+                                    cell_orientation, &
+                                    rho_x,            &
+                                    rho_y,            &
+                                    mass_flux,        &
+                                    dt )
+
+    implicit none
+
+    integer(i_def), intent(in)          :: direction
+    type(field_type),    intent(in)     :: dep_pts
+    type(field_type),    intent(in)     :: cell_orientation
+    type(field_type),    intent(in)     :: rho_x
+    type(field_type),    intent(in)     :: rho_y
+    type(field_type),    intent(inout)  :: mass_flux
+    real(r_def),         intent(in)     :: dt
+
+    type( field_type ) :: a0, a1, a2
+    type( field_type ) :: rho_x_halos_corrected, rho_y_halos_corrected
+
+    type(function_space_type), pointer :: rho_fs   => null()
+
+    rho_fs => rho_x%get_function_space()
+
+    call a0%initialise( vector_space = rho_fs )
+    call a1%initialise( vector_space = rho_fs )
+    call a2%initialise( vector_space = rho_fs )
+
+    call rho_x_halos_corrected%initialise( vector_space = rho_fs )
+    call rho_y_halos_corrected%initialise( vector_space = rho_fs )
+
+    call invoke( name = "Mass flux and PPM initialisation", &
+                 setval_c( mass_flux, 0.0_r_def ),          &
+                 setval_c( a0,        0.0_r_def ),          &
+                 setval_c( a1,        0.0_r_def ),          &
+                 setval_c( a2,        0.0_r_def ) )
+
+    if (direction == x_direction) then
+      call invoke_subgrid_coeffs(a0,a1,a2,rho_y,cell_orientation,direction,  &
+                       rho_approximation_stencil_extent,dep_pt_stencil_extent)
+    elseif (direction == y_direction) then
+      call invoke_subgrid_coeffs(a0,a1,a2,rho_x,cell_orientation,direction,  &
+                       rho_approximation_stencil_extent,dep_pt_stencil_extent)
+    end if
+
+    if (direction == x_direction) then
+      call invoke_fv_mass_fluxes( rho_y, dep_pts, mass_flux,  &
+                                  a0, a1, a2, direction, dep_pt_stencil_extent, &
+                                  dt )
+    elseif (direction == y_direction) then
+      call invoke_fv_mass_fluxes( rho_y, dep_pts, mass_flux,  &
+                                  a0, a1, a2, direction, dep_pt_stencil_extent, &
+                                  dt )
+    end if
+
+    nullify(rho_fs)
+
+  end subroutine ffsl_1d_mass_flux_alg
+
+end module ffsl_1d_mass_flux_alg_mod

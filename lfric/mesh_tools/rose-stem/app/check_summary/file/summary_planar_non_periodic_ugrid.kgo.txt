@@ -1,0 +1,30 @@
+"dynamics":
+  Geometry:            planar
+  Topology:            non_periodic
+  Co-ordinate system:  xyz
+  Periodic X:          F
+  Periodic Y:          F
+  Constructor inputs:  geometry=planar;topology=non_periodic;coord_sys=xyz;edge_cells_x=5;edge_cells_y=4;periodic_x=F;periodic_y=F;domain_x=1000.00;domain_y=400.00;target_mesh_names=['physics'];target_edge_cells_x=[10];target_edge_cells_y=[8]
+  Nodes:               30
+  Edges:               49
+  Faces:               20
+  Nodes per face:      4
+  Edges per face:      4
+  Nodes per edge:      2
+  Max. faces per node: 4
+  Maps to:             "physics"
+"physics":
+  Geometry:            planar
+  Topology:            non_periodic
+  Co-ordinate system:  xyz
+  Periodic X:          F
+  Periodic Y:          F
+  Constructor inputs:  geometry=planar;topology=non_periodic;coord_sys=xyz;edge_cells_x=10;edge_cells_y=8;periodic_x=F;periodic_y=F;domain_x=1000.00;domain_y=400.00;target_mesh_names=['dynamics'];target_edge_cells_x=[5];target_edge_cells_y=[4]
+  Nodes:               99
+  Edges:               178
+  Faces:               80
+  Nodes per face:      4
+  Edges per face:      4
+  Nodes per edge:      2
+  Max. faces per node: 4
+  Maps to:             "dynamics"

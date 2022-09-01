@@ -1,0 +1,405 @@
+#!jinja2
+
+%include inc/targets.rc
+%include inc/common_macros.rc
+%include inc/suite_macros.rc
+%include suite_control.rc
+
+{# SETUP SOME JINJA2 VARIABLES #}
+{%- set build_profiles = ['fast-debug', 'full-debug', 'production'] %}
+{%- set rose_suite_gui_headers = [] %}
+{%- set rdef_build_precisions = []  %}
+
+{#- #########################################################################}
+
+{%- if RUN_NAMES is defined %}
+{%-   if RUN_NAMES is string %}
+{%-     set groupsToRun = [RUN_NAMES] %}
+{%-     set publishGroup = RUN_NAMES %}
+{%-   else %}
+{%-     set groupsToRun = RUN_NAMES %}
+{%-     set publishGroup = RUN_NAMES|join(",") %}
+{%-   endif %}
+{%- else %}
+{%-   set groupsToRun = ['developer'] %}
+{%-   set publishGroup = 'developer' %}
+{%- endif %}
+
+{%- if miniappFlag == True %}
+{%-   set appPathFragment = 'miniapps/' %}
+{%- else  %}
+{%-   set appPathFragment = '' %}
+{%- endif %}
+
+[cylc]
+  UTC mode = True
+  [[events]]
+    mail events = timeout
+    abort on timeout = True
+{%- if 'nightly' in groupsToRun %}
+    abort on stalled = True
+{%- endif %}
+    timeout = PT3H
+
+[scheduling]
+  cycling mode        = integer
+  initial cycle point = 1
+  final cycle point   = 1
+  max active cycle points = {{MAXRUNAHEAD}}
+
+  [[queues]]
+    [[[host_throttle]]]
+      limit = {{SUITE_THROTTLE}}
+      members = root
+    [[dependencies]]
+{%- set scheduledTasks = schedule() | deduplicate_schedule() %}
+      {{scheduledTasks}}
+
+[runtime]
+  [[root]]
+    init-script = """
+                  export CYLC_VERSION={{CYLC_VERSION}}
+                  export ROSE_VERSION={{ROSE_VERSION}}
+                  """
+    script = rose task-run
+    [[[events]]]
+{%- if TROUBLE_MAIL_ADDRESS is defined %}
+      mail to = {{TROUBLE_MAIL_ADDRESS}}
+      mail events = submission timeout, submission failed, timeout, failed, execution timeout
+{%- endif %}
+      submission timeout = PT12H
+      execution timeout  =  PT3H
+    [[[environment]]]
+      SOURCE_ROOT = $CYLC_SUITE_SHARE_DIR/source
+      OUTPUT_ROOT = $CYLC_SUITE_SHARE_DIR/output
+      PYTHONPATH  = $CYLC_SUITE_RUN_DIR/lib/python
+      PATH        = $PATH:$PYTHONPATH/bin
+{# Set up Families for platform properties.                #}
+{# These would be platforms specific to a site, i.e. meto  #}
+{# Could be brought in from include file specific to site. #}
+
+  [[METO-SPICE]]
+    [[[environment]]]
+      OMP_NUM_THREADS = 1
+      HYPERTHREADS    = 1
+      CORES_PER_NODE  = 1
+      NUMA_REGIONS_PER_NODE = 0
+
+  [[METO-XC]]
+    [[[environment]]]
+      HYPERTHREADS    = 1
+      CORES_PER_NODE  = 36
+      NUMA_REGIONS_PER_NODE = 2
+
+  [[METO-XC40]]
+    inherit = METO-XC
+
+  [[METO-XCS]]
+    inherit = METO-XC
+
+  [[MONSOON-XC40]]
+    inherit = METO-XC
+
+  [[ LOCAL ]]
+    [[[remote]]]
+      host = {{ ROSE_ORIG_HOST }}
+    [[[job]]]
+      batch system = background
+
+  [[TARGET]]
+    inherit = {{PRIMARY_TARGET['platform']|upper}}
+    [[[remote]]]
+      host = {{ get_target_property( PRIMARY_TARGET, 'hostname' ) }}
+    [[[job]]]
+      batch system = {{ get_target_property( PRIMARY_TARGET, 'batcher' ) }}
+
+  [[TECHNICAL]]
+    [[[remote]]]
+      host = {{ get_target_property(SECONDARY_TARGET, 'hostname') }}
+    [[[job]]]
+      batch system = {{ get_target_property(SECONDARY_TARGET, 'batcher') }}
+    [[[environment]]]
+      SOURCE_DIRECTORY = $SOURCE_ROOT/{{projectName}}
+
+##############################################################################
+{#- PRELIMINARIES                                                            #}
+
+{%- if 'PRELIMINARIES' not in rose_suite_gui_headers %}
+{%-   do rose_suite_gui_headers.append('PRELIMINARIES') %}
+    [[PRELIMINARIES]]
+{%- endif %}
+
+{%- if 'export_source' in scheduledTasks %}
+    [[export_source]]
+      inherit = PRELIMINARIES, LOCAL
+      script  = """
+                mkdir -p `dirname $SOURCE_ROOT`
+                svn export --force {{SOURCE_LFRIC}} $SOURCE_ROOT
+
+                HOST={{ get_target_property( PRIMARY_TARGET, 'hostname' ) }}
+                RELATIVE_SOURCE_DIRECTORY=`echo $SOURCE_DIRECTORY | sed "s|$HOME/||"`
+                ssh $HOST mkdir -p $RELATIVE_SOURCE_DIRECTORY
+                rsync -avz $SOURCE_DIRECTORY/ $HOST:$RELATIVE_SOURCE_DIRECTORY/
+                sleep 5
+                """
+
+    [[[environment]]]
+      SOURCE_DIRECTORY = $SOURCE_ROOT
+
+{%- endif %}
+
+##############################################################################
+{#- PUBLISH                                                                  #}
+
+{%- set publish_destination = '$CYLC_SUITE_SHARE_DIR/publish-' + projectName + '-' + publishGroup + '-' + PRIMARY_TARGET['platform'] %}
+  [[PUBLISH]]
+    inherit = TECHNICAL
+    [[[environment]]]
+      DESTINATION = {{publish_destination}}
+
+{%- if 'publish_index' in scheduledTasks %}
+  [[publish_index]]
+    inherit = PUBLISH
+    script = rose task-run --app-key=publish --command-key=index
+
+    [[[environment]]]
+{%-   if ROSE_BUSH_URL %}
+      ROSE_BUSH_ARG = -bush {{ROSE_BUSH_URL}}
+{%-   endif %}
+{%- endif %}
+
+{%- if 'mirror_results_local' in scheduledTasks %}
+  [[mirror_results_local]]
+    inherit = PUBLISH
+
+    {{scripting(
+          SECONDARY_TARGET,
+          ['base', 'tech'],
+          ['base'],
+          script='rose task-run --app-key=publish_mirror'
+      )}}
+
+    [[[environment]]]
+      REWRITE = ''
+      SOURCE  = {{publish_destination}}
+      TARGET  = file://$HOME/public_html/lfric-{{projectName}}-{{PRIMARY_TARGET['platform']}}-{{publishGroup}}
+{%- endif %}
+
+{%- if 'mirror_results_remote' in scheduledTasks %}
+  [[mirror_results_remote]]
+    inherit = PUBLISH
+
+    {{scripting(
+          SECONDARY_TARGET,
+          ['base', 'tech'],
+          ['base'],
+          script='rose task-run --app-key=publish_mirror'
+      )}}
+
+    [[[environment]]]
+      REWRITE = {{MIRROR_REWRITE}}
+      SOURCE  = {{publish_destination}}
+      TARGET  = {{MIRROR_UPLOAD_URL}}lfric-{{projectName}}-{{PRIMARY_TARGET['platform']}}-{{publishGroup}}
+{%- endif %}
+
+{{  publish_node_task('PUBLISH') }}
+
+##############################################################################
+{#- Technical tasks                                                          #}
+{%- for app in projectApps %}
+{{ validate_rose_meta_task( projectName, 'TECHNICAL', appName=app ) }}
+{%- endfor %}
+
+{{ check_config_dump_task('TECHNICAL', SECONDARY_TARGET) }}
+
+{{ check_style_task( 'TECHNICAL', SECONDARY_TARGET) }}
+
+{{ api_documentation_task( 'TECHNICAL', SECONDARY_TARGET, 'PUBLISH', SECONDARY_TARGET) }}
+{{ uml_documentation_task( 'TECHNICAL', SECONDARY_TARGET, 'PUBLISH', SECONDARY_TARGET) }}
+{{ design_documentation_task( 'TECHNICAL', SECONDARY_TARGET, 'PUBLISH', SECONDARY_TARGET) }}
+
+##############################################################################
+
+{%- for compiler in get_target_property(PRIMARY_TARGET,
+                                        'setup')['compiler'].keys() -%}
+{%-   for precision in rdef_build_precisions %}
+{%-     set compiler_label = compiler | lower + '_' + precision + '-bit' %}
+{%-     set compiler_family = compiler_label | upper %}
+  [[{{compiler_family}}]]
+    [[[environment]]]
+      BIN_DIR               = $OUTPUT_ROOT/{{compiler_label}}/bin
+      COMPILER              = {{compiler}}
+      DESTINATION_DIRECTORY = $OUTPUT_ROOT/{{compiler_label}}
+      SOURCE_DIRECTORY      = $SOURCE_ROOT/{{projectName}}
+      TARGET_OPT            = {{PRIMARY_TARGET['platform']}}
+      {#- We can't define WORKING_DIR here as it may contain    #}
+      {#- target specific variables not existing on the local machine #}
+
+  [[TEST_WITH_{{compiler_family}}]]
+    inherit = {{compiler_family}}, TARGET
+
+{{      unit_test_tasks( 'TEST_WITH_'+compiler_family, PRIMARY_TARGET, compiler, precision ) }}
+
+{%-     for build in build_profiles %}
+{%-       set label = compiler_label + '_' + build | lower %}
+{%-       set family = label | upper %}
+
+{%-       if 'export_source' in scheduledTasks %}
+{%-         if family not in rose_suite_gui_headers %}
+{%-           do rose_suite_gui_headers.append(family) %}
+
+  [[{{family}}]]
+    inherit = {{compiler_family}}
+
+    [[[environment]]]
+      BIN_DIR               = $OUTPUT_ROOT/{{label}}/bin
+      COMPILER              = {{compiler}}
+      DESTINATION_DIRECTORY = $OUTPUT_ROOT/{{label}}
+      TARGET_OPT            = {{PRIMARY_TARGET['platform']}}
+      {#- We can't define WORKING_DIR here as it may contain    #}
+      {#- target specific variables not existing on the local machine #}
+{%-         endif %}
+{%-       endif %}
+
+
+{%-       if 'compile_' + projectName + '_with_' + label in scheduledTasks %}
+  [[compile_{{projectName}}_with_{{label}}]]
+    inherit = {{family}}, TARGET
+
+    {{scripting(
+          PRIMARY_TARGET,
+          ['base', 'compiler.'+compiler, 'build'],
+          ['base'],
+          prescript=deleteDirectory("$WORKING_DIR"),
+          script='rose task-run --app-key=compile',
+          postscript=deleteDirectory("$WORKING_DIR")
+                     + """
+# Future publisher stages need this information
+echo $CYLC_TASK_LOG_ROOT > $DESTINATION_DIRECTORY/lfric.mesher."+compiler+".log
+                       """
+      )}}
+
+    [[[environment]]]
+      WORKING_DIR           = {{ get_target_property(PRIMARY_TARGET, 'build_root') }}/{{label}}/mesh_tools
+      BUILD_TARGET          = {{build}}
+      LFRIC_TARGET_PLATFORM = {{PRIMARY_TARGET['platform']}}
+      PROFILE               = {{build}}
+      TARGET                = build
+      MAKE_THREADS          = 4
+      RDEF_PRECISION        = {{precision}}
+
+{{          directives(PRIMARY_TARGET, 'build') }}
+{%-       endif %} {#- if 'compile_'+ projectName + '_with_' + label in scheduledTasks #}
+
+
+{%-       if 'publish_' + label + '_compile' in scheduledTasks %}
+  [[publish_{{label}}_compile]]
+      inherit = PUBLISH, {{family}}
+      pre-script = """
+                   {{ensureDestination()}}
+                   """
+      script = rose task-run --app-key=publish_compile
+      [[[environment]]]
+          HOST = {{ get_target_property(PRIMARY_TARGET, 'hostname') }}
+          CONTEXT  = {{build}}
+          DIR_FILE=lfric.mesher.{{compiler}}.log
+      [[[job]]]
+          execution retry delays = PT5S, 10*PT1M
+{%-       endif %} {#- if 'publish_' + label + '_compile' in scheduledTasks #}
+
+
+{%-       for mesh in mesh_types %}
+{%-         if 'generate_' + mesh + '_' + label in scheduledTasks %}
+  [[{{mesh|upper}}_{{label|upper}}]]
+    inherit = {{family}}, TARGET
+
+  [[generate_{{mesh}}_{{label}}]]
+    inherit = {{mesh|upper}}_{{label|upper}}
+
+    {{scripting(
+          PRIMARY_TARGET,
+          ['base', 'compiler.'+compiler, 'tech'],
+          ['base'],
+          prescript='mkdir -p $DESTINATION_DIRECTORY/meshes',
+          script='rose task-run --app-key=mesh --opt-conf-key='+mesh
+      )}}
+
+    [[[environment]]]
+      OUTPUT_FILE = $DESTINATION_DIRECTORY/meshes/{{mesh}}.nc
+
+{{            directives(PRIMARY_TARGET, 'tech') }}
+{%-         endif %} {#- 'generate_' + mesh + '_' + label in scheduledTasks #}
+
+
+{%-         if 'summarise_' + mesh + '_' + label in scheduledTasks %}
+  [[summarise_{{mesh}}_{{label}}]]
+    inherit = {{mesh|upper}}_{{label|upper}}
+
+    {{scripting(
+          PRIMARY_TARGET,
+          ['base', 'compiler.'+compiler, 'tech'],
+          ['base'],
+          script='rose task-run --app-key=summarise_ugrid  --command-key='+get_target_property( PRIMARY_TARGET, 'queue.tech.launcher' ),
+          postscript='cat $SUMMARY_FILE'
+      )}}
+
+    [[[environment]]]
+      MESH_FILE    = $DESTINATION_DIRECTORY/meshes/{{mesh}}.nc
+      SUMMARY_FILE = $DESTINATION_DIRECTORY/summary_{{mesh}}_ugrid.txt
+
+{{            directives(PRIMARY_TARGET, 'tech') }}
+{%-         endif %}
+
+
+{%-         if 'check_summary_' + mesh + '_' + label in scheduledTasks %}
+  [[check_summary_{{mesh}}_{{label}}]]
+    inherit = {{mesh|upper}}_{{label|upper}}
+
+    {{scripting(
+          PRIMARY_TARGET,
+          ['base', 'compiler.'+compiler],
+          ['base'],
+          script="""sed -e \"s/.*INFO : //\" -e \"s/===*//\" \
+    -e \"/File.*contains ugrid mesh(es)/d\" \
+    -e \"/^\s*Application.*resources/d\"    \
+    -e \"/^\s*$/d\"                         \
+    <$SUMMARY_FILE >${SUMMARY_FILE}.stripped
+rose task-run --app-key=check_summary"""
+      )}}
+
+    [[[environment]]]
+      SUMMARY_KGO  = summary_{{mesh}}_ugrid.kgo.txt
+      SUMMARY_FILE = $DESTINATION_DIRECTORY/summary_{{mesh}}_ugrid.txt
+
+{{            directives( PRIMARY_TARGET, 'tech') }}
+{%-         endif %} {#- 'summarise_' + mesh + '_' + label in scheduledTasks #}
+
+
+{%-         if 'check_mesh_' + mesh + '_' + label in scheduledTasks %}
+  [[check_mesh_{{mesh}}_{{label}}]]
+    inherit = {{mesh|upper}}_{{label|upper}}
+
+    {{scripting(
+          PRIMARY_TARGET,
+          ['base', 'compiler.'+compiler],
+          ['base'],
+          script='rose task-run --app-key=check_mesh_kgo'
+      )}}
+
+    [[[environment]]]
+      APP_NAME   = mesh
+      KGO_DIR    = $SOURCE_ROOT/{{projectName}}/kgos
+      TARGET_OPT = {{PRIMARY_TARGET['platform']}}
+      CONFIG     = {{mesh}}
+      MESH_DIR   = $DESTINATION_DIRECTORY/meshes
+      MESH_FILE  = {{mesh}}.nc
+
+{{            directives(PRIMARY_TARGET, 'tech') }}
+{%-         endif %} {#- f'check_mesh_{mesh}_{label}' in scheduledTasks #}
+{%-       endfor %} {#- mesh in mesh_type #}
+
+{%-     endfor %}  {# precision #}
+{%-   endfor %}  {# build #}
+{%- endfor %}  {# compiler #}
+
+{{null_tasks()}}

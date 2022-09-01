@@ -1,0 +1,106 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2018 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> Test the extraction of the u and v components of a W2 field
+!> into an W2H field
+!>
+module extract_uv_kernel_mod_test
+
+  use constants_mod,      only : i_def, r_def
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: extract_uv_test_type, &
+            test_w2h_field
+
+  @TestCase
+  type, extends(TestCase) :: extract_uv_test_type
+    private
+    real(kind=r_def), allocatable :: w2_field_in(:), w2h_field_out(:)
+
+    integer(i_def) :: map_w2(1:6)
+    integer(i_def) :: map_w2h(1:4)
+
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_w2h_field
+  end type extract_uv_test_type
+
+    integer(i_def), parameter :: nlayers = 1
+    integer(i_def), parameter :: ndf_w2  = 6
+    integer(i_def), parameter :: undf_w2 = 6
+    integer(i_def), parameter :: ndf_w2h  = 4
+    integer(i_def), parameter :: undf_w2h = 4
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(extract_uv_test_type), intent(inout) :: this
+
+    this%map_w2 = (/ 1,2,3,4,5,6 /)
+    this%map_w2h = (/ 1,2,3,4 /)
+
+    allocate( this%w2_field_in(1:6) )
+    allocate( this%w2h_field_out(1:4) )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(extract_uv_test_type), intent(inout) :: this
+
+    deallocate( this%w2_field_in )
+    deallocate( this%w2h_field_out )
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_w2h_field( this )
+
+    use extract_uv_kernel_mod, only : extract_uv_code
+
+    implicit none
+
+    class(extract_uv_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: tol    = 1.0e-6_r_def
+
+    ! Set up the input W2 field with data at all dofs
+    this%w2_field_in(1:6) = (/  101.0_r_def,102.0_r_def,103.0_r_def,104.0_r_def, 105.0_r_def, 106.0_r_def /)
+
+    ! Set up the output W2H field with zeroes
+    this%w2h_field_out = 0.0_r_def
+
+    call extract_uv_code( nlayers,                     &
+                         this%w2h_field_out,           &
+                         this%w2_field_in,             &
+                         undf_w2h,                     &
+                         ndf_w2h,                      &
+                         this%map_w2h,                 &
+                         undf_w2,                      &
+                         ndf_w2,                       &
+                         this%map_w2 )
+
+    @assertEqual(101.0_r_def, this%w2h_field_out(1), tol)
+    @assertEqual(102.0_r_def, this%w2h_field_out(2), tol)
+    @assertEqual(103.0_r_def, this%w2h_field_out(3), tol)
+    @assertEqual(104.0_r_def, this%w2h_field_out(4), tol)
+
+  end subroutine test_w2h_field
+
+
+end module extract_uv_kernel_mod_test

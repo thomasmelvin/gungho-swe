@@ -1,0 +1,167 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2018 Met Office. All rights reserved.
+! For further details please refer to the file COPYRIGHT.txt
+! which you should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the reduced set of derham complex operators
+!>
+module mg_derham_mat_kernel_mod_test
+
+  use constants_mod,                 only : i_def, r_def
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: mg_derham_mat_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type mg_derham_mat_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use finite_element_config_mod, only : cellshape_quadrilateral, &
+                                          coord_system_xyz
+    use feign_config_mod,          only : feign_finite_element_config
+
+    implicit none
+
+    class(mg_derham_mat_test_type), intent(inout) :: this
+
+    call feign_finite_element_config(           &
+             cellshape=cellshape_quadrilateral, &
+             coord_order=0_i_def,               &
+             coord_system=coord_system_xyz,     &
+             element_order=0_i_def,             &
+             rehabilitate=.true.,               &
+             vorticity_in_w1=.false. )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod,        only: final_configuration
+
+    implicit none
+
+    class(mg_derham_mat_test_type), intent(inout) :: this
+
+    call final_configuration()
+
+  end subroutine tearDown
+
+  @Test
+  subroutine test_all( this )
+
+    use mg_derham_mat_kernel_mod, only : mg_derham_mat_code
+
+    implicit none
+
+    class(mg_derham_mat_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: tol = 1.0e-12_r_def
+
+    ! Operators to test
+    real(r_def), dimension(1,1,1) :: M2, M3, Mt, &
+                                     div
+    ! Coordinate fields
+    real(r_def), dimension(8) :: x, y, z
+    real(r_def)               :: dx, dy, dz, zero
+    real(r_def), dimension(1) :: panel_id
+    ! Maps
+    integer(i_def), dimension(8) :: mapx
+    integer(i_def), dimension(1) :: map_w3
+    ! Basis arrays
+    real(r_def), dimension(3)   :: v, ds
+    real(r_def), dimension(1)   :: dv, s
+    real(r_def), dimension(3,8) :: dgamma
+    real(r_def), dimension(1,8) :: gamma
+    ! Array sizes
+    integer(i_def), parameter :: ndf = 1_i_def
+    integer(i_def), parameter :: undf = 1_i_def
+    integer(i_def), parameter :: ndfx = 8_i_def
+    ! Quadrature
+    integer(i_def), parameter :: nqp = 1_i_def
+    real(r_def), dimension(1) :: wgt
+
+    integer(i_def) :: i
+    real(kind=r_def) :: answer
+
+    ! Set cell coordinates
+    dx = 2.0_r_def
+    dy = 3.0_r_def
+    dz = 4.0_r_def
+    zero = 0.0_r_def
+    x = (/ zero, dx,   dx,   zero, zero, dx,   dx, zero /)
+    y = (/ zero, zero, dy,   dy,   zero, zero, dy, dy /)
+    z = (/ zero, zero, zero, zero, dz,   dz,   dz, dz /)
+    panel_id = (/ 1.0_r_def /)
+
+    do i = 1,8
+      mapx(i) = int(i,i_def)
+    end do
+
+    map_w3(1) = 1_i_def
+
+    ! Basis functions
+    s(1) = 1.0_r_def
+    ds(:) = (/ 1.0_r_def, -1.0_r_def, 2.0_r_def /)
+    v(:) = (/ 1.0_r_def, 0.0_r_def, 0.0_r_def /)
+    dv(1) = 0.5_r_def
+
+    ! Quadrature
+    wgt(1) = 1.0_r_def
+
+    ! Coordinate basis
+    dgamma(:,1) = (/ -1.0_r_def, -1.0_r_def, -1.0_r_def /)
+    dgamma(:,2) = (/  1.0_r_def, -1.0_r_def, -1.0_r_def /)
+    dgamma(:,3) = (/  1.0_r_def,  1.0_r_def, -1.0_r_def /)
+    dgamma(:,4) = (/ -1.0_r_def,  1.0_r_def, -1.0_r_def /)
+    dgamma(:,5) = (/ -1.0_r_def, -1.0_r_def,  1.0_r_def /)
+    dgamma(:,6) = (/  1.0_r_def, -1.0_r_def,  1.0_r_def /)
+    dgamma(:,7) = (/  1.0_r_def,  1.0_r_def,  1.0_r_def /)
+    dgamma(:,8) = (/ -1.0_r_def,  1.0_r_def,  1.0_r_def /)
+    dgamma = 0.25_r_def*dgamma
+    gamma(:,:) = 0.125_r_def
+
+    call mg_derham_mat_code(1_i_def, 1_i_def,        &
+                            1_i_def, M2,             &
+                            1_i_def, M3,             &
+                            1_i_def, Mt,             &
+                            1_i_def, div,            &
+                            x, y, z,                 &
+                            panel_id,                &
+                            ndf, v, dv,              &
+                            ndf, s,                  &
+                            ndf, s,                  &
+                            ndfx, ndfx,              &
+                            mapx, gamma, dgamma,     &
+                            ndf, undf, map_w3,       &
+                            nqp, nqp, wgt, wgt)
+
+    answer = v(1)*dx * v(1)*dx / (dx*dy*dz)
+    @assertEqual(answer, M2(1,1,1), tol)
+
+    answer = (dx*dy*dz)*s(1)*s(1)
+    @assertEqual(answer, M3(1,1,1), tol)
+
+    answer = (dx*dy*dz)*s(1)*s(1)
+    @assertEqual(answer, Mt(1,1,1), tol)
+
+    answer = s(1)*dv(1)
+    @assertEqual(answer, div(1,1,1), tol)
+
+  end subroutine test_all
+
+end module mg_derham_mat_kernel_mod_test

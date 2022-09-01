@@ -1,0 +1,40 @@
+{%- set projectName   = 'mesh_tools' %}
+{%- set projectDir    = 'mesh_tools' %}
+{%- set miniappFlag   = False %}
+{%- set rdef_default  = "64" %}
+{%- set MAXRUNAHEAD     = 1 %}
+
+{%- set projectApps = ['mesh'] %}
+
+{# Set the  compiler debug profile for runs in this suite #}
+{# Options are ['fast-debug'|'full-debug'|'production'], omission defaults to 'fast-debug' #}
+{%- set run_application_profile = '' %}
+
+{%- set groups = {
+        'developer': ['validate_rose_meta_graph("mesh_tools",appName="mesh")',
+                      'check_config_dump_graph()',
+                      'check_style_graph()',
+                      'check_compilers("fast-debug", publish=True)'],
+        'nightly'  : ['check_compilers("full-debug", publish=True)',
+                      'publish_commit'] } %}
+
+{%- set mesh_types = ['cubedsphere',
+                      'cubedsphere_c1',
+                      'cubedsphere_c2',
+                      'cubedsphere_c3',
+                      'cubedsphere_rotated',
+                      'cubedsphere_maps',
+                      'planar_non_periodic',
+                      'planar_trench_x',
+                      'planar_trench_y',
+                      'planar_biperiodic',
+                      'planar_maps',
+                      'planar_lbc',
+                      'uk',
+                      'equator',
+                      'equator_band',
+                      'falklands',
+                      'london_model',
+                      'nzlam4',
+                      'polar',
+                      'lam'] %}

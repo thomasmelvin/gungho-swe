@@ -1,0 +1,307 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2018 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!>@brief Mass matrix solver for the gungho dynamical core
+!>@details Constructs a mass matrix solver for a given space, applies the
+!>         solver and then destroys it. Since this solver is applied in multiple
+!>         places to different spaces and with/without boundary conditions the _init,
+!>         _step and _finalise routines are wrapped into one routine. An
+!>         alternative option would be to create a new solver class that contains a
+!>         solver, operator and preconditioner so that different instances could be
+!>         created when needed
+module mass_matrix_solver_alg_mod
+
+  use constants_mod,                      only: i_def, r_def, l_def
+  use log_mod,                            only: log_event,         &
+                                                log_scratch_space, &
+                                                LOG_LEVEL_INFO,    &
+                                                LOG_LEVEL_ERROR,   &
+                                                LOG_LEVEL_TRACE
+
+  ! Derived Types
+  use field_vector_mod,                   only: field_vector_type
+  use field_mod,                          only: field_type
+  use operator_mod,                       only: operator_type
+
+  ! Algorithms
+  use mass_matrix_operator_alg_mod,       only: mass_matrix_operator_type
+  use diagonal_preconditioner_alg_mod,    only: diagonal_preconditioner_type
+  use null_preconditioner_alg_mod,        only: null_preconditioner_type
+
+  ! preconditioner and solver
+  use preconditioner_mod,                 only: abstract_preconditioner_type
+  use iterative_solver_mod,               only: abstract_iterative_solver_type, &
+                                                bicgstab_type,                  &
+                                                gmres_type,                     &
+                                                fgmres_type,                    &
+                                                gcr_type,                       &
+                                                conjugate_gradient_type,        &
+                                                precondition_only_type,         &
+                                                jacobi_type,                    &
+                                                chebyshev_type
+
+
+  use io_config_mod,                      only: subroutine_timers
+  use timer_mod,                          only: timer
+
+  implicit none
+
+  private
+
+  public  :: mass_matrix_solver_alg
+contains
+!=============================================================================!
+  !> @details Combined initialisation, run and finalise procedure for the mass matrix solver to solve My = x
+  !> @param[inout] y result field
+  !> @param[in]    x input field
+  !> @param[in]    bc_flag optional flag to overide the default application of
+  !>               boundary conditions
+  subroutine mass_matrix_solver_alg(y, x, bc_flag)
+    use solver_config_mod,             only: maximum_iterations,               &
+                                             tolerance,                        &
+                                             method,                           &
+                                             gcrk,                             &
+                                             method_cg,                        &
+                                             method_bicgstab,                  &
+                                             method_gmres,                     &
+                                             method_fgmres,                    &
+                                             method_gcr,                       &
+                                             method_prec_only,                 &
+                                             method_jacobi,                    &
+                                             method_chebyshev,                 &
+                                             preconditioner,                   &
+                                             preconditioner_diagonal,          &
+                                             preconditioner_none,              &
+                                             diagnostic_norm,                  &
+                                             fixed_iterations
+    use fem_constants_mod,             only: get_mass_matrix,                  &
+                                             get_mass_matrix_diagonal,         &
+                                             get_inverse_w3_mass_matrix
+    use fs_continuity_mod,             only: W1, W2, W3, W2v, W2h, Wtheta, W0
+    use fs_eigenvalues_mod,            only: get_minmax_eigenvalues
+    use dg_matrix_vector_kernel_mod,   only: dg_matrix_vector_kernel_type
+    use operator_tri_solve_kernel_mod, only: operator_tri_solve_kernel_type
+    implicit none
+
+    ! Prognostic fields
+    type( field_type), intent(inout)          :: y
+    type( field_type), intent(in)             :: x
+    ! Optional flag to overide default boundary condition application
+    logical(kind=l_def), optional, intent(in) :: bc_flag
+
+    !> todo Replace passing in of field types with passing in field_vector types
+    type( field_vector_type ) :: vec_y, vec_x
+
+    ! Operator, preconditioner and iterative solver for mass matrices
+    type(mass_matrix_operator_type)                    :: mass_matrix_operator
+    class(abstract_preconditioner_type),   allocatable :: mass_matrix_preconditioner
+    class(abstract_iterative_solver_type), allocatable :: mass_matrix_solver
+
+    !> Absolute solver tolerance (mixed solver)
+    real(kind=r_def), parameter :: solver_a_tol = 1.E-16
+
+    integer(kind=i_def)             :: fs
+    logical(kind=l_def)             :: apply_bc
+    integer(kind=i_def)             :: mesh_id
+    type(operator_type), pointer    :: mass_matrix => null()
+    type(field_type),    pointer    :: mass_matrix_diagonal => null()
+    type(field_vector_type)         :: vec_mm_diagonal
+
+    real(kind=r_def)                :: lmin, lmax
+
+    if ( subroutine_timers ) call timer('mass_matrix_solver_alg')
+
+    mesh_id = y%get_mesh_id()
+
+    fs = x%which_function_space()
+    if ( fs == W3 ) then
+    ! Direct solve for fully discontinuous spaces
+    !> todo this needs to be extended to all DG spaces
+      mass_matrix => get_inverse_w3_mass_matrix(mesh_id)
+
+      call invoke( dg_matrix_vector_kernel_type(y, x, mass_matrix) )
+    else if ( fs == Wtheta .and. x%get_element_order() == 0 ) then
+      mass_matrix => get_mass_matrix(fs, mesh_id)
+      call invoke( operator_tri_solve_kernel_type(y, x, mass_matrix) )
+    else
+    ! Iterative solve for (semi-)continuous spaces
+
+      !=== Initialise routine ===!
+
+      ! *** Allocate polymorphic solver- and preconditioner objects ***
+
+      ! Allocate pressure solver of correct type
+      select case( method )
+      case (METHOD_BICGSTAB)
+         allocate ( bicgstab_type :: mass_matrix_solver )
+      case(METHOD_CG)
+         allocate ( conjugate_gradient_type :: mass_matrix_solver )
+      case(METHOD_GMRES)
+         allocate ( gmres_type :: mass_matrix_solver )
+      case(METHOD_FGMRES)
+         allocate ( fgmres_type :: mass_matrix_solver )
+      case(METHOD_GCR)
+         allocate ( gcr_type :: mass_matrix_solver )
+      case(METHOD_PREC_ONLY)
+         allocate ( precondition_only_type :: mass_matrix_solver )
+      case(METHOD_JACOBI)
+         allocate ( jacobi_type :: mass_matrix_solver )
+      case(METHOD_CHEBYSHEV)
+         allocate ( chebyshev_type :: mass_matrix_solver )
+      case default
+         call log_event("Unknown mass matrix solver specified",LOG_LEVEL_ERROR)
+      end select
+
+      ! Allocate pressure preconditioner preconditioner of correct type
+      select case(preconditioner)
+      case(PRECONDITIONER_NONE)
+         allocate ( null_preconditioner_type :: mass_matrix_preconditioner)
+      case(PRECONDITIONER_DIAGONAL)
+         allocate ( diagonal_preconditioner_type :: mass_matrix_preconditioner)
+      case default
+         call log_event( "Unknown mass matrix preconditioner specified", &
+                         LOG_LEVEL_ERROR)
+      end select
+
+      ! *** Construct solver-, preconditioner- and operator-objects
+
+      ! Construct mass matrix operator and preconditioner
+      if (fs == W1 .or. fs == W2 .or. fs == W2v) then
+        apply_bc = .true.
+      else
+        apply_bc = .false.
+      end if
+      if ( present(bc_flag) ) apply_bc = bc_flag
+
+      mass_matrix          => get_mass_matrix(fs, mesh_id)
+      mass_matrix_diagonal => get_mass_matrix_diagonal(fs, mesh_id)
+
+      select case ( fs )
+        case ( W0 )
+          call log_event('Mass matrix solve for W0 space',LOG_LEVEL_INFO)
+        case ( W1 )
+          call log_event('Mass matrix solve for W1 space',LOG_LEVEL_INFO)
+        case ( W2 )
+          call log_event('Mass matrix solve for W2 space',LOG_LEVEL_INFO)
+        case ( W2h )
+          call log_event('Mass matrix solve for W2h space',LOG_LEVEL_INFO)
+        case ( W2v )
+          call log_event('Mass matrix solve for W2v space',LOG_LEVEL_INFO)
+        case ( Wtheta )
+          call log_event('Mass matrix solve for Wt space',LOG_LEVEL_INFO)
+        case default
+          call log_event('Unsupported function space in solver algorithm', LOG_LEVEL_ERROR )
+      end select
+
+      mass_matrix_operator = mass_matrix_operator_type(mass_matrix, apply_bc)
+
+      ! Construct preconditioner
+      select type(mass_matrix_preconditioner)
+      type is ( null_preconditioner_type )
+         ! Null preconditioner
+         mass_matrix_preconditioner = null_preconditioner_type()
+      type is ( diagonal_preconditioner_type )
+         ! Diagonal preconditioner
+         vec_mm_diagonal = field_vector_type(1)
+         call vec_mm_diagonal%import_field(mass_matrix_diagonal, 1)
+         mass_matrix_preconditioner = diagonal_preconditioner_type(vec_mm_diagonal)
+      class default
+         call log_event( "Can not initialise pressure preconditioner", &
+                         LOG_LEVEL_ERROR )
+      end select
+
+      ! Construct mass matrix solver
+      select type(mass_matrix_solver)
+      type is ( conjugate_gradient_type )
+         mass_matrix_solver = conjugate_gradient_type( mass_matrix_operator,       &
+                                                       mass_matrix_preconditioner, &
+                                                       tolerance,                  &
+                                                       solver_a_tol,               &
+                                                       maximum_iterations)
+      type is ( bicgstab_type )
+         mass_matrix_solver = bicgstab_type( mass_matrix_operator,       &
+                                             mass_matrix_preconditioner, &
+                                             tolerance,                  &
+                                             solver_a_tol,               &
+                                             maximum_iterations)
+      type is ( gmres_type )
+         mass_matrix_solver = gmres_type( mass_matrix_operator,       &
+                                          mass_matrix_preconditioner, &
+                                          gcrk,                       &
+                                          tolerance,                  &
+                                          solver_a_tol,               &
+                                          maximum_iterations)
+      type is ( fgmres_type )
+         mass_matrix_solver = fgmres_type( mass_matrix_operator,       &
+                                           mass_matrix_preconditioner, &
+                                           gcrk,                       &
+                                           tolerance,                  &
+                                           solver_a_tol,               &
+                                           maximum_iterations)
+      type is ( gcr_type )
+         mass_matrix_solver = gcr_type( mass_matrix_operator,       &
+                                        mass_matrix_preconditioner, &
+                                        gcrk,                       &
+                                        tolerance,                  &
+                                        solver_a_tol,               &
+                                        maximum_iterations)
+
+      type is ( precondition_only_type )
+         mass_matrix_solver = precondition_only_type( mass_matrix_operator,       &
+                                                      mass_matrix_preconditioner, &
+                                                      tolerance,                  &
+                                                      solver_a_tol,               &
+                                                      diagnostic_norm)
+      type is ( jacobi_type )
+         mass_matrix_solver = jacobi_type( mass_matrix_operator,       &
+                                           mass_matrix_preconditioner, &
+                                           tolerance,                  &
+                                           solver_a_tol,               &
+                                           maximum_iterations,         &
+                                           rho_relax = 0.5_r_def )
+      type is ( chebyshev_type )
+         call get_minmax_eigenvalues(lmin, lmax, fs)
+         mass_matrix_solver = chebyshev_type( mass_matrix_operator,       &
+                                              mass_matrix_preconditioner, &
+                                              tolerance,                  &
+                                              solver_a_tol,               &
+                                              maximum_iterations,         &
+                                              lmin, lmax,                 &
+                                              diagnostic_norm,            &
+                                              fixed_iterations)
+      class default
+         call log_event("Can not initialise mass matrix solver",LOG_LEVEL_ERROR)
+      end select
+      nullify(mass_matrix, mass_matrix_diagonal)
+
+      !=== Step routine ===!
+      call log_event( "Gungho: mass matrix solve:", LOG_LEVEL_INFO )
+      call invoke( setval_c(y, 0.0_r_def) )
+      vec_x = field_vector_type(1)
+      vec_y = field_vector_type(1)
+      call vec_x%import_field(x, 1)
+      call vec_y%import_field(y, 1)
+      call mass_matrix_solver%apply(vec_y, vec_x)
+      call vec_y%export_field(y, 1)
+
+    end if ! direct or iterative solve
+
+    !=== Final routine ===!
+    nullify( mass_matrix, mass_matrix_diagonal )
+    ! Deallocate mass matrix preconditioner object
+    if (allocated(mass_matrix_preconditioner)) then
+       deallocate(mass_matrix_preconditioner)
+    end if
+    ! Deallocate mass matrix solver object
+    if (allocated(mass_matrix_solver)) then
+       deallocate(mass_matrix_solver)
+    end if
+
+    if ( subroutine_timers ) call timer('mass_matrix_solver_alg')
+
+  end subroutine mass_matrix_solver_alg
+
+end module mass_matrix_solver_alg_mod

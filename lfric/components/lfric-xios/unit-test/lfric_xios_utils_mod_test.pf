@@ -1,0 +1,51 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2022 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> Test procedures in xios utils mod
+!>
+
+module lfric_xios_utils_mod_test
+
+    use xios,      only : xios_date
+    use pfunit_mod
+
+    implicit none
+
+    contains
+
+    @test
+    subroutine parse_date_as_xios_test()
+
+      use lfric_xios_utils_mod, only : parse_date_as_xios
+
+      implicit none
+
+      character(19)   :: simple_input
+      character(21)   :: long_input
+      type(xios_date) :: output
+
+      ! simple case
+      simple_input = "2022-03-24 10:32:47"
+      output = parse_date_as_xios( simple_input )
+      @assertEqual( output%year  , 2022 )
+      @assertEqual( output%month , 3    )
+      @assertEqual( output%day   , 24   )
+      @assertEqual( output%hour  , 10   )
+      @assertEqual( output%minute, 32   )
+      @assertEqual( output%second, 47   )
+
+      ! long year
+      long_input = "102022-04-25 11:33:48"
+      output = parse_date_as_xios( long_input )
+      @assertEqual( output%year  , 102022 )
+      @assertEqual( output%month , 4      )
+      @assertEqual( output%day   , 25     )
+      @assertEqual( output%hour  , 11     )
+      @assertEqual( output%minute, 33     )
+      @assertEqual( output%second, 48     )
+
+    end subroutine parse_date_as_xios_test
+
+  end module lfric_xios_utils_mod_test

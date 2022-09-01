@@ -1,0 +1,159 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the global_mesh_map module
+!>
+module global_mesh_map_mod_test
+
+  use pFUnit_Mod
+  use constants_mod,       only: r_def, i_def, imdi, str_max_filename
+  use global_mesh_map_mod, only: global_mesh_map_type
+
+  implicit none
+
+  private
+  public test_global_mesh_map, setUp, tearDown
+
+  @testCase
+  type, public, extends( TestCase ) :: global_mesh_map_test_type
+
+  contains
+    procedure :: setUp
+    procedure :: tearDown
+    procedure :: test_global_mesh_map
+  end type global_mesh_map_test_type
+
+  integer(i_def), parameter :: source_id  = 1
+  integer(i_def), parameter :: target_id  = 2
+  integer(i_def), parameter :: ncells_source = 4
+  integer(i_def), parameter :: ncells_target = 16
+  integer(i_def), parameter :: cell_ratio_SourceToTarget = 4
+  integer(i_def), parameter :: cell_ratio_x_SourceToTarget = 2
+  integer(i_def), parameter :: cell_ratio_y_SourceToTarget = 2
+  integer(i_def), parameter :: cell_ratio_TargetToSource = 1
+
+  integer(i_def) :: SourceToTarget_gid_map( 2, 2, 4  )
+  integer(i_def) :: TargetToSource_gid_map( 1, 1, 16 )
+
+
+contains
+
+  subroutine setup( this )
+
+    implicit none
+
+    class( global_mesh_map_test_type ), intent( inout ) :: this
+
+    SourceToTarget_gid_map =      &
+      reshape([  1,  2,  5,  6,   &! Map for Source Gid Cell 1
+                 3,  4,  7,  8,   &! Map for Source Gid Cell 2
+                 9, 10, 13, 14,   &! Map for Source Gid Cell 3
+                11, 12, 15, 16 ]  &! Map for Source Gid Cell 4
+              , [ cell_ratio_x_SourceToTarget, &
+                  cell_ratio_y_SourceToTarget, &
+                  ncells_source ] )
+
+    TargetToSource_gid_map =      &
+      reshape([ 1,   1,   2,  2,  &
+                1,   1,   2,  2,  &
+                3,   3,   4,  4,  &
+                3,   3,   4,  4 ] &
+              , [ cell_ratio_TargetToSource, &
+                  cell_ratio_TargetToSource, &
+                  ncells_target ] )
+
+  end subroutine setup
+
+  subroutine teardown( this )
+
+    implicit none
+
+    class( global_mesh_map_test_type ), intent( inout ) :: this
+
+  end subroutine teardown
+
+  !> Test global_mesh module functionality
+  !>
+  @test
+  subroutine test_global_mesh_map( this )
+
+
+    implicit none
+
+    class( global_mesh_map_test_type ), intent( inout ) :: this
+
+    type(global_mesh_map_type) :: tmp_map
+    type(global_mesh_map_type) :: CoarseToFine_map
+    type(global_mesh_map_type) :: FineToCoarse_map
+
+    integer(i_def), allocatable :: tmp_cell_list(:), tmp_gid_map(:,:,:)
+    integer(i_def) :: i
+
+
+
+    !---------------------------------------
+    ! Test construction of a global mesh map
+    !---------------------------------------
+
+    ! Check null action if you map global mesh to itself
+    tmp_map = global_mesh_map_type( source_id, source_id                      &
+                                  , SourceToTarget_gid_map )
+    @assertEqual(tmp_map%get_id(),imdi)
+
+
+    ! Check creation of maps in both directions
+    CoarseToFine_map = global_mesh_map_type( source_id, target_id             &
+                                           , SourceToTarget_gid_map )
+    FineToCoarse_map = global_mesh_map_type( target_id, source_id             &
+                                           , TargetToSource_gid_map )
+
+    @assertTrue(CoarseToFine_map%get_id() /= FineToCoarse_map%get_id())
+    @assertTrue(CoarseToFine_map%get_id() /= imdi)
+    @assertTrue(FineToCoarse_map%get_id() /= imdi)
+
+    ! Check components of CoarseToFine map
+    @assertEqual( source_id,                 CoarseToFine_map%get_source_id()    )
+    @assertEqual( target_id,                 CoarseToFine_map%get_target_id()    )
+    @assertEqual( ncells_source,             CoarseToFine_map%get_nsource_cells())
+    @assertEqual( cell_ratio_SourceToTarget, CoarseToFine_map%get_ntarget_cells_per_source_cell() )
+
+    ! Check for gid_map
+    allocate(tmp_cell_list(2))
+    allocate(tmp_gid_map(2,2,2))
+
+    tmp_cell_list = [1,4]
+    tmp_gid_map(:,:,:) = imdi
+
+    call CoarseToFine_map%get_cell_map(tmp_cell_list, tmp_gid_map)
+    do i=1, 2
+      @assertEqual( tmp_gid_map(:,:,i), SourceToTarget_gid_map(:,:,tmp_cell_list(i) ) )
+    end do
+
+    deallocate (tmp_cell_list, tmp_gid_map)
+
+    ! Check components of FineToCoarse map
+    @assertEqual( target_id,                 FineToCoarse_map%get_source_id()    )
+    @assertEqual( source_id,                 FineToCoarse_map%get_target_id()    )
+    @assertEqual( ncells_target,             FineToCoarse_map%get_nsource_cells())
+    @assertEqual( cell_ratio_TargetToSource, FineToCoarse_map%get_ntarget_cells_per_source_cell() )
+
+    ! Check for gid_map
+    allocate(tmp_cell_list(6))
+    allocate(tmp_gid_map(1,1,6))
+
+    tmp_cell_list = [1, 3, 4, 10, 9, 7]
+    tmp_gid_map(:,:,:) = imdi
+
+    call FineToCoarse_map%get_cell_map(tmp_cell_list, tmp_gid_map)
+    do i=1, 6
+      @assertEqual( tmp_gid_map(:,:,i), TargetToSource_gid_map(:,:,tmp_cell_list(i)) )
+    end do
+
+    deallocate (tmp_cell_list, tmp_gid_map)
+
+  end subroutine test_global_mesh_map
+
+end module global_mesh_map_mod_test

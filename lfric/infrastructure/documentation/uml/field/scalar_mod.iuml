@@ -1,0 +1,31 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class scalar_mod::scalar_type {
+}
+
+class scalar_r32_mod::scalar_r32_type {
+  +value : real32
+
+  <<create>>+scalar_constructor( <<in>>value:real ) : scalar_type
+
+  +get_sum() : real32
+  +get_min() : real32
+  +get_max() : real32
+  +reduction_finish()
+}
+
+class scalar_r64_mod::scalar_r64_type {
+  +value : real64
+
+  <<create>>+scalar_constructor( <<in>>value:real ) : scalar_type
+
+  +get_sum() : real64
+  +get_min() : real64
+  +get_max() : real64
+  +reduction_finish()
+}
+
+scalar_mod::scalar_type -- scalar_r32_mod::scalar_r32_type
+scalar_mod::scalar_type -- scalar_r64_mod::scalar_r64_type

@@ -1,0 +1,948 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+!> @brief pFunit tests for the mesh module.
+!>
+module mesh_mod_test
+
+  use constants_mod,        only: r_def, i_def, PI, str_max_filename, str_def
+  use coord_transform_mod,  only: llr2xyz
+  use extrusion_mod,        only: uniform_extrusion_type, PRIME_EXTRUSION
+  use global_mesh_collection_mod,                              &
+                            only: global_mesh_collection_type, &
+                                  global_mesh_collection
+  use global_mesh_mod,      only: global_mesh_type
+  use halo_comms_mod,       only: initialise_halo_comms, &
+                                  finalise_halo_comms
+  use partition_mod,        only: partition_type
+  use local_mesh_collection_mod, &
+                            only: local_mesh_collection_type, &
+                                  local_mesh_collection
+  use local_mesh_mod,       only: local_mesh_type
+  use mesh_mod,             only: mesh_type
+  use mesh_collection_mod,  only: mesh_collection_type, &
+                                  mesh_collection
+  use mesh_map_mod,         only: mesh_map_type
+  use mesh_map_collection_mod, &
+                            only: mesh_map_collection_type
+  use mesh_constructor_helper_functions_mod, &
+                            only: domain_size_type
+  use ncdf_quad_mod,        only: ncdf_quad_type
+  use pFUnit_Mod
+
+  use partition_mod,        only: partition_type,                   &
+                                  partitioner_interface,            &
+                                  partitioner_cubedsphere_serial
+  use mpi_mod,              only: store_comm, clear_comm
+  use ugrid_mesh_data_mod,  only: ugrid_mesh_data_type
+
+  implicit none
+
+  private
+  public :: mesh_test_type,                                          &
+            test_get_scalar,   test_get_integer,  test_get_boolean,  &
+            test_get_1d_array, test_get_2d_array, test_get_3d_array, &
+            test_get_domain,                                         &
+            test_get_local_mesh, test_mesh_map_retrieval
+
+  @testCase
+  type, extends( MPITestCase ) :: mesh_test_type
+    private
+    type(global_mesh_type), pointer :: global_mesh => null()
+    type(partition_type)            :: partition
+    type(local_mesh_type)           :: local_mesh
+    type(uniform_extrusion_type)    :: extrusion
+  contains
+    procedure :: setUp
+    procedure :: tearDown
+    procedure :: get_local_mesh_ptr
+    procedure :: test_get_scalar
+    procedure :: test_get_1d_array
+    procedure :: test_get_2d_array
+    procedure :: test_get_3d_array
+    procedure :: test_get_local_mesh
+    procedure :: test_mesh_map_retrieval
+
+  end type mesh_test_type
+
+  character(str_def), parameter :: mesh_name = 'unit_test'
+  integer(i_def),     parameter :: nlayers    = 5_i_def
+  real(r_def),        parameter :: domain_top = 10000.0_r_def
+
+  real(r_def), parameter :: gravity  = 10.0_r_def
+  real(r_def), parameter :: radius   = 6371229.0_r_def
+  real(r_def), parameter :: omega    = 8.0E-5_r_def
+  real(r_def), parameter :: p_zero   = 100000.0_r_def
+  real(r_def), parameter :: rd       = 300.0_r_def
+  real(r_def), parameter :: cp       = 1000.0_r_def
+  real(r_def), parameter :: scaling  = 125.0_r_def
+
+  character(str_max_filename), parameter :: filename = &
+                                     'data/mesh_C32_MG.nc'
+  character(str_def), parameter :: mesh_names(2) = &
+                                    [ character(str_def) :: 'C4',  &! 4x4 panel
+                                                            'C8']   ! 8x8 panel
+
+  character(str_def), parameter :: source_mesh_name = 'C4'
+  character(str_def), parameter :: target_mesh_name = 'C8'
+
+  integer(i_def), parameter :: CoarseToFineMap(2,2,96) = reshape( &
+      [   1,    2,   9,    10,            3,    4,   11,   12,  &
+          5,    6,   13,   14,            7,    8,   15,   16,  &
+         17,   18,   25,   26,           19,   20,   27,   28,  &
+         21,   22,   29,   30,           23,   24,   31,   32,  &
+         33,   34,   41,   42,           35,   36,   43,   44,  &
+         37,   38,   45,   46,           39,   40,   47,   48,  &
+         49,   50,   57,   58,           51,   52,   59,   60,  &
+         53,   54,   61,   62,           55,   56,   63,   64,  &
+         65,   66,   73,   74,           67,   68,   75,   76,  &
+         69,   70,   77,   78,           71,   72,   79,   80,  &
+         81,   82,   89,   90,           83,   84,   91,   92,  &
+         85,   86,   93,   94,           87,   88,   95,   96,  &
+         97,   98,  105,  106,           99,  100,  107,  108,  &
+        101,  102,  109,  110,          103,  104,  111,  112,  &
+        113,  114,  121,  122,          115,  116,  123,  124,  &
+        117,  118,  125,  126,          119,  120,  127,  128,  &
+        137,  129,  138,  130,          139,  131,  140,  132,  &
+        141,  133,  142,  134,          143,  135,  144,  136,  &
+        153,  145,  154,  146,          155,  147,  156,  148,  &
+        157,  149,  158,  150,          159,  151,  160,  152,  &
+        169,  161,  170,  162,          171,  163,  172,  164,  &
+        173,  165,  174,  166,          175,  167,  176,  168,  &
+        185,  177,  186,  178,          187,  179,  188,  180,  &
+        189,  181,  190,  182,          191,  183,  192,  184,  &
+        201,  193,  202,  194,          203,  195,  204,  196,  &
+        205,  197,  206,  198,          207,  199,  208,  200,  &
+        217,  209,  218,  210,          219,  211,  220,  212,  &
+        221,  213,  222,  214,          223,  215,  224,  216,  &
+        233,  225,  234,  226,          235,  227,  236,  228,  &
+        237,  229,  238,  230,          239,  231,  240,  232,  &
+        249,  241,  250,  242,          251,  243,  252,  244,  &
+        253,  245,  254,  246,          255,  247,  256,  248,  &
+        258,  266,  257,  265,          260,  268,  259,  267,  &
+        262,  270,  261,  269,          264,  272,  263,  271,  &
+        274,  282,  273,  281,          276,  284,  275,  283,  &
+        278,  286,  277,  285,          280,  288,  279,  287,  &
+        290,  298,  289,  297,          292,  300,  291,  299,  &
+        294,  302,  293,  301,          296,  304,  295,  303,  &
+        306,  314,  305,  313,          308,  316,  307,  315,  &
+        310,  318,  309,  317,          312,  320,  311,  319,  &
+        321,  322,  329,  330,          323,  324,  331,  332,  &
+        325,  326,  333,  334,          327,  328,  335,  336,  &
+        337,  338,  345,  346,          339,  340,  347,  348,  &
+        341,  342,  349,  350,          343,  344,  351,  352,  &
+        353,  354,  361,  362,          355,  356,  363,  364,  &
+        357,  358,  365,  366,          359,  360,  367,  368,  &
+        369,  370,  377,  378,          371,  372,  379,  380,  &
+        373,  374,  381,  382,          375,  376,  383,  384 ], (/2,2,96/))
+
+  integer(i_def), parameter :: FineToCoarseMap(1,1,384) = reshape(            &
+    [ 1,  1,  2,  2,  3,  3,  4,  4,  1,  1,  2,  2,  3,  3,  4,  4,  5,  5,  &
+      6,  6,  7,  7,  8,  8,  5,  5,  6,  6,  7,  7,  8,  8,  9,  9,  10, 10, &
+      11, 11, 12, 12, 9,  9,  10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, &
+      16, 16, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, &
+      17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 22, 22, 23, 23, 24, 24, 21, 21, &
+      22, 22, 23, 23, 24, 24, 25, 25, 26, 26, 27, 27, 28, 28, 25, 25, 26, 26, &
+      27, 27, 28, 28, 29, 29, 30, 30, 31, 31, 32, 32, 29, 29, 30, 30, 31, 31, &
+      32, 32, 33, 33, 34, 34, 35, 35, 36, 36, 33, 33, 34, 34, 35, 35, 36, 36, &
+      37, 37, 38, 38, 39, 39, 40, 40, 37, 37, 38, 38, 39, 39, 40, 40, 41, 41, &
+      42, 42, 43, 43, 44, 44, 41, 41, 42, 42, 43, 43, 44, 44, 45, 45, 46, 46, &
+      47, 47, 48, 48, 45, 45, 46, 46, 47, 47, 48, 48, 49, 49, 50, 50, 51, 51, &
+      52, 52, 49, 49, 50, 50, 51, 51, 52, 52, 53, 53, 54, 54, 55, 55, 56, 56, &
+      53, 53, 54, 54, 55, 55, 56, 56, 57, 57, 58, 58, 59, 59, 60, 60, 57, 57, &
+      58, 58, 59, 59, 60, 60, 61, 61, 62, 62, 63, 63, 64, 64, 61, 61, 62, 62, &
+      63, 63, 64, 64, 65, 65, 66, 66, 67, 67, 68, 68, 65, 65, 66, 66, 67, 67, &
+      68, 68, 69, 69, 70, 70, 71, 71, 72, 72, 69, 69, 70, 70, 71, 71, 72, 72, &
+      73, 73, 74, 74, 75, 75, 76, 76, 73, 73, 74, 74, 75, 75, 76, 76, 77, 77, &
+      78, 78, 79, 79, 80, 80, 77, 77, 78, 78, 79, 79, 80, 80, 81, 81, 82, 82, &
+      83, 83, 84, 84, 81, 81, 82, 82, 83, 83, 84, 84, 85, 85, 86, 86, 87, 87, &
+      88, 88, 85, 85, 86, 86, 87, 87, 88, 88, 89, 89, 90, 90, 91, 91, 92, 92, &
+      89, 89, 90, 90, 91, 91, 92, 92, 93, 93, 94, 94, 95, 95, 96, 96, 93, 93, &
+      94, 94, 95, 95, 96, 96 ], (/1,1,384/) )
+
+
+
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class( mesh_test_type ), intent( inout ) :: this
+
+    integer(i_def) :: global_mesh_id
+    real(r_def)    :: scaled_radius
+
+    !Store the MPI communicator for later use
+    call store_comm(this%getMpiCommunicator())
+    ! Initialise halo functionality
+    call initialise_halo_comms( this%getMpiCommunicator() )
+
+    global_mesh_collection = global_mesh_collection_type()
+    local_mesh_collection  = local_mesh_collection_type()
+    global_mesh_id = global_mesh_collection%add_unit_test_global_mesh()
+
+    this%global_mesh => global_mesh_collection%get_global_mesh(global_mesh_id)
+    this%partition   =  partition_type()
+
+    call this%local_mesh%initialise( this%global_mesh, this%partition )
+    call this%local_mesh%init_cell_owner()
+
+    scaled_radius = radius/scaling
+    this%extrusion = uniform_extrusion_type( scaled_radius, domain_top, &
+                                             nlayers, PRIME_EXTRUSION )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class( mesh_test_type ), intent( inout ) :: this
+
+    call global_mesh_collection%clear()
+    call local_mesh_collection%clear()
+
+    ! Finalise halo functionality
+    call finalise_halo_comms()
+    ! Clear the stored MPI communicator
+    call clear_comm()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  function get_local_mesh_ptr(this) result(local_mesh_ptr)
+    implicit none
+    class(mesh_test_type), intent(inout), target :: this
+    type(local_mesh_type), pointer :: local_mesh_ptr
+    local_mesh_ptr => this%local_mesh
+  end function get_local_mesh_ptr
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  @Test( npes=[1] )
+  subroutine test_get_scalar( this )
+
+    implicit none
+
+    class( mesh_test_type ), intent( inout ) :: this
+
+    type (mesh_type) :: mesh_1
+    type(local_mesh_type), pointer :: local_mesh_ptr
+
+    integer(i_def) :: test_integer
+
+    local_mesh_ptr => this%get_local_mesh_ptr()
+
+    mesh_1 = mesh_type( local_mesh_ptr, this%extrusion )
+
+    !-------------------------------------------------------------------
+    ! Test get_nlayers
+    test_integer = mesh_1%get_nlayers()
+    @assertEqual ( 5, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_ncells_2d
+    test_integer = mesh_1%get_ncells_2d()
+    @assertEqual ( 9, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_ncells_2d_with_ghost
+    test_integer = mesh_1%get_ncells_2d_with_ghost()
+    @assertEqual ( 9, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nverts_2d
+    test_integer = mesh_1%get_nverts_2d()
+    @assertEqual ( 16, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_num_verts_owned_2d
+    test_integer = mesh_1%get_num_verts_owned_2d()
+    @assertEqual ( 16, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nedges_2d
+    test_integer = mesh_1%get_nedges_2d()
+    @assertEqual ( 24, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_num_edges_owned_2d
+    test_integer = mesh_1%get_num_edges_owned_2d()
+    @assertEqual ( 24, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_ncells
+    test_integer = mesh_1%get_ncells()
+    @assertEqual ( 45, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nverts
+    test_integer = mesh_1%get_nverts()
+    @assertEqual ( 96, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nedges
+    test_integer = mesh_1%get_nedges()
+    @assertEqual ( 224, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nfaces
+    test_integer = mesh_1%get_nfaces()
+    @assertEqual ( 174, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nverts_per_cell
+    test_integer = mesh_1%get_nverts_per_cell()
+    @assertEqual ( 8, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nverts_per_cell_2d
+    test_integer = mesh_1%get_nverts_per_cell_2d()
+    @assertEqual ( 4, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nedges_per_cell
+    test_integer = mesh_1%get_nedges_per_cell()
+    @assertEqual ( 12, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nedges_per_cell_2d
+    test_integer = mesh_1%get_nedges_per_cell_2d()
+    @assertEqual ( 4, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nfaces_per_cell
+    test_integer = mesh_1%get_nfaces_per_cell()
+    @assertEqual ( 6, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_cell_next()
+    test_integer = mesh_1%get_cell_next( 6, 23 )
+    @assertEqual ( 32, test_integer )
+
+    test_integer = mesh_1%get_cell_next( 3, 9 )
+    @assertEqual ( 0, test_integer )
+
+    test_integer = mesh_1%get_cell_next( 3, 18 )
+    @assertEqual ( 0, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_face_on_cell()
+    test_integer = mesh_1%get_face_on_cell( 3, 9 )
+    @assertEqual ( 39, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_vert_on_cell()
+    test_integer = mesh_1%get_vert_on_cell( 2, 7 )
+    @assertEqual ( 9, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_edge_on_cell()
+    test_integer = mesh_1%get_edge_on_cell( 1, 5 )
+    @assertEqual ( 31, test_integer )
+
+    test_integer = mesh_1%get_edge_on_cell( 5, 5 )
+    @assertEqual ( 11, test_integer )
+
+    test_integer = mesh_1%get_edge_on_cell( 9, 5 )
+    @assertEqual ( 32, test_integer )
+
+    test_integer = mesh_1%get_edge_on_cell( 12, 5 )
+    @assertEqual ( 40, test_integer )
+
+    test_integer = mesh_1%get_edge_on_cell( 6, 9 )
+    @assertEqual ( 46, test_integer )
+
+  end subroutine test_get_scalar
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_get_1d_array( this )
+
+    implicit none
+
+    class( mesh_test_type ), intent( inout ) :: this
+
+    type (mesh_type) :: mesh_1
+    type(local_mesh_type), pointer :: local_mesh_ptr
+
+    real(r_def) :: test_real_array1(3)
+    real(r_def) :: test_real_array2(3)
+
+    local_mesh_ptr => this%get_local_mesh_ptr()
+
+    mesh_1 = mesh_type( local_mesh_ptr, this%extrusion )
+
+    !-------------------------------------------------------------------
+    ! Test get_vert_coords
+    ! Note: Returns coords in cartesian coords [x,y,z]
+    ! Test multiple vertices
+    test_real_array2(:) = [  14879.4488_r_def, -23173.3685_r_def, -42889.6347_r_def ]
+    call mesh_1%get_vert_coords(3, test_real_array1)
+    @assertEqual ( test_real_array2, test_real_array1, 1.0e-2_r_def )
+
+    test_real_array2(:) = [ -11460.3167_r_def, -25041.2489_r_def, -42889.6347_r_def ]
+    call mesh_1%get_vert_coords(4, test_real_array1)
+    @assertEqual ( test_real_array2, test_real_array1, 1.0e-2_r_def )
+
+    test_real_array2(:) = [   8826.8632_r_def, -19287.0480_r_def, -46346.7371_r_def ]
+    call mesh_1%get_vert_coords(7, test_real_array1)
+    @assertEqual ( test_real_array2, test_real_array1, 1.0e-2_r_def )
+
+    test_real_array2(:) = [ -11460.3167_r_def, -25041.2489_r_def,  42889.6347_r_def ]
+    call mesh_1%get_vert_coords(10, test_real_array1)
+    @assertEqual ( test_real_array2, test_real_array1, 1.0e-2_r_def )
+
+    test_real_array2(:) = [   8826.8632_r_def, -19287.0480_r_def,  46346.7371_r_def ]
+    call mesh_1%get_vert_coords(16, test_real_array1)
+    @assertEqual ( test_real_array2, test_real_array1, 1.0e-2_r_def )
+
+    test_real_array2(:) = [   9173.2196_r_def,  20043.8505_r_def, -48165.3319_r_def ]
+    call mesh_1%get_vert_coords(17, test_real_array1)
+    @assertEqual ( test_real_array2, test_real_array1, 1.0e-2_r_def )
+
+    test_real_array2(:) = [  15463.3020_r_def,  24082.6660_r_def, -44572.5767_r_def ]
+    call mesh_1%get_vert_coords(22, test_real_array1)
+    @assertEqual ( test_real_array2, test_real_array1, 1.0e-2_r_def )
+
+    test_real_array2(:) = [ -11910.0069_r_def,  26023.8399_r_def, -44572.5767_r_def ]
+    call mesh_1%get_vert_coords(24, test_real_array1)
+    @assertEqual ( test_real_array2, test_real_array1, 1.0e-2_r_def )
+
+  end subroutine test_get_1d_array
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_get_2d_array( this )
+
+    implicit none
+
+    class( mesh_test_type ), intent( inout ) :: this
+
+    type (mesh_type) :: mesh_1
+    type(local_mesh_type), pointer :: local_mesh_ptr
+
+    integer(i_def), pointer :: adjacency(:,:) => null()
+
+    real(r_def) :: test_real_array1_2d(3,8)
+    real(r_def) :: test_real_array2_2d(3,8)
+
+    local_mesh_ptr => this%get_local_mesh_ptr()
+
+    mesh_1 = mesh_type( local_mesh_ptr, this%extrusion )
+    !-------------------------------------------------------------------
+    ! Test get_cell_coords
+    ! Note: Returns coords in cartesian coords [x,y,z]
+    ! Test a couple of cell ids
+    test_real_array2_2d(:,1) = [   9865.9324_r_def,  21557.4555_r_def, -51802.5216_r_def ]
+    test_real_array2_2d(:,2) = [ -12809.3873_r_def,  19949.4387_r_def, -51802.5216_r_def ]
+    test_real_array2_2d(:,3) = [  16631.0083_r_def, -25901.2608_r_def, -47938.4606_r_def ]
+    test_real_array2_2d(:,4) = [ -12809.3873_r_def, -27989.0219_r_def, -47938.4606_r_def ]
+    test_real_array2_2d(:,5) = [  10212.2887_r_def,  22314.2580_r_def, -53621.1165_r_def ]
+    test_real_array2_2d(:,6) = [ -13259.0775_r_def,  20649.7897_r_def, -53621.1165_r_def ]
+    test_real_array2_2d(:,7) = [  17214.8615_r_def, -26810.5582_r_def, -49621.4026_r_def ]
+    test_real_array2_2d(:,8) = [ -13259.0775_r_def, -28971.6129_r_def ,-49621.4026_r_def ]
+
+    call mesh_1%get_cell_coords(28, test_real_array1_2d)
+    @assertEqual ( test_real_array2_2d, test_real_array1_2d, 1.0e-2_r_def )
+
+
+    test_real_array2_2d(:,1) = [  16047.1552_r_def, -24991.9634_r_def, -46255.5187_r_def ]
+    test_real_array2_2d(:,2) = [  16047.1552_r_def,  24991.9634_r_def, -46255.5187_r_def ]
+    test_real_array2_2d(:,3) = [  16047.1552_r_def,  24991.9634_r_def,  46255.5187_r_def ]
+    test_real_array2_2d(:,4) = [  16047.1552_r_def, -24991.9634_r_def,  46255.5187_r_def ]
+    test_real_array2_2d(:,5) = [  16631.0083_r_def, -25901.2608_r_def, -47938.4606_r_def ]
+    test_real_array2_2d(:,6) = [  16631.0083_r_def,  25901.2608_r_def, -47938.4606_r_def ]
+    test_real_array2_2d(:,7) = [  16631.0083_r_def,  25901.2608_r_def,  47938.4606_r_def ]
+    test_real_array2_2d(:,8) = [  16631.0083_r_def, -25901.2608_r_def , 47938.4606_r_def ]
+
+    call mesh_1%get_cell_coords(23, test_real_array1_2d)
+    @assertEqual ( test_real_array2_2d, test_real_array1_2d, 1.0e-2_r_def )
+
+    adjacency => mesh_1%get_adjacent_face()
+    @assertEqual ( 3, adjacency(1,5) )
+    @assertEqual ( 4, adjacency(2,5) )
+    @assertEqual ( 1, adjacency(3,5) )
+    @assertEqual ( 2, adjacency(4,5) )
+
+  end subroutine test_get_2d_array
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_get_3d_array( this )
+
+    implicit none
+
+    class( mesh_test_type ), intent( inout ) :: this
+
+    type (mesh_type) :: mesh_1
+    type(local_mesh_type), pointer :: local_mesh_ptr
+
+    real(r_def) :: test_real_array1_3d(3,8,5)
+    real(r_def) :: test_real_array2_3d(3,8,5)
+
+    local_mesh_ptr => this%get_local_mesh_ptr()
+
+    mesh_1 = mesh_type( local_mesh_ptr, this%extrusion )
+
+    !-------------------------------------------------------------------
+    ! Test get_column_coords
+    ! Note: Returns coords in cartesian coords [x,y,z]
+    ! Test two cells in the same column, they should return the same
+    ! column of coords
+    test_real_array2_3d(:,1,1) = [ -11460.3167_r_def, -25041.2489_r_def,  42889.6347_r_def ]
+    test_real_array2_3d(:,2,1) = [  14879.4488_r_def, -23173.3685_r_def,  42889.6347_r_def ]
+    test_real_array2_3d(:,3,1) = [ -11460.3167_r_def,  17848.3858_r_def,  46346.7371_r_def ]
+    test_real_array2_3d(:,4,1) = [   8826.8632_r_def,  19287.0480_r_def,  46346.7371_r_def ]
+    test_real_array2_3d(:,5,1) = [ -11910.0069_r_def, -26023.8399_r_def,  44572.5767_r_def ]
+    test_real_array2_3d(:,6,1) = [  15463.3020_r_def, -24082.6660_r_def,  44572.5767_r_def ]
+    test_real_array2_3d(:,7,1) = [ -11910.0069_r_def,  18548.7368_r_def,  48165.3319_r_def ]
+    test_real_array2_3d(:,8,1) = [   9173.2196_r_def,  20043.8505_r_def,  48165.3319_r_def ]
+
+    test_real_array2_3d(:,1,2) = [ -11910.0069_r_def, -26023.8399_r_def,  44572.5767_r_def ]
+    test_real_array2_3d(:,2,2) = [  15463.3020_r_def, -24082.6660_r_def,  44572.5767_r_def ]
+    test_real_array2_3d(:,3,2) = [ -11910.0069_r_def,  18548.7368_r_def,  48165.3319_r_def ]
+    test_real_array2_3d(:,4,2) = [   9173.2196_r_def,  20043.8505_r_def,  48165.3319_r_def ]
+    test_real_array2_3d(:,5,2) = [ -12359.6971_r_def, -27006.4309_r_def,  46255.5187_r_def ]
+    test_real_array2_3d(:,6,2) = [  16047.1552_r_def, -24991.9634_r_def,  46255.5187_r_def ]
+    test_real_array2_3d(:,7,2) = [ -12359.6971_r_def,  19249.0878_r_def,  49983.9268_r_def ]
+    test_real_array2_3d(:,8,2) = [   9519.5760_r_def,  20800.6530_r_def,  49983.9268_r_def ]
+
+    test_real_array2_3d(:,1,3) = [ -12359.6971_r_def, -27006.4309_r_def,  46255.5187_r_def ]
+    test_real_array2_3d(:,2,3) = [  16047.1552_r_def, -24991.9634_r_def,  46255.5187_r_def ]
+    test_real_array2_3d(:,3,3) = [ -12359.6971_r_def,  19249.0878_r_def,  49983.9268_r_def ]
+    test_real_array2_3d(:,4,3) = [   9519.5760_r_def,  20800.6530_r_def,  49983.9268_r_def ]
+    test_real_array2_3d(:,5,3) = [ -12809.3873_r_def, -27989.0219_r_def,  47938.4606_r_def ]
+    test_real_array2_3d(:,6,3) = [  16631.0083_r_def, -25901.2608_r_def,  47938.4606_r_def ]
+    test_real_array2_3d(:,7,3) = [ -12809.3873_r_def,  19949.4387_r_def,  51802.5216_r_def ]
+    test_real_array2_3d(:,8,3) = [   9865.9324_r_def,  21557.4555_r_def,  51802.5216_r_def ]
+
+    test_real_array2_3d(:,1,4) = [ -12809.3873_r_def, -27989.0219_r_def,  47938.4606_r_def ]
+    test_real_array2_3d(:,2,4) = [  16631.0083_r_def, -25901.2608_r_def,  47938.4606_r_def ]
+    test_real_array2_3d(:,3,4) = [ -12809.3873_r_def,  19949.4387_r_def,  51802.5216_r_def ]
+    test_real_array2_3d(:,4,4) = [   9865.9324_r_def,  21557.4555_r_def,  51802.5216_r_def ]
+    test_real_array2_3d(:,5,4) = [ -13259.0775_r_def, -28971.6129_r_def,  49621.4026_r_def ]
+    test_real_array2_3d(:,6,4) = [  17214.8615_r_def, -26810.5582_r_def,  49621.4026_r_def ]
+    test_real_array2_3d(:,7,4) = [ -13259.0775_r_def,  20649.7897_r_def,  53621.1165_r_def ]
+    test_real_array2_3d(:,8,4) = [  10212.2887_r_def,  22314.2580_r_def,  53621.1165_r_def ]
+
+    test_real_array2_3d(:,1,5) = [ -13259.0775_r_def, -28971.6129_r_def,  49621.4026_r_def ]
+    test_real_array2_3d(:,2,5) = [  17214.8615_r_def, -26810.5582_r_def,  49621.4026_r_def ]
+    test_real_array2_3d(:,3,5) = [ -13259.0775_r_def,  20649.7897_r_def,  53621.1165_r_def ]
+    test_real_array2_3d(:,4,5) = [  10212.2887_r_def,  22314.2580_r_def,  53621.1165_r_def ]
+    test_real_array2_3d(:,5,5) = [ -13708.7677_r_def, -29954.2039_r_def,  51304.3446_r_def ]
+    test_real_array2_3d(:,6,5) = [  17798.7146_r_def, -27719.8557_r_def,  51304.3446_r_def ]
+    test_real_array2_3d(:,7,5) = [ -13708.7677_r_def,  21350.1407_r_def,  55439.7114_r_def ]
+    test_real_array2_3d(:,8,5) = [  10558.6451_r_def,  23071.0605_r_def,  55439.7114_r_def ]
+
+    call mesh_1%get_column_coords(7, test_real_array1_3d)
+    @assertEqual ( test_real_array2_3d, test_real_array1_3d, 1.0e-2_r_def )
+
+    call mesh_1%get_column_coords(43, test_real_array1_3d)
+    @assertEqual ( test_real_array2_3d, test_real_array1_3d, 1.0e-2_r_def )
+
+  end subroutine test_get_3d_array
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_get_integer( this )
+
+    implicit none
+
+    class( mesh_test_type ), intent( inout ) :: this
+
+    type (mesh_type) :: mesh_1
+    type(local_mesh_type), pointer :: local_mesh_ptr
+
+    integer(i_def) :: test_integer
+
+    local_mesh_ptr => this%get_local_mesh_ptr()
+
+    mesh_1 = mesh_type( local_mesh_ptr, this%extrusion )
+
+     !-------------------------------------------------------------------
+    ! Test get_vert_cell_owner
+    test_integer=mesh_1%get_vertex_cell_owner(2,4)
+    @assertEqual( 5, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_edge_cell_owner
+    test_integer=mesh_1%get_edge_cell_owner(4,4)
+    @assertEqual( 7, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test inner halo cell information
+    test_integer=mesh_1%get_inner_depth()
+    @assertEqual( 1, test_integer )
+
+    test_integer=mesh_1%get_num_cells_inner(1)
+    @assertEqual( 9, test_integer )
+
+    test_integer=mesh_1%get_last_inner_cell(1)
+    @assertEqual( 9, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test edge cell information
+    test_integer=( mesh_1%get_num_cells_edge() )
+    @assertEqual( 0, test_integer )
+
+    test_integer=( mesh_1%get_last_edge_cell() )
+    @assertEqual( 9, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test halo information
+    test_integer=( mesh_1%get_halo_depth() )
+    @assertEqual( 3, test_integer )
+
+    test_integer=( mesh_1%get_num_cells_halo( 1 ) )
+    @assertEqual( 0, test_integer )
+
+    test_integer=mesh_1%get_last_halo_cell( 1 )
+    @assertEqual( 9, test_integer )
+
+    test_integer=mesh_1%get_last_halo_cell( )
+    @assertEqual( 9, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_num_cells_ghost
+    test_integer=( mesh_1%get_num_cells_ghost() )
+    @assertEqual( 0, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_gid_from_lid
+    test_integer=( mesh_1%get_gid_from_lid( 1 ) )
+    @assertEqual( 1, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_extrusion_id
+    test_integer=( mesh_1%get_extrusion_id() )
+    @assertEqual( PRIME_EXTRUSION, test_integer )
+
+  end subroutine test_get_integer
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_get_boolean( this )
+
+    implicit none
+
+    class( mesh_test_type ), intent( inout ) :: this
+
+    type(mesh_type)     :: mesh_1
+    type(local_mesh_type), pointer :: local_mesh_ptr
+
+    local_mesh_ptr => this%get_local_mesh_ptr()
+
+    mesh_1 = mesh_type( local_mesh_ptr, this%extrusion )
+
+    !-------------------------------------------------------------------
+    ! Test is_vertex_owned
+    @assertTrue( mesh_1%is_vertex_owned(1,1) )
+
+    !-------------------------------------------------------------------
+    ! Test is_edge_owned
+    @assertTrue( mesh_1%is_edge_owned(1,1) )
+
+    !-------------------------------------------------------------------
+    ! Test is_vertex_owned
+    @assertTrue( mesh_1%is_vertex_owned(1,1) )
+
+  end subroutine test_get_boolean
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_get_domain( this )
+
+    implicit none
+
+    class( mesh_test_type ), intent( inout ) :: this
+
+    type(mesh_type)     :: mesh_1
+    type(local_mesh_type), pointer :: local_mesh_ptr
+    type(domain_size_type) :: domain
+    real(r_def)         :: test_real
+
+    local_mesh_ptr => this%get_local_mesh_ptr()
+
+    mesh_1 = mesh_type( local_mesh_ptr, this%extrusion )
+
+    !-------------------------------------------------------------------
+    ! Test get_domain_size
+    ! Note: At present, it returns coords in cartesian coords [x,y,z]
+    !       or in spherical coords depending on the logical l_spherical.
+    !       This should be change to only output in [x,y,z]
+    domain = mesh_1%get_domain_size()
+    test_real = domain % maximum % x
+    @assertEqual ( test_real,  2.0_r_def*PI )
+    test_real = domain % minimum % y
+    @assertEqual ( test_real, -0.5_r_def*PI )
+    test_real = domain % maximum % z
+    @assertEqual ( test_real, 10000.0_r_def )
+
+    !-------------------------------------------------------------------
+    ! Test get_domain_top
+    test_real = mesh_1%get_domain_top()
+    @assertEqual ( test_real, domain_top, 1.0e-2_r_def )
+
+  end subroutine test_get_domain
+
+
+!==============================================================================
+  @Test( npes=[1] )
+  subroutine test_get_local_mesh( this )
+
+    implicit none
+
+    class( mesh_test_type ), intent( inout ) :: this
+    type(mesh_type)      :: mesh_1
+    type(local_mesh_type), pointer :: local_mesh_ptr => null()
+    type(local_mesh_type), pointer :: test_local_mesh => null()
+
+    local_mesh_ptr => this%get_local_mesh_ptr()
+
+    mesh_1 = mesh_type( local_mesh_ptr, this%extrusion )
+
+
+    test_local_mesh => mesh_1%get_local_mesh()
+
+    ! Check the returned pointer to a local mesh is the same as the
+    ! one the mesh was created from
+    @assertTrue( associated(test_local_mesh, local_mesh_ptr) )
+
+  end subroutine test_get_local_mesh
+
+
+!==============================================================================
+  @Test( npes=[1] )
+  subroutine test_mesh_map_retrieval( this)
+    use ncdf_quad_mod,     only: ncdf_quad_type
+
+    implicit none
+
+    class( mesh_test_type ), intent( inout ) :: this
+
+    type(ugrid_mesh_data_type) :: ugrid_mesh_data
+
+
+    integer(i_def) :: mesh_map_id
+    integer(i_def) :: test_integer
+
+    ! Global meshes
+    type(global_mesh_type)          :: global_mesh
+    type(global_mesh_type), pointer :: global_mesh_ptr => null()
+
+    ! Local meshes
+    type(local_mesh_type)          :: local_mesh
+    type(local_mesh_type), pointer :: source_local_mesh_ptr
+    type(local_mesh_type), pointer :: target_local_mesh_ptr
+    integer(i_def) :: local_mesh_id
+    integer(i_def) :: target_local_mesh_id
+
+    ! Partitioned meshes
+    type(mesh_type) :: mesh
+    type(mesh_type), pointer :: source_mesh_ptr => null()
+    type(mesh_type), pointer :: target_mesh_ptr => null()
+    integer(i_def) :: mesh_id
+    integer(i_def) :: source_mesh_id
+    integer(i_def) :: target_mesh_id
+
+    integer(i_def), parameter :: npanels = 6
+    type(ncdf_quad_type) :: file_handler
+    type(mesh_map_type), pointer   :: mesh_map => null()
+    integer(i_def), allocatable    :: gid_mesh_map(:,:,:)
+    integer(i_def), allocatable    :: lid_mesh_map(:,:,:)
+    type(partition_type)           :: partition
+    type(uniform_extrusion_type)   :: extrusion
+
+    procedure (partitioner_interface), pointer :: partitioner_ptr => null ()
+
+    integer(i_def), pointer :: test_1_array_ptr(:,:)   => null()
+    integer(i_def), pointer :: test_2_array_ptr(:,:,:) => null()
+    integer(i_def) :: i, j, n, x, y
+    integer(i_def) :: ntarget_per_source_cell_x
+    integer(i_def) :: ntarget_per_source_cell_y
+    integer(i_def) :: ncells
+    character(str_def), allocatable :: target_mesh_names(:)
+
+    ! Clear out the global and local mesh collection, as they may contain
+    ! unit test meshes - which is not what we want.
+    call global_mesh_collection%clear()
+    call local_mesh_collection%clear()
+    global_mesh_collection = global_mesh_collection_type()
+    local_mesh_collection  = local_mesh_collection_type()
+    mesh_collection        = mesh_collection_type()
+    partitioner_ptr => partitioner_cubedsphere_serial
+
+    ! Create all the meshes: global and local
+    do i=1, size(mesh_names)
+      call ugrid_mesh_data%read_from_file(trim(filename), mesh_names(i))
+      global_mesh = global_mesh_type( ugrid_mesh_data, npanels )
+      call ugrid_mesh_data%clear()
+      call global_mesh_collection%add_new_global_mesh( global_mesh )
+      global_mesh_ptr => global_mesh_collection % get_global_mesh( mesh_names(i) )
+
+      partition = partition_type(global_mesh_ptr, partitioner_ptr,1,1,1,0,1)
+      call local_mesh%initialise( global_mesh_ptr, partition )
+      call local_mesh%init_cell_owner()
+      local_mesh_id = local_mesh_collection%add_new_local_mesh( local_mesh )
+      call global_mesh%clear()
+      call local_mesh%clear()
+    end do
+
+    ! Now all the meshes exist, read in global mesh maps, convert them to local ids
+    ! and associate them with the approprate source local mesh
+    call file_handler%file_open(trim(filename))
+    do i=1, size(mesh_names)
+      global_mesh_ptr => global_mesh_collection % get_global_mesh (mesh_names(i))
+      source_local_mesh_ptr => local_mesh_collection % get_local_mesh (mesh_names(i))
+      call global_mesh_ptr%get_target_mesh_names(target_mesh_names)
+      do j=1, size(target_mesh_names)
+        target_local_mesh_ptr => local_mesh_collection % get_local_mesh (target_mesh_names(j))
+        if ( associated(target_local_mesh_ptr) ) then
+          call file_handler%read_map( mesh_names(i),        &
+                                      target_mesh_names(j), &
+                                      gid_mesh_map )
+          ntarget_per_source_cell_x = size(gid_mesh_map, 1)
+          ntarget_per_source_cell_y = size(gid_mesh_map, 2)
+          ncells = source_local_mesh_ptr%get_num_cells_in_layer()
+          allocate( lid_mesh_map( ntarget_per_source_cell_x, &
+                                  ntarget_per_source_cell_y, &
+                                  ncells ) )
+          do x=1, ntarget_per_source_cell_x
+            do y=1, ntarget_per_source_cell_y
+              do n=1, ncells
+                lid_mesh_map(x,y, source_local_mesh_ptr%get_lid_from_gid(n)) = &
+                    target_local_mesh_ptr%get_lid_from_gid(gid_mesh_map(x,y, n))
+              end do
+            end do
+          end do
+
+          target_local_mesh_id = target_local_mesh_ptr%get_id()
+          call source_local_mesh_ptr%add_local_mesh_map( target_local_mesh_id, &
+                                                         lid_mesh_map )
+
+          if(allocated( gid_mesh_map )) deallocate( gid_mesh_map )
+          if(allocated( lid_mesh_map )) deallocate( lid_mesh_map )
+        end if
+      end do
+      if(allocated( target_mesh_names )) deallocate( target_mesh_names )
+    end do
+
+    ! Create the 3d partitioned meshes
+    extrusion = uniform_extrusion_type( radius, domain_top, nlayers, &
+                                        PRIME_EXTRUSION )
+    do i=1, size(mesh_names)
+      global_mesh_ptr => global_mesh_collection % get_global_mesh (mesh_names(i))
+      source_local_mesh_ptr => local_mesh_collection % get_local_mesh (mesh_names(i))
+      partition = partition_type(global_mesh_ptr, partitioner_ptr,1,1,1,0,1)
+      mesh = mesh_type( source_local_mesh_ptr, extrusion )
+      mesh_id =  mesh_collection % add_new_mesh( mesh )
+      call mesh%clear()
+    end do
+
+    source_mesh_ptr => mesh_collection%get_mesh(mesh_names(1))
+    target_mesh_ptr => mesh_collection%get_mesh(mesh_names(2))
+
+    source_mesh_id = mesh_collection%get_mesh_id(mesh_names(1))
+    target_mesh_id = mesh_collection%get_mesh_id(mesh_names(2))
+
+    ! Add maps to the local meshes
+    call source_mesh_ptr % add_mesh_map(target_mesh_ptr)
+    call target_mesh_ptr % add_mesh_map(source_mesh_ptr)
+
+    ! Conduct the unit tests now
+    ! Test coarse to fine
+    mesh_map    => source_mesh_ptr%get_mesh_map(target_mesh_ptr)
+    mesh_map_id = (10000*source_mesh_id) + target_mesh_id
+    @assertEqual (mesh_map%get_id(), mesh_map_id)
+
+    !-------------------------------------------------------------------
+    ! Test get_source_id
+    test_integer = mesh_map%get_source_id()
+    @assertEqual ( source_mesh_ptr%get_id(), test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_target_id
+    test_integer = mesh_map%get_target_id()
+    @assertEqual ( target_mesh_ptr%get_id(), test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_ntarget_cells_per_source_cell_x
+    test_integer = mesh_map%get_ntarget_cells_per_source_x()
+    @assertEqual ( 2, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_ntarget_cells_per_source_cell_y
+    test_integer = mesh_map%get_ntarget_cells_per_source_y()
+    @assertEqual ( 2, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nsource_cells
+    test_integer = mesh_map%get_nsource_cells()
+    @assertEqual ( 96, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_map_from_cell
+    test_1_array_ptr => mesh_map%get_cell_map(11)
+    @assertEqual ( reshape([37,38,45,46],(/2,2/)), test_1_array_ptr )
+    nullify(test_1_array_ptr)
+
+    !-------------------------------------------------------------------
+    ! Test get_full_map
+    test_2_array_ptr => mesh_map%get_whole_cell_map()
+    @assertEqual ( CoarseToFineMap, test_2_array_ptr )
+    nullify(test_2_array_ptr)
+
+    ! Test fine to coarse
+    !-------------------------------------------------------------------
+    mesh_map    => target_mesh_ptr%get_mesh_map(source_mesh_ptr)
+    mesh_map_id = (10000*target_mesh_id) + source_mesh_id
+    @assertEqual (mesh_map%get_id(), mesh_map_id)
+
+    ! Test get_source_id
+    test_integer = mesh_map%get_source_id()
+    @assertEqual ( target_mesh_ptr%get_id(), test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_target_id
+    test_integer = mesh_map%get_target_id()
+    @assertEqual ( source_mesh_ptr%get_id(), test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_cell_factor
+    test_integer = mesh_map%get_ntarget_cells_per_source_cell()
+    @assertEqual ( 1, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nsource_cells
+    test_integer = mesh_map%get_nsource_cells()
+    @assertEqual ( 384, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_map_from_cell
+    test_1_array_ptr => mesh_map%get_cell_map(11)
+    @assertEqual ( reshape([2],(/1,1/)), test_1_array_ptr )
+    nullify(test_1_array_ptr)
+
+    !-------------------------------------------------------------------
+    ! Test get_full_map
+    test_2_array_ptr => mesh_map%get_whole_cell_map()
+    @assertEqual ( FineToCoarseMap, test_2_array_ptr )
+    nullify(test_2_array_ptr)
+
+    call partition%clear()
+    call mesh_collection%clear()
+    partitioner_ptr => null()
+
+  end subroutine test_mesh_map_retrieval
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+end module mesh_mod_test

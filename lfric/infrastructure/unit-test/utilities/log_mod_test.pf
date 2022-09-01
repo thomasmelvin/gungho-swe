@@ -1,0 +1,345 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+!> @brief Test the functionality of log_mod
+!>
+!> @details A pFUnit test module to exercise the logging facilities.
+!>
+module log_mod_test
+
+  use constants_mod, only: i_def, r_def, str_long
+  use log_mod,       only: finalise_logging, initialise_logging, log_event, &
+                           log_level, log_level_debug, log_level_error,     &
+                           log_level_info, log_level_trace,                 &
+                           log_level_warning, log_set_alert_stream,         &
+                           log_set_level, log_set_info_stream
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  !> @todo We shouldn't have to explicitly export setUp and tearDown but
+  !>       ifort 14 borks badly if you don't.
+  public log_test_constructor, getParameters, &
+         log_level_test, log_output_test,     &
+         setUp, tearDown
+
+  integer(i_def), parameter :: INFO_UNIT  = 12
+  integer(i_def), parameter :: ALERT_UNIT = 13
+
+  @testParameter
+  type, public, extends( AbstractTestParameter ) :: level_parameter_type
+    integer(i_def), public :: level
+    character( 8 ), public :: expected_tag
+  contains
+    procedure :: toString
+  end type level_parameter_type
+
+  @testCase(testParameters={getParameters()}, constructor=log_test_constructor)
+  type, public, extends( ParameterizedTestCase ) :: log_test_type
+    integer(i_def) :: level
+    character( 8 ) :: expected_tag
+
+    integer(i_def) :: dummy ! This is here only so procedures which do not use
+                            ! "this" have something they can hit.
+  contains
+    procedure :: setUp
+    procedure :: tearDown
+  end type log_test_type
+
+
+contains
+
+  !> Construct the log module test case.
+  !>
+  !> @param level The level to test at.
+  !>
+  function log_test_constructor( testParameter ) result( log_test )
+
+    implicit none
+
+    type( log_test_type )                      :: log_test
+    type( level_parameter_type ), intent( in ) :: testParameter
+
+    log_test%level        = testParameter%level
+    log_test%expected_tag = testParameter%expected_tag
+
+  end function log_test_constructor
+
+  !> Output method for level_parameter_type
+  !>
+  function toString( this ) result( string )
+    implicit none
+    class( level_parameter_type ), intent( in ) :: this
+    character(:), allocatable :: string
+
+    character(str_long) :: buffer
+    write( buffer, '(I0, A)') &
+           this%level, this%expected_tag
+    string = trim( buffer )
+  end function toString
+
+  !> Prepare a list of all log levels for parameterised tests.
+  !>
+  function getParameters() result( parameters )
+
+    implicit none
+
+    type( level_parameter_type ) :: parameters(4)
+    parameters = [ level_parameter_type( LOG_LEVEL_TRACE,   ':TRACE:' ), &
+                   level_parameter_type( LOG_LEVEL_DEBUG,   ':DEBUG:' ), &
+                   level_parameter_type( LOG_LEVEL_INFO,    ':INFO :' ), &
+                   level_parameter_type( LOG_LEVEL_WARNING, ':WARN :' ) ]
+
+  end function getParameters
+
+  !> Prepare fixtures.
+  !>
+  !> Called before each test method is run. Prepares a known state in which
+  !> the tests can take place.
+  !>
+  subroutine setUp( this )
+
+    implicit none
+
+    class( log_test_type ), intent( inout ) :: this
+
+    integer(i_def) :: condition
+
+    !> @todo When we can run unit tests in more than one parallel configuration
+    !>       (we only run on one process at the moment), we need to add tests
+    !>       for logging in parallel as it is slightly different to the serial
+    !>       logger
+
+    ! Initialise log_mod to use the serial method for logging
+    call initialise_logging(0, 1, 'log_mod_unit_test')
+
+    open( INFO_UNIT, status='scratch', action='readwrite', &
+          iostat=condition )
+    @assertEqual( condition, 0 )
+
+    open( ALERT_UNIT, status='scratch', action='readwrite', &
+          iostat=condition )
+    @assertEqual( condition, 0 )
+
+    this%dummy = 0 ! There is no purpose to this, other than to use "this"
+
+  end subroutine setUp
+
+  !> Remove fixtures.
+  !>
+  !> Tidy up the test environment after each test method has run.
+  !>
+  subroutine tearDown( this )
+
+    implicit none
+
+    class( log_test_type ), intent( inout ) :: this
+
+    integer(i_def) :: condition
+
+    call finalise_logging()
+
+    close( ALERT_UNIT, iostat=condition )
+    @assertEqual( condition, 0 )
+    close( INFO_UNIT, iostat=condition )
+    @assertEqual( condition, 0 )
+
+    this%dummy = 0 ! There is no purpose to this, other than to use "this"
+
+  end subroutine tearDown
+
+  !> Get a string representing the current parameter value
+  !>
+  function getParameterString( this ) result( string )
+
+    implicit none
+
+    class( log_test_type ), intent( in ) :: this
+    character( : ), allocatable          :: string
+
+    character( len = 80 ) :: buffer
+
+    write( buffer, '(A,I0)' ) 'Logging level is ', this%level
+    string = trim(buffer)
+
+  end function getParameterString
+
+  !> Test the default behaviour of the logger.
+  !>
+  !> As part of the test system redirecting the output to alternate units is
+  !> also tested.
+  !>
+  @test
+  subroutine log_output_test( this )
+
+    use, intrinsic :: iso_fortran_env, only : iostat_end
+
+    implicit none
+
+    class( log_test_type ), intent( inout ) :: this
+
+    integer(i_def), parameter :: date_kind = selected_int_kind( 14 )
+
+    integer( kind=date_kind ) :: current_stamp
+    character( 28 )           :: current_date_string
+    integer(i_def)            :: current_subseconds
+    integer(i_def)            :: current_zone
+    integer( kind=date_kind)  :: found_stamp
+    character                 :: found_point
+    integer(i_def)            :: found_subseconds
+    integer(i_def)            :: found_zone
+    character(  8 )           :: found_tag
+    character( 80 )           :: found_message
+    integer(i_def)            :: status
+
+    ! Check logging level is set to INFO. If it isn't, maybe another test
+    ! altered it. Either way, something has gone wrong so we bail out.
+    !
+    @assertEqual( LOG_LEVEL_INFO, log_level() )
+
+    call date_and_time( date=current_date_string(1:8), &
+                        time=current_date_string(9:18), &
+                        zone=current_date_string(19:) )
+    read( current_date_string, "(I14,1X,I3,I5)" ) current_stamp, &
+                                                  current_subseconds, &
+                                                  current_zone
+
+    call log_set_info_stream(INFO_UNIT)
+    call log_set_alert_stream(ALERT_UNIT)
+
+    call log_event('cheese', this%level)
+
+    rewind(INFO_UNIT)
+    read( INFO_UNIT, '(I14,A1,I3,I5,A8,A)', iostat = status ) &
+        found_stamp, found_point, found_subseconds, found_zone, &
+        found_tag, found_message
+    if ( ( this%level >= LOG_LEVEL_INFO ) &
+         .and. ( this%level < LOG_LEVEL_WARNING ) ) then
+      @assertEqual( 0,                 status )
+      @assertEqual( '.',               found_point )
+      @assertEqual( this%expected_tag, found_tag )
+      @assertEqual( 'cheese',          found_message )
+      @assertTrue( current_stamp <= found_stamp )
+      @assertEqual( current_zone,      found_zone )
+    else
+      @assertEqual( iostat_end,        status )
+    end if
+
+    rewind( ALERT_UNIT )
+    read( ALERT_UNIT, '(I14,A1,I3,I5,A8,A)', iostat = status ) &
+        found_stamp, found_point, found_subseconds, found_zone, &
+        found_tag, found_message
+    if ( this%level >= LOG_LEVEL_WARNING ) then
+      @assertEqual( 0,                 status )
+      @assertEqual( '.',               found_point )
+      @assertEqual( this%expected_tag, found_tag )
+      @assertEqual( 'cheese',          found_message )
+      @assertTrue( current_stamp <= found_stamp )
+      @assertEqual( current_zone,      found_zone )
+    else
+      @assertEqual( iostat_end,        status )
+    end if
+
+  end subroutine log_output_test
+
+  !> Test the correct things are logged for each log level.
+  !>
+  @test
+  subroutine log_level_test( this )
+
+    use, intrinsic :: iso_fortran_env, only : iostat_end
+
+    implicit none
+
+    class ( log_test_type ), intent( inout ) :: this
+
+    integer(i_def), parameter :: number_of_levels = 4
+
+    integer(i_def)  :: levels( number_of_levels )
+    character( 22 ) :: messages( number_of_levels )
+    integer(i_def) :: level_index
+    character(  8 ) :: info_tag, alert_tag
+    character( 80 ) :: info_message, alert_message
+    integer(i_def)   :: info_status, alert_status
+
+    levels  = [ LOG_LEVEL_TRACE, LOG_LEVEL_DEBUG, &
+                LOG_LEVEL_INFO, LOG_LEVEL_WARNING ]
+    messages  = [ 'kraft cheeselike slice', &
+                  'generic cheddar       ', &
+                  'wensleydale           ', &
+                  'double gloucester     ']
+
+    call log_set_info_stream( INFO_UNIT )
+    call log_set_alert_stream( ALERT_UNIT )
+
+    call log_set_level( this%level )
+
+    log_loop: do level_index = 1, number_of_levels
+      call log_event( trim( messages(level_index) ), levels(level_index) )
+    end do log_loop
+
+    rewind( INFO_UNIT )
+    rewind( ALERT_UNIT )
+    read_loop: do level_index = 1, number_of_levels
+      if ( levels(level_index) >= this%level ) then
+        info_tag = ""
+        info_message = ""
+        read( INFO_UNIT,  '(23X,A8,A)', iostat = info_status ) info_tag, &
+                                                              info_message
+        read( ALERT_UNIT, '(23X,A8,A)', iostat = alert_status ) alert_tag, &
+                                                                alert_message
+
+        select case (levels(level_index))
+          case (LOG_LEVEL_TRACE)
+            @assertEqual( ':TRACE:', info_tag )
+            @assertEqual( messages(level_index), info_message )
+          case (LOG_LEVEL_DEBUG)
+            @assertEqual( ':DEBUG:', info_tag )
+            @assertEqual( messages(level_index), info_message )
+          case (LOG_LEVEL_INFO)
+            @assertEqual( ':INFO :', info_tag )
+            @assertEqual( messages(level_index), info_message )
+          case (LOG_LEVEL_WARNING)
+            @assertEqual( ':WARN :', alert_tag )
+            @assertEqual( messages(level_index), alert_message )
+          case default
+            @assertTrue( .false. )
+        end select
+      end if
+    end do read_loop
+
+  end subroutine log_level_test
+
+!   !> Test error logging behaviour. Because errors cause a "STOP" they can not
+!   !> be tested with the others. Or at all at the moment.
+!   @test
+!   subroutine error_test( this )
+!
+!     implicit none
+!
+!     class ( log_test_type ), intent( inout ) :: this
+!
+!     character(  8 ) :: tag
+!     character( 80 ) :: message
+!
+!     call log_set_info_stream( INFO_UNIT )
+!     call log_set_alert_stream( ALERT_UNIT )
+!
+!     call log_event( 'stilton', LOG_LEVEL_ERROR )
+!
+!     rewind( INFO_UNIT )
+!     read( INFO_UNIT, '(23X,A8,A)' ) tag, message
+!     @assertEqual( ':ERROR:', tag )
+!     @assertEqual( 'stilton', message )
+!
+!     rewind( ALERT_UNIT )
+!     read( ALERT_UNIT, '(23X,A8,A)' ) tag, message
+!     @assertEqual( ':ERROR:', tag )
+!     @assertEqual( 'stilton', message )
+!
+!   end subroutine error_test
+
+end module log_mod_test

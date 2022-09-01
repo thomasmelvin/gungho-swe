@@ -1,0 +1,838 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+!
+!-------------------------------------------------------------------------------
+module function_space_mod_test
+
+  use constants_mod,         only : i_def, i_native, l_def, r_def, str_long
+  use fs_continuity_mod,     only : W0, W1, W2, W3, Wtheta, W2V, W2H, Wchi, &
+                                    W2trace, W2Htrace, W2Vtrace
+  use fs_test_data_mod,      only : fs0k0_nodal_coords,         &
+                                    fs0k0_dofmap,               &
+                                    fs0k0_basis_function,       &
+                                    fs0k0_basis_diff_function,  &
+                                    fs1k0_nodal_coords,         &
+                                    fs1k0_dofmap,               &
+                                    fs1k0_basis_function,       &
+                                    fs1k0_basis_diff_function,  &
+                                    fs2k0_nodal_coords,         &
+                                    fs2k0_dofmap,               &
+                                    fs2k0_basis_function,       &
+                                    fs2k0_basis_diff_function,  &
+                                    fs3k0_nodal_coords,         &
+                                    fs3k0_dofmap,               &
+                                    fs3k0_basis_function,       &
+                                    fs3k0_basis_diff_function,  &
+                                    fstk0_nodal_coords,         &
+                                    fstk0_dofmap,               &
+                                    fstk0_basis_function,       &
+                                    fstk0_basis_diff_function,  &
+                                    fs2vk0_nodal_coords,        &
+                                    fs2vk0_dofmap,              &
+                                    fs2vk0_basis_function,      &
+                                    fs2vk0_basis_diff_function, &
+                                    fs2hk0_nodal_coords,        &
+                                    fs2hk0_dofmap,              &
+                                    fs2hk0_basis_function,      &
+                                    fs2hk0_basis_diff_function, &
+                                    fsck0_nodal_coords,         &
+                                    fsck0_dofmap,               &
+                                    fsck0_basis_function,       &
+                                    fsck0_basis_diff_function,  &
+                                    fs2tk0_nodal_coords,        &
+                                    fs2tk0_dofmap,              &
+                                    fs2tk0_basis_function,      &
+                                    fs2tk0_basis_diff_function, &
+                                    fs2vtk0_nodal_coords,       &
+                                    fs2vtk0_dofmap,             &
+                                    fs2vtk0_basis_function,     &
+                                    fs2vtk0_basis_diff_function,&
+                                    fs2htk0_nodal_coords,       &
+                                    fs2htk0_dofmap,             &
+                                    fs2htk0_basis_function,     &
+                                    fs2htk0_basis_diff_function
+
+  use function_space_mod,    only : function_space_type
+  use local_mesh_mod,        only : local_mesh_type
+  use mesh_collection_mod,   only : mesh_collection_type, &
+                                    mesh_collection
+  use mesh_mod,              only : mesh_type
+  use pFUnit_Mod
+  use quadrature_xyoz_mod,   only: quadrature_xyoz_type, &
+                                   quadrature_xyoz_proxy_type
+  use quadrature_rule_gaussian_mod, only: quadrature_rule_gaussian_type
+  use reference_element_mod, only : VERTEX_OFFSET,          &
+                                    EDGE_OFFSET,            &
+                                    FACE_OFFSET,            &
+                                    V,                      &
+                                    W, S, E, N, B, T,       &
+                                    SWB, SEB, NEB, NWB,     &
+                                    SWT, SET, NET, NWT,     &
+                                    WB, SB, EB, NB,         &
+                                    SW, SE, NE, NW,         &
+                                    WT, ST, ET, NT
+  use mpi_mod,               only : store_comm, clear_comm
+
+  implicit none
+
+  private
+  public :: test_function_space_constructor, getParameters,   &
+            test_space, test_stencil_point, test_stencil_1dx, &
+            test_stencil_1dy, test_stencil_cross, test_mesh,  &
+            test_entities, test_get_whole_dofmap,             &
+            test_get_last_dof, test_is_readonly
+
+  @testParameter
+  type, public, extends(MPITestParameter) :: function_space_parameter_type
+    integer(i_native) :: function_space
+    integer(i_def)    :: element_order
+    integer(i_def)    :: ndof_cell
+    integer(i_def)    :: ndof_glob
+    integer(i_def)    :: dim_space
+    integer(i_def)    :: dim_space_diff
+  contains
+    procedure :: toString
+  end type function_space_parameter_type
+
+  @TestCase(npes=[1], testParameters={getParameters()}, constructor=test_function_space_constructor)
+  type, extends(MPITestCase), public :: test_function_space_type
+    private
+    integer(i_native) :: function_space
+    integer(i_def)    :: element_order
+    integer(i_def)    :: ndof_cell
+    integer(i_def)    :: ndof_glob
+    integer(i_def)    :: dim_space
+    integer(i_def)    :: dim_space_diff
+
+    type(local_mesh_type)    :: unit_test_local_mesh
+    integer(i_def)           :: mesh_id
+    real(r_def), allocatable :: test_diff_basis(:,:,:,:)
+    real(r_def), allocatable :: test_basis(:,:,:,:)
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure get_local_mesh_ptr
+    procedure test_space
+    procedure test_get_whole_dofmap
+    procedure test_stencil_point
+    procedure test_stencil_1dx
+    procedure test_stencil_1dy
+    procedure test_stencil_cross
+    procedure test_mesh
+    procedure test_entities
+    procedure test_get_last_dof
+    procedure test_is_readonly
+  end type test_function_space_type
+
+  integer(i_def), parameter :: element_order = 0
+
+  integer(i_def), parameter :: nqp_h = 9
+  integer(i_def), parameter :: nqp_v = 3
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  function test_function_space_constructor( testParameter ) result( new_test )
+
+    implicit none
+
+    type(function_space_parameter_type), intent( in ) :: testParameter
+    type(test_function_space_type) :: new_test
+
+    new_test%function_space = testParameter%function_space
+    new_test%element_order  = testParameter%element_order
+    new_test%ndof_cell      = testParameter%ndof_cell
+    new_test%ndof_glob      = testParameter%ndof_glob
+    new_test%dim_space      = testParameter%dim_space
+    new_test%dim_space_diff = testParameter%dim_space_diff
+
+  end function test_function_space_constructor
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  function toString( this ) result( string )
+
+    use fs_continuity_mod, only : name_from_functionspace
+
+    implicit none
+
+    class( function_space_parameter_type ), intent( in ) :: this
+    character(:), allocatable :: string
+
+    character(str_long) :: buffer
+
+    write( buffer, '(A)') name_from_functionspace( this%function_space )
+    string = trim( buffer )
+
+  end function toString
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  function getParameters() result( parameters )
+
+    implicit none
+
+    type(function_space_parameter_type) :: parameters(11)
+
+    ! function_space_parameter_type extends MPITestParameter
+    ! The following calls to the constructor require numProcessesRequested from
+    ! MPITestParameter to be set (here set to 1 for all cases) followed by the
+    ! parameters defined in function_space_parameter_type. undf values have been computed
+    ! for a 3x3x3 biperiodic mesh
+    ! mesh
+    parameters = (/ &
+                  function_space_parameter_type(1, W0,       0,  8, 36, 1, 3), &
+                  function_space_parameter_type(1, W1,       0, 12, 99, 3, 3), &
+                  function_space_parameter_type(1, W2,       0,  6, 90, 3, 1), &
+                  function_space_parameter_type(1, W3,       0,  1, 27, 1, 3), &
+                  function_space_parameter_type(1, Wtheta,   0,  2, 36, 1, 3), &
+                  function_space_parameter_type(1, W2V,      0,  2, 36, 3, 1), &
+                  function_space_parameter_type(1, W2H,      0,  4, 54, 3, 1), &
+                  function_space_parameter_type(1, Wchi,     0,  1, 27, 1, 3), &
+                  function_space_parameter_type(1, W2trace,  0,  6, 90, 1, 3), &
+                  function_space_parameter_type(1, W2Vtrace, 0,  2, 36, 1, 3), &
+                  function_space_parameter_type(1, W2Htrace, 0,  4, 54, 1, 3) /)
+
+  end function getParameters
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use mesh_mod,                  only : mesh_type, PLANE_BI_PERIODIC
+
+    implicit none
+
+    class(test_function_space_type), intent(inout) :: this
+
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    type(mesh_type) :: unit_test_mesh
+
+    !Store the MPI communicator for later use
+    call store_comm(this%getMpiCommunicator())
+
+    call this%unit_test_local_mesh%initialise()
+    unit_test_local_mesh_ptr => this%get_local_mesh_ptr()
+
+    ! Create top level mesh collection
+    mesh_collection = mesh_collection_type()
+    ! Dummy mesh mod has 9 cells, 3 layers and is uniform in vertical
+
+    unit_test_mesh = mesh_type( PLANE_BI_PERIODIC, unit_test_local_mesh_ptr )
+    this%mesh_id = mesh_collection%add_new_mesh( unit_test_mesh )
+
+    allocate( this%test_basis ( this%dim_space, &
+                                this%ndof_cell, &
+                                nqp_h, nqp_v) )
+    allocate( this%test_diff_basis( this%dim_space_diff, &
+                                    this%ndof_cell,      &
+                                    nqp_h, nqp_v) )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod, only: final_configuration
+
+    implicit none
+
+    class(test_function_space_type), intent(inout) :: this
+
+    deallocate(this%test_basis)
+    deallocate(this%test_diff_basis)
+
+    call mesh_collection%clear()
+    call final_configuration()
+
+    ! Clear the stored MPI communicator
+    call clear_comm()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  function get_local_mesh_ptr(this) result(unit_test_local_mesh_ptr)
+    implicit none
+    class(test_function_space_type), intent(inout), target :: this
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    unit_test_local_mesh_ptr => this%unit_test_local_mesh
+  end function get_local_mesh_ptr
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  @Test( npes=[1] )
+  subroutine test_space( this )
+
+    implicit none
+
+    class(test_function_space_type), intent(inout) :: this
+
+    integer(i_def), parameter :: scalar = 1
+    integer(i_def), parameter :: vector = 3
+
+    real(r_def), parameter :: margin = 1.0e-14_r_def
+
+    type( quadrature_xyoz_type )          :: qr
+    type(quadrature_xyoz_proxy_type)      :: qr_proxy
+    type( quadrature_rule_gaussian_type ) :: quadrature_rule
+
+    type(function_space_type) :: test_fs
+
+    real(r_def),    pointer :: xp(:,:)                      => null()
+    real(r_def),    pointer :: zp(:)                        => null()
+    real(r_def),    pointer :: nodal_coords(:,:)            => null()
+    integer(i_def), pointer :: dofmap(:,:)                  => null()
+    real(r_def),    pointer :: basis_function(:,:,:,:)      => null()
+    real(r_def),    pointer :: basis_diff_function(:,:,:,:) => null()
+
+    integer(i_def) :: test_ncells
+    integer(i_def) :: test_ndof_cell
+    integer(i_def) :: test_dim_space
+    integer(i_def) :: test_dim_space_diff
+
+    integer :: cell
+    integer(i_def) :: ndat
+
+    integer(i_def) :: global_cell_dof_id_2d(9)
+    integer(i_def) :: known_global_cell_dof_id_2d(9)
+    integer(i_def) :: global_edge_dof_id_2d(18)
+    integer(i_def) :: known_global_edge_dof_id_2d(18)
+    integer(i_def) :: global_vert_dof_id_2d(9)
+    integer(i_def) :: known_global_vert_dof_id_2d(9)
+
+    qr = quadrature_xyoz_type(3, quadrature_rule)
+    qr_proxy = qr%get_quadrature_proxy()
+    xp=>qr_proxy%points_xy
+    zp=>qr_proxy%points_z
+
+    ! TODO: Work out if there is a way of including this information in the
+    !       description array from fs_test_data.
+    !
+    select case (this%function_space)
+      case (W0)
+        nodal_coords   => fs0k0_nodal_coords
+        dofmap         => fs0k0_dofmap
+        basis_function => fs0k0_basis_function
+        basis_diff_function => fs0k0_basis_diff_function
+      case (W1)
+        nodal_coords   => fs1k0_nodal_coords
+        dofmap         => fs1k0_dofmap
+        basis_function => fs1k0_basis_function
+        basis_diff_function => fs1k0_basis_diff_function
+      case (W2)
+        nodal_coords   => fs2k0_nodal_coords
+        dofmap         => fs2k0_dofmap
+        basis_function => fs2k0_basis_function
+        basis_diff_function => fs2k0_basis_diff_function
+      case (W3)
+        nodal_coords   => fs3k0_nodal_coords
+        dofmap         => fs3k0_dofmap
+        basis_function => fs3k0_basis_function
+        basis_diff_function => fs3k0_basis_diff_function
+      case (Wtheta)
+        nodal_coords   => fstk0_nodal_coords
+        dofmap         => fstk0_dofmap
+        basis_function => fstk0_basis_function
+        basis_diff_function => fstk0_basis_diff_function
+      case (W2V)
+        nodal_coords   => fs2vk0_nodal_coords
+        dofmap         => fs2vk0_dofmap
+        basis_function => fs2vk0_basis_function
+        basis_diff_function => fs2vk0_basis_diff_function
+      case (W2H)
+        nodal_coords   => fs2hk0_nodal_coords
+        dofmap         => fs2hk0_dofmap
+        basis_function => fs2hk0_basis_function
+        basis_diff_function => fs2hk0_basis_diff_function
+      case (Wchi)
+        nodal_coords   => fsck0_nodal_coords
+        dofmap         => fsck0_dofmap
+        basis_function => fsck0_basis_function
+        basis_diff_function => fsck0_basis_diff_function
+      case (W2trace)
+        nodal_coords   => fs2tk0_nodal_coords
+        dofmap         => fs2tk0_dofmap
+        basis_function => fs2tk0_basis_function
+        basis_diff_function => fs2tk0_basis_diff_function
+      case (W2Vtrace)
+        nodal_coords   => fs2vtk0_nodal_coords
+        dofmap         => fs2vtk0_dofmap
+        basis_function => fs2vtk0_basis_function
+        basis_diff_function => fs2vtk0_basis_diff_function
+      case (W2Htrace)
+        nodal_coords   => fs2htk0_nodal_coords
+        dofmap         => fs2htk0_dofmap
+        basis_function => fs2htk0_basis_function
+        basis_diff_function => fs2htk0_basis_diff_function
+    end select
+
+    test_fs = function_space_type( this%mesh_id,  &
+                                   element_order, &
+                                   this%function_space )
+
+    @assertEqual( this%function_space, test_fs%which() )
+    @assertEqual( this%element_order, test_fs%get_element_order() )
+    test_ncells    = test_fs%get_ncell()
+    test_ndof_cell = test_fs%get_ndf()
+
+    @assertEqual( this%ndof_cell, test_ndof_cell        )
+    @assertEqual( 9,              test_ncells           )
+    @assertEqual( 3,              test_fs%get_nlayers() )
+    @assertEqual( this%ndof_glob, test_fs%get_undf()    )
+    @assertEqual( this%ndof_cell, test_fs%get_ndf()     )
+    @assertEqual( nodal_coords,   test_fs%get_nodes()   )
+
+    test_dim_space      = test_fs%get_dim_space()
+    test_dim_space_diff = test_fs%get_dim_space_diff()
+    @assertEqual( this%dim_space,      test_dim_space      )
+    @assertEqual( this%dim_space_diff, test_dim_space_diff )
+
+    do cell=1, test_ncells
+      @assertEqual( dofmap(:,cell), test_fs%get_cell_dofmap(cell) )
+    end do
+
+    call test_fs%compute_basis_function( this%test_basis, &
+                                         test_ndof_cell,  &
+                                         nqp_h, nqp_v,    &
+                                         xp, zp )
+
+    @assertEqual(basis_function, this%test_basis, margin)
+
+    call test_fs%compute_diff_basis_function( this%test_diff_basis, &
+                                              test_ndof_cell,       &
+                                              nqp_h, nqp_v,         &
+                                              xp, zp )
+    @assertEqual(basis_diff_function, this%test_diff_basis, margin)
+
+    ! check unique 2d dof ids are as expected - for cell volumes
+    known_global_cell_dof_id_2d=[0,1,2,3,4,5,6,7,8]
+    call  test_fs%get_global_cell_dof_id_2d(global_cell_dof_id_2d)
+    @assertEqual(known_global_cell_dof_id_2d, global_cell_dof_id_2d)
+
+    ! check unique 2d dof ids are as expected - for edges
+    if(this%function_space == W2H)then
+      known_global_edge_dof_id_2d=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]
+      call  test_fs%get_global_edge_dof_id_2d(global_edge_dof_id_2d)
+      @assertEqual(known_global_edge_dof_id_2d, global_edge_dof_id_2d)
+    else
+      known_global_edge_dof_id_2d(:) = -1
+      call  test_fs%get_global_edge_dof_id_2d(global_edge_dof_id_2d)
+      @assertEqual(known_global_edge_dof_id_2d, global_edge_dof_id_2d)
+    end if
+
+    ! check unique 2d dof ids are as expected - for vertices
+    if(this%function_space == W0)then
+      known_global_vert_dof_id_2d=[0,1,2,3,4,5,6,7,8]
+      call  test_fs%get_global_vert_dof_id_2d(global_vert_dof_id_2d)
+      @assertEqual(known_global_vert_dof_id_2d, global_vert_dof_id_2d)
+    else
+      known_global_vert_dof_id_2d(:) = -1
+      call  test_fs%get_global_vert_dof_id_2d(global_vert_dof_id_2d)
+      @assertEqual(known_global_vert_dof_id_2d, global_vert_dof_id_2d)
+    end if
+
+    call test_fs%clear()
+
+    ! Now test multidata function spaces
+    ndat = 4
+    test_fs = function_space_type( this%mesh_id,  &
+                                   element_order, &
+                                   this%function_space, &
+                                   ndata=ndat )
+
+    @assertEqual( ndat, test_fs%get_ndata() )
+
+    ! Test we have the right number of dofs in the multi-data field.
+    ! In this serial test, last owned, annexed and halo dof will all be the same
+    @assertEqual( ndat*this%ndof_glob, test_fs%get_last_dof_owned()    )
+
+    call test_fs%clear()
+    nullify( xp, zp, nodal_coords, dofmap, basis_function,&
+             basis_diff_function )
+
+  end subroutine test_space
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_get_whole_dofmap( this )
+
+    implicit none
+
+    class(test_function_space_type), intent(inout) :: this
+
+    type(function_space_type) :: test_fs
+
+    integer(i_def), pointer :: map_cell (:)   => null()
+    integer(i_def), pointer :: map_whole(:,:) => null()
+
+    integer(i_def)          :: test_ncells
+    integer(i_def)          :: test_ndof_cell
+
+    integer(i_def)          :: cell_counter,dof_counter
+    logical                 :: identical
+
+    test_fs = function_space_type( this%mesh_id,  &
+                                   element_order, &
+                                   this%function_space )
+
+    test_ncells    = test_fs%get_ncell()
+    test_ndof_cell = test_fs%get_ndf()
+
+    identical = .true.
+    map_whole => test_fs%get_whole_dofmap()
+    ! Check that all the dofs are the same whether obtained from the cell dof-map
+    ! or the whole dof-map
+    do cell_counter = 1,test_ncells
+      map_cell => test_fs%get_cell_dofmap(cell_counter)
+      do dof_counter = 1, test_ndof_cell
+        if (map_cell(dof_counter) /= map_whole(dof_counter,cell_counter)) then
+          identical = .false.
+        end if
+      end do
+    end do
+    @assertEqual( identical, .true.)
+
+    call test_fs%clear()
+    nullify( map_cell, map_whole )
+
+  end subroutine test_get_whole_dofmap
+
+ !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+ @Test( npes=[1] )
+  subroutine test_stencil_point( this )
+
+    use stencil_dofmap_mod,    only: stencil_dofmap_type, STENCIL_POINT
+
+    implicit none
+
+    class(test_function_space_type), intent(inout) :: this
+
+    type(function_space_type) :: test_fs
+
+    type(stencil_dofmap_type), pointer :: stencil_dofmap   => null()
+    integer(i_def),            pointer :: stencil_map(:,:) => null()
+    integer(i_def),            pointer :: map(:)           => null()
+
+    test_fs = function_space_type( this%mesh_id,  &
+                                   element_order, &
+                                   this%function_space )
+
+    stencil_dofmap => test_fs%get_stencil_dofmap(STENCIL_POINT,0)
+    stencil_map => stencil_dofmap%get_dofmap(1)
+    map => test_fs%get_cell_dofmap(1)
+    @assertEqual( map, stencil_map(:,1) )
+
+    call test_fs%clear()
+    nullify( stencil_dofmap, stencil_map, map )
+
+  end subroutine test_stencil_point
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_stencil_1dx( this )
+
+    use stencil_dofmap_mod,    only: stencil_dofmap_type, STENCIL_1DX
+
+    implicit none
+
+    class(test_function_space_type), intent(inout) :: this
+
+    type(function_space_type) :: test_fs
+
+    type(stencil_dofmap_type), pointer :: stencil_dofmap   => null()
+    integer(i_def),            pointer :: stencil_map(:,:) => null()
+    integer(i_def),            pointer :: map(:)           => null()
+    type(mesh_type),           pointer :: mesh             => null()
+
+    test_fs = function_space_type( this%mesh_id,  &
+                                   element_order, &
+                                   this%function_space )
+
+    stencil_dofmap => test_fs%get_stencil_dofmap( STENCIL_1DX, 1 )
+    stencil_map    => stencil_dofmap%get_dofmap( 1 )
+
+    mesh =>mesh_collection%get_mesh(this%mesh_id)
+
+    map => test_fs%get_cell_dofmap(1)
+    @assertEqual( map, stencil_map(:,1) )
+    map => test_fs%get_cell_dofmap(mesh%get_cell_next( W, 1 ))
+    @assertEqual( map, stencil_map(:,2) )
+    map => test_fs%get_cell_dofmap(mesh%get_cell_next( E, 1 ))
+    @assertEqual( map, stencil_map(:,3) )
+
+    call test_fs%clear()
+    nullify( stencil_dofmap, stencil_map, map, mesh )
+
+  end subroutine test_stencil_1dx
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_stencil_1dy( this )
+
+    use stencil_dofmap_mod,    only: stencil_dofmap_type, STENCIL_1DY
+
+    implicit none
+
+    class(test_function_space_type), intent(inout) :: this
+
+    type(function_space_type) :: test_fs
+
+    type(stencil_dofmap_type), pointer :: stencil_dofmap   => null()
+    integer(i_def),            pointer :: stencil_map(:,:) => null()
+    integer(i_def),            pointer :: map(:)           => null()
+    type(mesh_type),           pointer :: mesh             => null()
+
+    test_fs = function_space_type( this%mesh_id,  &
+                                   element_order, &
+                                   this%function_space )
+
+    stencil_dofmap => test_fs%get_stencil_dofmap( STENCIL_1DY, 1 )
+    stencil_map => stencil_dofmap%get_dofmap(1)
+
+    mesh =>mesh_collection%get_mesh(this%mesh_id)
+
+    map => test_fs%get_cell_dofmap(1)
+    @assertEqual( map, stencil_map(:,1) )
+    map => test_fs%get_cell_dofmap(mesh%get_cell_next( S, 1 ))
+    @assertEqual( map, stencil_map(:,2) )
+    map => test_fs%get_cell_dofmap(mesh%get_cell_next( N, 1 ))
+    @assertEqual( map, stencil_map(:,3) )
+
+    call test_fs%clear()
+    nullify( stencil_dofmap, stencil_map, map, mesh )
+
+  end subroutine test_stencil_1dy
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_stencil_cross( this )
+
+    use stencil_dofmap_mod,    only: stencil_dofmap_type, STENCIL_CROSS
+
+    implicit none
+
+    class(test_function_space_type), intent(inout) :: this
+
+    type(function_space_type) :: test_fs
+
+    type(stencil_dofmap_type), pointer :: stencil_dofmap   => null()
+    integer(i_def),            pointer :: stencil_map(:,:) => null()
+    integer(i_def),            pointer :: map(:)           => null()
+    type(mesh_type),           pointer :: mesh             => null()
+
+    integer :: i
+
+    test_fs = function_space_type( this%mesh_id,  &
+                                   element_order, &
+                                   this%function_space )
+
+    stencil_dofmap => test_fs%get_stencil_dofmap(STENCIL_CROSS,1)
+    stencil_map => stencil_dofmap%get_dofmap(1)
+
+    mesh =>mesh_collection%get_mesh(this%mesh_id)
+
+    map => test_fs%get_cell_dofmap(1)
+    @assertEqual( map, stencil_map(:,1) )
+    do i = 1,4
+      map => test_fs%get_cell_dofmap(mesh%get_cell_next(i,1))
+      @assertEqual( map, stencil_map(:,i+1) )
+    end do
+
+    call test_fs%clear()
+    nullify( stencil_dofmap, stencil_map, map, mesh )
+
+  end subroutine test_stencil_cross
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_mesh( this )
+
+    implicit none
+
+    class(test_function_space_type), intent(inout) :: this
+
+    type(function_space_type) :: test_fs
+    type(mesh_type),  pointer :: mesh_out => null()
+
+    test_fs = function_space_type( this%mesh_id,  &
+                                   element_order, &
+                                   this%function_space )
+
+    mesh_out => test_fs%get_mesh()
+
+    !-------------------------------------------------------------------
+    ! Test get_face_on_cell()
+    @assertEqual ( 28, mesh_out%get_face_on_cell(3, 9) )
+
+    !-------------------------------------------------------------------
+    ! Test get_edge_on_cell()
+    @assertEqual ( 27, mesh_out%get_edge_on_cell(1, 5) )
+
+    @assertEqual ( 11, mesh_out%get_edge_on_cell( 5, 5 ) )
+
+    @assertEqual ( 28, mesh_out%get_edge_on_cell( 9, 5 ) )
+
+    @assertEqual ( 36, mesh_out%get_edge_on_cell( 12, 5 ) )
+
+    @assertEqual ( 32, mesh_out%get_edge_on_cell( 6, 9 ) )
+
+    call test_fs%clear()
+    nullify( mesh_out )
+
+  end subroutine test_mesh
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_entities( this )
+
+    implicit none
+
+    class(test_function_space_type), intent(inout) :: this
+
+    type(function_space_type)              :: test_fs
+    type(mesh_type),               pointer :: mesh           => null()
+    integer(i_def),                pointer :: entity_dofs(:) => null()
+
+    integer(i_def) :: reference(12)
+    integer(i_def) :: ndf
+
+    reference(:) = 0
+    test_fs = function_space_type( this%mesh_id,  &
+                                   element_order, &
+                                   this%function_space )
+
+    mesh              => mesh_collection%get_mesh( this%mesh_id )
+    entity_dofs       => test_fs%get_entity_dofs()
+
+    ndf = test_fs%get_ndf()
+
+    ! Might be a good idea to eventually make this test work for general order
+    ! elements.
+    select case ( this%function_space )
+      case (W0)
+        ! Lowest order W0 space has dofs only on each vertex.
+        reference(1:ndf) = (/ SWB, SEB, NEB, NWB, SWT, SET, NET, NWT /) &
+                         + VERTEX_OFFSET
+      case (W1)
+        ! Lowest order W1 space has dofs on each edge.
+        reference(1:ndf) = (/ WB, SB, EB, NB, SW, SE, NE, NW, WT, ST, ET, NT /) &
+                         + EDGE_OFFSET
+      case (W2)
+        ! Lowest order W2 space has dofs on all faces.
+        reference(1:ndf) = (/ W, S, E, N, B, T /) &
+                         + FACE_OFFSET
+      case (W3)
+        ! Lowest order W3 has a single cell-volume dof
+        reference(1) = V
+      case (Wtheta)
+        ! Lowest order theta space has dofs only on the top
+        ! and bottom faces.
+        reference(1:ndf) = (/ B, T /) + FACE_OFFSET
+      case (W2V)
+        ! Same as Wtheta
+        reference(1:ndf) = (/ B, T /) + FACE_OFFSET
+      case (W2H)
+        ! Only horizontal faces
+        reference(1:ndf) = (/ W, S, E, N /) + FACE_OFFSET
+      case (Wchi)
+         reference(1) = V
+      case (W2trace)
+        ! Lowest order W2trace space has dofs on all faces.
+        reference(1:ndf) = (/ W, S, E, N, B, T /) &
+             + FACE_OFFSET
+      case (W2Vtrace)
+        ! Only vertical faces
+        reference(1:ndf) = (/ B, T /) + FACE_OFFSET
+      case (W2Htrace)
+        ! Only horizontal faces
+        reference(1:ndf) = (/ W, S, E, N /) + FACE_OFFSET
+
+    end select
+
+    @assertEqual( entity_dofs(1:ndf), reference(1:ndf) )
+
+    call test_fs%clear()
+    nullify( mesh )
+
+  end subroutine test_entities
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_get_last_dof( this )
+
+    implicit none
+
+    class(test_function_space_type), intent(inout) :: this
+
+    type(function_space_type) :: test_fs
+
+    integer(i_def) :: undf, last_dof
+
+    test_fs = function_space_type( this%mesh_id,  &
+                                   element_order, &
+                                   this%function_space )
+
+    ! Get the total number of unique dofs in this function space
+    undf = test_fs%get_undf()
+
+    ! Get the last of the owned dofs
+    last_dof = test_fs%get_last_dof_owned()
+    ! In a serial test such as this the last owned dof should be the same
+    ! as the total number of dofs
+    @assertEqual ( undf, last_dof )
+
+    !Get the last dof of the deepest halo
+    last_dof = test_fs%get_last_dof_halo()
+    ! In a serial test such as this the last halo dof of the deepest halo
+    ! should be the same as the total number of dofs
+    @assertEqual ( undf, last_dof )
+
+    last_dof = test_fs%get_last_dof_halo(1)
+    ! In a serial test such as this the last halo dof of halo depth=1
+    ! should be the same as the total number of dofs
+    @assertEqual ( undf, last_dof )
+
+    call test_fs%clear()
+
+  end subroutine test_get_last_dof
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_is_readonly( this )
+
+    implicit none
+
+    class(test_function_space_type), intent(inout) :: this
+
+    type(function_space_type) :: test_fs
+
+    logical(l_def) :: is_readonly_expected
+    logical(l_def) :: is_readonly_returned
+    logical(l_def) :: is_writable_expected
+    logical(l_def) :: is_writable_returned
+
+    is_readonly_expected=.false.
+    is_writable_expected=.true.
+    if ( this%function_space == Wchi ) then
+      is_readonly_expected=.true.
+      is_writable_expected=.false.
+    end if
+
+    test_fs = function_space_type( this%mesh_id,  &
+                                   element_order, &
+                                   this%function_space )
+
+    is_readonly_returned=test_fs%is_readonly()
+
+    @assertEqual ( is_readonly_expected, is_readonly_returned )
+
+    is_writable_returned=test_fs%is_writable()
+
+    @assertEqual ( is_writable_expected, is_writable_returned )
+
+    call test_fs%clear()
+
+  end subroutine test_is_readonly
+
+end module function_space_mod_test

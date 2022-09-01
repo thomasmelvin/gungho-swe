@@ -1,0 +1,120 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2020 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+! Holds unit tests of reference_element_type.
+!
+module reference_element_mod_test
+
+  use constants_mod, only : i_def
+  use pFUnit_mod
+
+  implicit none
+
+  private
+  public :: test_reference_cube, test_reference_prism
+
+  ! Tests the constructors of two implementations of reference element,
+  ! reference cube and reference prism. Both are constructed by extruding
+  ! a 2D reference shape (square and triangle, respectively).
+  !
+  @TestCase
+  type, public, extends(TestCase) :: reference_element_test_type
+
+    private
+
+    integer(i_def) :: nvertices_2d, &
+                      nedges_2d
+    integer(i_def) :: nvertices,    &
+                      nfaces,       &
+                      nedges
+    integer(i_def) :: nfaces_h,     &
+                      nedges_h,     &
+                      nfaces_v,     &
+                      nedges_v
+
+  contains
+
+    private
+
+    procedure, public :: test_reference_cube
+    procedure, public :: test_reference_prism
+
+  end type reference_element_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_reference_cube( this )
+
+    use reference_element_mod, only : reference_cube_type
+
+    implicit none
+
+    class(reference_element_test_type), intent(inout) :: this
+    type(reference_cube_type) :: reference_cube
+
+    reference_cube = reference_cube_type()
+
+    this%nvertices_2d = 4_i_def
+    this%nedges_2d    = 4_i_def
+    this%nvertices    = 8_i_def
+    this%nfaces       = 6_i_def
+    this%nedges       = 12_i_def
+    this%nfaces_h     = 4_i_def
+    this%nedges_h     = 8_i_def
+    this%nfaces_v     = 2_i_def
+    this%nedges_v     = 4_i_def
+
+    ! Test the reference cube constructor
+    @assertEqual( this%nvertices_2d, reference_cube%get_number_2d_vertices() )
+    @assertEqual( this%nedges_2d, reference_cube%get_number_2d_edges() )
+    @assertEqual( this%nvertices, reference_cube%get_number_vertices() )
+    @assertEqual( this%nfaces, reference_cube%get_number_faces() )
+    @assertEqual( this%nedges, reference_cube%get_number_edges() )
+    @assertEqual( this%nfaces_h, reference_cube%get_number_horizontal_faces() )
+    @assertEqual( this%nedges_h, reference_cube%get_number_horizontal_edges() )
+    @assertEqual( this%nfaces_v, reference_cube%get_number_vertical_faces() )
+    @assertEqual( this%nedges_v, reference_cube%get_number_vertical_edges() )
+
+  end subroutine test_reference_cube
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_reference_prism( this )
+
+    use reference_element_mod, only : reference_prism_type
+
+    implicit none
+
+    class(reference_element_test_type), intent(inout) :: this
+    type(reference_prism_type) :: reference_prism
+
+    reference_prism = reference_prism_type()
+
+    this%nvertices_2d = 3_i_def
+    this%nedges_2d    = 3_i_def
+    this%nvertices    = 6_i_def
+    this%nfaces       = 5_i_def
+    this%nedges       = 9_i_def
+    this%nfaces_h     = 3_i_def
+    this%nedges_h     = 6_i_def
+    this%nfaces_v     = 2_i_def
+    this%nedges_v     = 3_i_def
+
+    ! Test the reference prism constructor
+    @assertEqual( this%nvertices_2d, reference_prism%get_number_2d_vertices() )
+    @assertEqual( this%nedges_2d, reference_prism%get_number_2d_edges() )
+    @assertEqual( this%nvertices, reference_prism%get_number_vertices() )
+    @assertEqual( this%nfaces, reference_prism%get_number_faces() )
+    @assertEqual( this%nedges, reference_prism%get_number_edges() )
+    @assertEqual( this%nfaces_h, reference_prism%get_number_horizontal_faces() )
+    @assertEqual( this%nedges_h, reference_prism%get_number_horizontal_edges() )
+    @assertEqual( this%nfaces_v, reference_prism%get_number_vertical_faces() )
+    @assertEqual( this%nedges_v, reference_prism%get_number_vertical_edges() )
+
+  end subroutine test_reference_prism
+
+end module reference_element_mod_test

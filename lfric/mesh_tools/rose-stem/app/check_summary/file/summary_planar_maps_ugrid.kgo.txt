@@ -1,0 +1,45 @@
+"dynamics":
+  Geometry:            planar
+  Topology:            periodic
+  Co-ordinate system:  xyz
+  Periodic X:          T
+  Periodic Y:          T
+  Constructor inputs:  geometry=planar;topology=periodic;coord_sys=xyz;edge_cells_x=16;edge_cells_y=8;periodic_x=T;periodic_y=T;domain_x=1600.00;domain_y=400.00;target_mesh_names=['physics','other'];target_edge_cells_x=[48,96];target_edge_cells_y=[24,24]
+  Nodes:               128
+  Edges:               256
+  Faces:               128
+  Nodes per face:      4
+  Edges per face:      4
+  Nodes per edge:      2
+  Max. faces per node: 4
+  Maps to:             "physics", "other"
+"physics":
+  Geometry:            planar
+  Topology:            periodic
+  Co-ordinate system:  xyz
+  Periodic X:          T
+  Periodic Y:          T
+  Constructor inputs:  geometry=planar;topology=periodic;coord_sys=xyz;edge_cells_x=48;edge_cells_y=24;periodic_x=T;periodic_y=T;domain_x=1600.00;domain_y=400.00;target_mesh_names=['dynamics'];target_edge_cells_x=[16];target_edge_cells_y=[8]
+  Nodes:               1152
+  Edges:               2304
+  Faces:               1152
+  Nodes per face:      4
+  Edges per face:      4
+  Nodes per edge:      2
+  Max. faces per node: 4
+  Maps to:             "dynamics"
+"other":
+  Geometry:            planar
+  Topology:            periodic
+  Co-ordinate system:  xyz
+  Periodic X:          T
+  Periodic Y:          T
+  Constructor inputs:  geometry=planar;topology=periodic;coord_sys=xyz;edge_cells_x=96;edge_cells_y=24;periodic_x=T;periodic_y=T;domain_x=1600.00;domain_y=400.00;target_mesh_names=['dynamics'];target_edge_cells_x=[16];target_edge_cells_y=[8]
+  Nodes:               2304
+  Edges:               4608
+  Faces:               2304
+  Nodes per face:      4
+  Edges per face:      4
+  Nodes per edge:      2
+  Max. faces per node: 4
+  Maps to:             "dynamics"

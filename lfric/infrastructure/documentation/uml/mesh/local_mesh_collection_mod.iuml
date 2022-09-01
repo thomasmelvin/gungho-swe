@@ -1,0 +1,17 @@
+' (c) Crown copyright 2019 Met Office. All rights reserved.
+' The file LICENCE, distributed with this code, contains details of the terms
+' under which the code may be used.
+
+class local_mesh_collection_mod::local_mesh_collection_type {
+
+  -local_mesh_list: linked_list_type <<payload_type=local_mesh_type>>
+
+  +<<create>>  local_mesh_collection_constructor() : local_mesh_collection_type
+  +<<destroy>> local_mesh_collection_destructor()
+  +clear()
+
+  +add_new_local_mesh(<<in>>local_mesh_to_add: local_mesh_type ) : local_mesh_id <<integer>>
+  +get_mesh_by_id( <<in>>local_mesh_id: integer ): local_mesh_type <<pointer>>
+  +get_mesh_by_name( <<in>>local_mesh_name: string ): local_mesh_type <<pointer>>
+  +get_local_mesh() <<generic>>: get_local_mesh_by_id(...), get_local_mesh_by_name(...)
+}

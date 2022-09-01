@@ -1,0 +1,169 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the Wtheta mass columnwise matrix application.
+!> For this first apply the columnwise inverse of a know matrix and then
+!> apply the same matrix in a dense representation. This should bring us
+!> back to where we started, which is verified in this test.
+
+module columnwise_op_appinv_kernel_mod_test
+
+  use constants_mod,                 only : i_def, r_def, r_solver
+  use get_unit_test_m3x3_dofmap_mod, only : get_wtheta_m3x3_dofmap
+  use get_unit_test_m3x3_q3x3x3_sizes_mod, &
+       only : get_wtheta_m3x3_q3x3x3_size
+  use get_unit_test_m3x3_cma_data_mod, &
+       only : get_wtheta_m3x3_cma_data
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: columnwise_op_appinv_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type columnwise_op_appinv_test_type
+
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(columnwise_op_appinv_test_type), intent(inout) :: this
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(columnwise_op_appinv_test_type), intent(inout) :: this
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use columnwise_op_appinv_kernel_mod, only : &
+         columnwise_op_appinv_kernel_code
+
+    implicit none
+
+    class(columnwise_op_appinv_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter :: tol = 1.0e-6_r_def
+
+    integer(kind=i_def) :: i, cell
+
+    ! Required for calling mass matrix kernel
+
+    integer(kind=i_def) :: ndf, undf, ncells
+    integer(kind=i_def) :: unused
+    integer(kind=i_def) :: nlayers = 3
+    integer(kind=i_def) :: nrow, ncol, bw
+    integer(kind=i_def) :: alpha, beta, g_m, g_p
+
+    integer(kind=i_def), allocatable :: map(:,:)
+    integer(kind=i_def), allocatable :: indirection_map(:)
+    integer(kind=i_def), allocatable :: column_banded_map(:,:)
+
+    real(kind=r_def), allocatable :: lhs_data(:), rhs_data(:)
+
+    real(kind=r_def),    allocatable :: lhs_direct(:)
+    real(kind=r_solver), allocatable :: columnwise_matrix(:,:,:)
+
+    real(kind=r_def), allocatable, dimension(:,:) :: densematrix
+
+    ! Test mass matrix kernel
+    cell = 1
+    call get_wtheta_m3x3_q3x3x3_size(ndf, undf, ncells, unused, unused, unused, unused, nlayers=nlayers)
+    call get_wtheta_m3x3_dofmap( map )
+    call get_wtheta_m3x3_cma_data(ndf, undf, ncells, nlayers, map, &
+                                  alpha, beta, g_m, g_p, bw,   &
+                                  ncol, nrow, indirection_map, column_banded_map )
+
+    ! Fill RHS with random data
+    allocate(rhs_data(undf), lhs_data(undf) )
+    call random_number(rhs_data(:))
+    lhs_data(:) = 0.0_r_def
+    allocate(lhs_direct(nrow))
+    lhs_direct(:) = 0.0_r_def
+
+    ! Check some sizes for Wtheta-Wtheta ...
+    @assertEqual(ndf, 2)
+    @assertEqual(alpha, 1)
+    @assertEqual(g_m, 1)
+    @assertEqual(bw, 3)
+
+    ! Construct banded and dense matrix representation,
+    ! fill with (scaled) theta mass matrix.
+    allocate(densematrix(nrow,ncol))
+    densematrix(:,:) = 0.0_r_def
+    allocate( columnwise_matrix( bw, nrow, ncells ) )
+    columnwise_matrix(:,:,:) = 0.0_r_solver
+
+    do i = 1, nrow
+       if (i == 1) then
+          columnwise_matrix(2,i,cell) = 1.0_r_solver/3.0_r_solver
+          columnwise_matrix(3,i,cell) = 1.0_r_solver/6.0_r_solver
+          densematrix(i,i)   = 1.0_r_def/3.0_r_def
+          densematrix(i,i+1) = 1.0_r_def/6.0_r_def
+       else if (i == nrow) then
+          columnwise_matrix(1,i,cell) = 1.0_r_solver/6.0_r_solver
+          columnwise_matrix(2,i,cell) = 1.0_r_solver/3.0_r_solver
+          densematrix(i,i-1) = 1.0_r_def/6.0_r_def
+          densematrix(i,i)   = 1.0_r_def/3.0_r_def
+       else
+          columnwise_matrix(1,i,cell) = 1.0_r_solver/6.0_r_solver
+          columnwise_matrix(2,i,cell) = 2.0_r_solver/3.0_r_solver
+          columnwise_matrix(3,i,cell) = 1.0_r_solver/6.0_r_solver
+          densematrix(i,i-1) = 1.0_r_def/6.0_r_def
+          densematrix(i,i)   = 2.0_r_def/3.0_r_def
+          densematrix(i,i+1) = 1.0_r_def/6.0_r_def
+       end if
+    end do
+
+    ! Apply columnwise inverse of matrix
+    call columnwise_op_appinv_kernel_code(cell,                      &
+                                          ncells,                    &
+                                          lhs_data,                  &
+                                          rhs_data,                  &
+                                          columnwise_matrix,         &
+                                          nrow,                      &
+                                          bw,                        &
+                                          alpha,                     &
+                                          beta,                      &
+                                          g_m,                       &
+                                          g_p,                       &
+                                          ndf, undf, map,            &
+                                          indirection_map )
+
+    ! Apply dense matrix to get back to original field
+    lhs_direct(1:nrow) &
+       = matmul( densematrix, lhs_data(1:ncol) )
+
+    ! Compare the two results
+    do i = 1, nrow
+       @assertEqual(lhs_direct(i), rhs_data(i), tol)
+    end do
+
+    deallocate(densematrix)
+    deallocate(lhs_direct)
+
+  end subroutine test_all
+
+end module columnwise_op_appinv_kernel_mod_test

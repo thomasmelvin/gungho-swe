@@ -1,0 +1,39 @@
+abstract class extrusion_mod::extrusion_type {
+  atmosphere_bottom: real
+  atmosphere_top: real
+  number_of_layers: integer
+  extrusion_id: integer
+
+  +{abstract}extrude( <<out>>chi:real[] )
+  -extrusion_constructor( <<in>>atmosphere_bottom: real, <<in>>atmosphere_top: real, <<in>>number_of_layers: integer, <<in>>extrusion_id: integer )
+
+  +get_id(): integer
+}
+
+class extrusion_mod::uniform_extrusion_type {
+  +<<create>>uniform_extrusion_constructor( ... )
+  +extrude( <<out>>chi:real[] )
+}
+
+class extrusion_mod::quadratic_extrusion_type {
+  +<<create>>quadratic_extrusion_constructor( ... )
+  +extrude( <<out>>chi:real[] )
+}
+
+class extrusion_mod::geometric_extrusion_type {
+  +<<create>>geometric_extrusion_constructor( ... )
+  +extrude( <<out>>chi:real[] )
+}
+
+class extrusion_mod::dcmip_extrusion_type {
+  +<<create>>dcmip_extrusion_constructor( ... )
+  +extrude( <<out>>chi:real[] )
+}
+
+extrusion_mod::extrusion_type <|-- extrusion_mod::uniform_extrusion_type
+extrusion_mod::extrusion_type <|-- extrusion_mod::quadratic_extrusion_type
+extrusion_mod::extrusion_type <|-- extrusion_mod::geometric_extrusion_type
+extrusion_mod::extrusion_type <|-- extrusion_mod::dcmip_extrusion_type
+
+note right of extrusion_mod::extrusion_type : Top and bottom are geometry concepts. Should they be elsewhere?
+

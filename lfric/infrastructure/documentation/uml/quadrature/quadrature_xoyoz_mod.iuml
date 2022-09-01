@@ -1,0 +1,36 @@
+' (C) Crown copyright 2017 Met Office. All rights reserved.
+' For further details please refer to the file LICENCE which you should have
+' received as part of this distribution.
+
+class quadrature_xoyoz_mod::quadrature_xoyoz_type {
+  -np_x     : integer
+  -np_y     : integer
+  -np_z     : integer
+  -weights_x: real[:] <<allocatable>>
+  -weights_y: real[:] <<allocatable>>
+  -weights_z: real[:] <<allocatable>>
+  -points_x : real[:] <<allocatable>>
+  -points_y : real[:] <<allocatable>>
+  -points_z : real[:] <<allocatable>>
+
+  +<<create>>init_quadrature_variable( <<in>>np_x: integer, <<in>>np_y: integer, <<in>>np_z: integer, <<in>>rule: quadrature_rule ) : quadrature_xoyoz_type
+  +<<create>>init_quadrature_symmetrical( <<in>>np: integer, <<in>>rule: quadrature_rule ) : quadrature_xoyoz_type
+  +compute_function( <<in>>function_to_call: integer, <<in>>function_space: function_space_type, <<in>>fspace_dim: integer, <<in>>ndf: integer, <<out>>basis: real[:::::] )
+  +get_quadrature_proxy() : quadrature_xoyoz_proxy_type
+  +<<destroy>>quadrature_destructor()
+}
+
+class quadrature_xoyoz_mod::quadrature_xoyoz_proxy_type {
+  +np_x     : integer
+  +np_y     : integer
+  +np_z     : integer
+  +weights_x: real[:] <<pointer>>
+  +weights_y: real[:] <<pointer>>
+  +weights_z: real[:] <<pointer>>
+  +points_x : real[:] <<pointer>>
+  +points_y : real[:] <<pointer>>
+  +points_z : real[:] <<pointer>>
+}
+
+quadrature_mod::quadrature_type <|-- quadrature_xoyoz_mod::quadrature_xoyoz_type
+quadrature_xoyoz_mod::quadrature_xoyoz_proxy_type -> quadrature_xoyoz_mod::quadrature_xoyoz_type

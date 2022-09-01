@@ -1,0 +1,155 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+!
+!-------------------------------------------------------------------------------
+module coordinate_jacobian_xyz_mod_test
+
+  use pFUnit_Mod
+  use constants_mod, only : r_def, i_def
+
+  implicit none
+
+  public :: jacobian_xyz_test_type, test_all
+
+  @TestCase
+  type, extends(TestCase) :: jacobian_xyz_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type jacobian_xyz_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use finite_element_config_mod, only : cellshape_quadrilateral, &
+                                          coord_system_xyz
+    use feign_config_mod,          only : feign_finite_element_config
+
+    implicit none
+
+    class(jacobian_xyz_test_type), intent(inout) :: this
+
+    call feign_finite_element_config(           &
+             cellshape=cellshape_quadrilateral, &
+             coord_order=0_i_def,               &
+             coord_system=coord_system_xyz,     &
+             element_order=0_i_def,             &
+             rehabilitate=.true. )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod,        only: final_configuration
+
+    implicit none
+
+    class(jacobian_xyz_test_type), intent(inout) :: this
+
+    call final_configuration()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use coordinate_jacobian_mod, only : coordinate_jacobian,                   &
+                                        coordinate_jacobian_inverse,           &
+                                        pointwise_coordinate_jacobian,         &
+                                        pointwise_coordinate_jacobian_inverse
+
+    implicit none
+
+    class(jacobian_xyz_test_type), intent(inout) :: this
+
+    real(kind=r_def) :: tol, zero, one, two, eight
+
+    integer :: ndf = 8
+    integer :: ngp = 1
+    integer :: ipanel = 1
+    integer :: df
+
+    real(kind=r_def) :: x(8), y(8), z(8), diff_basis(3,8,1,1), basis(1,8,1,1)
+    real(kind=r_def) :: jac(3,3,1,1), dj(1,1), jac_inv(3,3,1,1)
+    real(kind=r_def) :: identity(3,3,1,1), err
+
+    x(:) = (/ 0.0_r_def, 2.0_r_def, 2.0_r_def, 0.0_r_def, 0.0_r_def, 2.0_r_def,&
+              2.0_r_def, 0.0_r_def /)
+    y(:) = (/ 0.0_r_def, 0.0_r_def, 2.0_r_def, 2.0_r_def, 0.0_r_def, 0.0_r_def,&
+              2.0_r_def, 2.0_r_def /)
+    z(:) = (/ 0.0_r_def, 0.0_r_def, 0.0_r_def, 0.0_r_def, 2.0_r_def, 2.0_r_def,&
+              2.0_r_def, 2.0_r_def /)
+
+    identity(1,:,1,1) = (/ 1.0_r_def, 0.0_r_def, 0.0_r_def /)
+    identity(2,:,1,1) = (/ 0.0_r_def, 1.0_r_def, 0.0_r_def /)
+    identity(3,:,1,1) = (/ 0.0_r_def, 0.0_r_def, 1.0_r_def /)
+
+    diff_basis(:,:,:,:) = 0.25_r_def
+    do df = 1,ndf
+      if ( x(df) < 1.0_r_def ) diff_basis(1,df,:,:) = -0.25_r_def
+      if ( y(df) < 1.0_r_def ) diff_basis(2,df,:,:) = -0.25_r_def
+      if ( z(df) < 1.0_r_def ) diff_basis(3,df,:,:) = -0.25_r_def
+    end do
+
+    basis(:,:,:,:) = 0.125_r_def
+
+    call coordinate_jacobian(ndf, ngp, ngp, x, y, z, ipanel, basis,           &
+                             diff_basis, jac, dj)
+    call coordinate_jacobian_inverse(ngp,ngp, jac, dj, jac_inv)
+
+    err = maxval( abs( matmul( jac_inv(:,:,1,1), jac(:,:,1,1) )               &
+                       - identity(:,:,1,1) ) )
+
+    tol=1.0e-14_r_def
+
+    zero = 0.0_r_def
+    one = 1.0_r_def
+    two = 2.0_r_def
+    eight = 8.0_r_def
+
+    @assertEqual( eight, dj(1,1), tol )
+    @assertEqual( two, jac(1,1,1,1), tol )
+    @assertEqual( two, jac(2,2,1,1), tol )
+    @assertEqual( two, jac(3,3,1,1), tol )
+    @assertEqual( zero, jac(1,2,1,1), tol )
+    @assertEqual( zero, jac(1,3,1,1), tol )
+    @assertEqual( zero, jac(2,1,1,1), tol )
+    @assertEqual( zero, jac(2,3,1,1), tol )
+    @assertEqual( zero, jac(3,1,1,1), tol )
+    @assertEqual( zero, jac(3,2,1,1), tol )
+
+    @assertEqual( zero, err, tol)
+
+    ! Test the pointwise computations
+    call pointwise_coordinate_jacobian(ndf, x, y, z, ipanel, basis(:,:,1,1),  &
+                                       diff_basis(:,:,1,1), jac(:,:,1,1),     &
+                                       dj(1,1))
+
+    jac_inv(:,:,1,1) =                                                        &
+         pointwise_coordinate_jacobian_inverse(jac(:,:,1,1), dj(1,1))
+    err = maxval( abs( matmul( jac_inv(:,:,1,1), jac(:,:,1,1) )               &
+                  - identity(:,:,1,1)) )
+    @assertEqual( zero, err, tol)
+    @assertEqual( eight, dj(1,1), tol )
+    @assertEqual( two, jac(1,1,1,1), tol )
+    @assertEqual( two, jac(2,2,1,1), tol )
+    @assertEqual( two, jac(3,3,1,1), tol )
+    @assertEqual( zero, jac(1,2,1,1), tol )
+    @assertEqual( zero, jac(1,3,1,1), tol )
+    @assertEqual( zero, jac(2,1,1,1), tol )
+    @assertEqual( zero, jac(2,3,1,1), tol )
+    @assertEqual( zero, jac(3,1,1,1), tol )
+    @assertEqual( zero, jac(3,2,1,1), tol )
+
+  end subroutine test_all
+
+end module coordinate_jacobian_xyz_mod_test

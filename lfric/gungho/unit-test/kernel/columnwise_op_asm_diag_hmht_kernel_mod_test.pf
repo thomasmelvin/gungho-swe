@@ -1,0 +1,163 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the assembly of the term diag(D_h.M_{2,h,inv}.D_h^T) into a columnwise
+!> operator. This term is required in the gravity wave test
+!>
+module columnwise_op_asm_diag_hmht_kernel_mod_test
+
+  use constants_mod,                 only : i_def, r_def, r_solver
+  use get_unit_test_m3x3_q3x3x3_sizes_mod, &
+                                     only : get_w3_m3x3_q3x3x3_size, &
+                                            get_w2h_m3x3_q3x3x3_size
+  use get_unit_test_m3x3_dofmap_mod, only : get_w3_m3x3_dofmap
+  use get_unit_test_m3x3_cma_data_mod, &
+                                     only : get_w3_w3_m3x3_cma_data
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: columnwise_op_asm_diag_hmht_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type columnwise_op_asm_diag_hmht_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+    implicit none
+
+    class(columnwise_op_asm_diag_hmht_test_type), intent(inout) :: this
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod,        only: final_configuration
+
+    implicit none
+
+    class(columnwise_op_asm_diag_hmht_test_type), intent(inout) :: this
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use columnwise_op_asm_diag_hmht_kernel_mod, only : &
+         columnwise_op_asm_diag_hmht_kernel_code
+
+    implicit none
+
+    class(columnwise_op_asm_diag_hmht_test_type), intent(inout) :: this
+
+    real(kind=r_solver), parameter :: tol = 1.0e-6_r_solver
+    integer(kind=i_def)            :: i, j, k, cell
+    integer(kind=i_def)            :: ndf_w3, ndf_w2h, unused
+    integer(kind=i_def)            :: nlayers, ncell_2d, ncell_3d
+    integer(kind=i_def)            :: alpha,beta,g_m, g_p, bw, ncol, nrow
+
+    integer(kind=i_def), allocatable, dimension(:,:)   :: map
+    integer(kind=i_def), allocatable, dimension(:)     :: ind_map
+    integer(kind=i_def), allocatable, dimension(:,:)   :: col_map
+    real(kind=r_solver), allocatable, dimension(:,:,:) :: col_mat_diag_hmht
+
+    real(kind=r_def), allocatable, dimension(:,:,:) :: local_stencil_div
+    real(kind=r_def), allocatable, dimension(:,:,:) :: local_stencil_M2h
+    real(kind=r_def),              dimension(4)     :: rho
+    real(kind=r_def),              dimension(4)     :: sigma
+    real(kind=r_solver)                             :: answer
+
+    rho(1) = 2.0_r_def
+    rho(2) = 3.0_r_def
+    rho(3) = 4.0_r_def
+    rho(4) = 5.0_r_def
+    sigma(1) = 2.0_r_def
+    sigma(2) = 7.0_r_def
+    sigma(3) = 9.1_r_def
+    sigma(4) = 4.8_r_def
+
+    ! Test mass matrix kernel
+    nlayers = 3
+    call get_w3_m3x3_q3x3x3_size( ndf_w3, unused, ncell_2d, unused, unused, &
+                                  unused, unused, nlayers=nlayers)
+    call get_w2h_m3x3_q3x3x3_size(ndf_w2h, unused, ncell_2d, unused, unused, &
+                                  unused, unused, nlayers=nlayers)
+    call get_w3_m3x3_dofmap( map )
+
+    ! Set ncell_3d to be 1*nlayers, as only a single column is required for the test.
+    ncell_2d = 1
+    ncell_3d = ncell_2d * nlayers
+    allocate(local_stencil_div(ndf_w3, ndf_w2h,ncell_3d))
+    allocate(local_stencil_M2h(ndf_w2h,ndf_w2h,ncell_3d))
+
+    call get_w3_w3_m3x3_cma_data(ndf_w3, ncell_2d, nlayers, map, alpha, beta, &
+                                 g_m, g_p, bw, nrow, ncol, &
+                                 ind_map, col_map)
+    allocate(col_mat_diag_hmht( bw, nrow, ncell_2d ))
+
+
+    cell = 1
+
+    do i=1, ncell_3d
+       local_stencil_div(:,:,i) = reshape( (/ rho(1), rho(2), rho(3), rho(4) /),&
+                                             (/1, 4/) )
+
+       local_stencil_M2h(:,:,i) = reshape( (/ sigma(1),0.0_r_def,0.0_r_def,0.0_r_def,   &
+                                              0.0_r_def,sigma(2),0.0_r_def,0.0_r_def,   &
+                                              0.0_r_def,0.0_r_def,sigma(3),0.0_r_def,   &
+                                              0.0_r_def,0.0_r_def,0.0_r_def,sigma(4) /),&
+                                              (/4, 4/) )
+    end do
+
+    call columnwise_op_asm_diag_hmht_kernel_code(cell,                                     &
+                                                 nlayers,                                  &
+                                                 ncell_2d,                                 &
+                                                 ncell_3d,                                 &
+                                                 local_stencil_div,                        &
+                                                 ncell_3d,                                 &
+                                                 local_stencil_M2h,                        &
+                                                 col_mat_diag_hmht,                        &
+                                                 nrow,                                     &
+                                                 bw,                                       &
+                                                 alpha,                                    &
+                                                 beta,                                     &
+                                                 g_m,                                      &
+                                                 g_p,                                      &
+                                                 ndf_w3,                                   &
+                                                 col_map,                                  &
+                                                 ndf_w2h)
+
+    answer = 0.0_r_solver
+    do i = 1, 4
+       answer = answer + real(rho(i)**2/sigma(i), r_solver)
+    end do
+
+    do i = 1, nrow
+      ! All other rows should be ( 3/2 )
+      @assertEqual(answer, col_mat_diag_hmht(1,i,1), tol)
+    end do
+
+    deallocate(local_stencil_div)
+    deallocate(local_stencil_M2h)
+    deallocate(map)
+    deallocate(ind_map)
+    deallocate(col_map)
+    deallocate(col_mat_diag_hmht)
+
+  end subroutine test_all
+
+end module columnwise_op_asm_diag_hmht_kernel_mod_test

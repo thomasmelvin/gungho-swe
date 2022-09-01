@@ -1,0 +1,24 @@
+{%- set projectName = 'components' %}
+{%- set projectDir  = 'components' %}
+{%- set miniappFlag = False %}
+
+{%- set projectName = 'driver' %}
+
+
+{# Set the  compiler debug profile for runs in this suite #}
+{# Options are ['fast-debug'|'full-debug'|'production'], omission defaults to 'fast-debug' #}
+{%- set run_application_profile = '' %}
+
+{%- set rdef_default  = "64" %}
+{%- set mesh_rdef     = "64" %}
+{%- set mesh_build    = "fast-debug" %}
+{%- set mesh_compiler = "intel" %}
+{%- set MAXRUNAHEAD     = 1 %}
+
+{%- set groups = {'developer': ['api_documentation_graph(publish=True)',
+                                'check_style_graph()',
+                                'unit_test_graph("components/driver")'],
+                  'nightly'  : ['null_task_graph()']
+                 }
+%}
+

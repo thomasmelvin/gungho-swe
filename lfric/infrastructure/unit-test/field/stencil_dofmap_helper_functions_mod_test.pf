@@ -1,0 +1,247 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2020 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+! Test the stencil dofmap helper functions
+module stencil_dofmap_helper_functions_mod_test
+
+  use constants_mod,            only: i_def, i_native, l_def
+  use pFUnit_Mod
+  use stencil_2D_dofmap_mod,    only: stencil_2D_dofmap_type, STENCIL_2D_CROSS
+  use master_dofmap_mod,        only: master_dofmap_type
+  use local_mesh_mod,           only: local_mesh_type
+  use mesh_collection_mod,      only: mesh_collection_type, mesh_collection
+  use mesh_mod,                 only: mesh_type, PLANE, PLANE_BI_PERIODIC
+
+  implicit none
+
+  private
+  public :: test_get_stencil_cells, test_get_stencil_cells_region, &
+            test_generate_stencil_dofmap_id
+
+  @TestCase
+  type, extends(TestCase), public :: stencil_dofmap_helper_test_type
+    private
+    type(local_mesh_type) :: unit_test_local_mesh
+    integer(i_def) :: planar_mesh_id
+    integer(i_def) :: biperiodic_mesh_id
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure get_local_mesh_ptr
+    procedure test_get_stencil_cells
+  end type stencil_dofmap_helper_test_type
+
+contains
+
+  subroutine setUp(this)
+
+    implicit none
+
+    class(stencil_dofmap_helper_test_type), intent(inout) :: this
+
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    type(mesh_type) :: plane_mesh
+    type(mesh_type) :: biperiodic_mesh
+
+    ! Create top level mesh collection
+    mesh_collection = mesh_collection_type()
+
+    call this%unit_test_local_mesh%initialise()
+    unit_test_local_mesh_ptr => this%get_local_mesh_ptr()
+
+    ! Add canned meshes to the mesh collection
+    plane_mesh = mesh_type( PLANE, unit_test_local_mesh_ptr )
+    this%planar_mesh_id = mesh_collection%add_new_mesh( plane_mesh )
+    biperiodic_mesh = mesh_type( PLANE_BI_PERIODIC, unit_test_local_mesh_ptr )
+    this%biperiodic_mesh_id = mesh_collection%add_new_mesh( biperiodic_mesh )
+
+  end subroutine setUp
+
+
+  subroutine tearDown(this)
+
+    implicit none
+
+    class(stencil_dofmap_helper_test_type), intent(inout) :: this
+
+    ! Clear top level mesh collection
+    call mesh_collection%clear()
+
+  end subroutine tearDown
+
+
+  function get_local_mesh_ptr(this) result(unit_test_local_mesh_ptr)
+    implicit none
+    class(stencil_dofmap_helper_test_type), intent(inout), target :: this
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    unit_test_local_mesh_ptr => this%unit_test_local_mesh
+  end function get_local_mesh_ptr
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  @test
+  subroutine test_get_stencil_cells(this)
+
+    use stencil_dofmap_helper_functions_mod, only: get_stencil_cells
+
+    implicit none
+
+    class(stencil_dofmap_helper_test_type), intent(inout) :: this
+    type(mesh_type), pointer      :: mesh => null()
+    integer(i_def)                :: st_depth, origin_cell, cells_in_stencil, &
+                                     number_of_neighbours, i
+    integer(i_def)                :: direction_map(4)
+    integer(i_def), allocatable   :: stencil_cells(:)
+    integer(i_def)                :: cells_in_stencils_list(9)
+    integer(i_def)                :: stencil_cells_list(5,9)
+    logical(l_def)                :: region_stencil
+
+    mesh => mesh_collection%get_mesh( this%planar_mesh_id )
+    st_depth = 1
+    number_of_neighbours = 4
+    direction_map = 1
+    region_stencil = .false.
+    allocate(stencil_cells(9))
+
+    ! Expected number of cells in each stencil
+    cells_in_stencils_list = [3, 4, 3, 4, 5, 4, 3, 4, 3]
+
+    ! Expected stencil cell map for 3x3 planar mesh, first row is origin cell
+    stencil_cells_list = reshape( [ 1, 2, 3, 4, 5, 6, 7, 8, 9,    &
+                                    2, 1, 2, 1, 4, 5, 4, 7, 8,    &
+                                    4, 3, 6, 5, 2, 3, 8, 5, 6,    &
+                                   -1, 5,-1, 7, 6, 9,-1, 9,-1,    &
+                                   -1,-1,-1,-1, 8,-1,-1,-1,-1 ],  &
+                                    shape(stencil_cells_list), order=[2,1])
+
+    do origin_cell = 1, 9
+      stencil_cells = -1_i_def
+      stencil_cells(1) = origin_cell
+      cells_in_stencil = 1
+      call get_stencil_cells( mesh,                  &
+                              origin_cell,           &
+                              st_depth,              &
+                              number_of_neighbours,  &
+                              direction_map,         &
+                              cells_in_stencil,      &
+                              stencil_cells,         &
+                              region_stencil )
+
+      @assertEqual(cells_in_stencils_list(origin_cell), cells_in_stencil)
+      do i = 1, 5
+        @assertEqual(stencil_cells_list(i, origin_cell), stencil_cells(i))
+      end do
+    end do
+
+  end subroutine test_get_stencil_cells
+
+  @test
+  subroutine test_get_stencil_cells_region(this)
+
+    use stencil_dofmap_helper_functions_mod, only: get_stencil_cells
+
+    implicit none
+
+    class(stencil_dofmap_helper_test_type), intent(inout) :: this
+    type(mesh_type), pointer      :: mesh => null()
+    integer(i_def)                :: st_depth, origin_cell, cells_in_stencil, &
+                                     number_of_neighbours, i
+    integer(i_def)                :: direction_map(4)
+    integer(i_def), allocatable   :: stencil_cells(:)
+    integer(i_def)                :: cells_in_stencils_list(9)
+    integer(i_def)                :: stencil_cells_list(9,9)
+    logical(l_def)                :: region_stencil
+
+    mesh => mesh_collection%get_mesh( this%biperiodic_mesh_id )
+    st_depth = 1
+    number_of_neighbours = 4
+    direction_map = 1
+    region_stencil = .true.
+    allocate(stencil_cells(9))
+
+    ! Expected number of cells in each stencil
+    cells_in_stencils_list = 9
+
+    ! Expected stencil cell map for 3x3 biperiodic mesh, first row is origin cell
+    stencil_cells_list = reshape( [ 1, 2, 3, 4, 5, 6, 7, 8, 9,    &
+                                    3, 1, 2, 6, 4, 5, 9, 7, 8,    &
+                                    9, 7, 8, 3, 1, 2, 6, 4, 5,    &
+                                    7, 8, 9, 1, 2, 3, 4, 5, 6,    &
+                                    8, 9, 7, 2, 3, 1, 5, 6, 4,    &
+                                    2, 3, 1, 5, 6, 4, 8, 9, 7,    &
+                                    5, 6, 4, 8, 9, 7, 2, 3, 1,    &
+                                    4, 5, 6, 7, 8, 9, 1, 2, 3,    &
+                                    6, 4, 5, 9, 7, 8, 3, 1, 2 ],  &
+                                    shape(stencil_cells_list), order=[2,1])
+
+    do origin_cell = 1, 9
+      stencil_cells = -1_i_def
+      stencil_cells(1) = origin_cell
+      cells_in_stencil = 1
+      call get_stencil_cells( mesh,                  &
+                              origin_cell,           &
+                              st_depth,              &
+                              number_of_neighbours,  &
+                              direction_map,         &
+                              cells_in_stencil,      &
+                              stencil_cells,         &
+                              region_stencil )
+
+      @assertEqual(cells_in_stencils_list(origin_cell), cells_in_stencil)
+      do i = 1, 9
+        @assertEqual(stencil_cells_list(i, origin_cell), stencil_cells(i))
+      end do
+    end do
+
+  end subroutine test_get_stencil_cells_region
+
+  @test
+  subroutine test_generate_stencil_dofmap_id(this)
+
+    use stencil_dofmap_mod,                  only: STENCIL_POINT, STENCIL_1DX, &
+                                                   STENCIL_1DY, STENCIL_CROSS, &
+                                                   STENCIL_REGION
+    use stencil_2D_dofmap_mod,               only: STENCIL_2D_CROSS
+    use stencil_dofmap_helper_functions_mod, only: generate_stencil_dofmap_id
+
+    implicit none
+
+    class(stencil_dofmap_helper_test_type), intent(inout) :: this
+
+    integer(i_def) :: stencil_extent
+    integer(i_def) :: stencil_id
+
+    stencil_extent = 1_i_def
+    stencil_id = generate_stencil_dofmap_id(STENCIL_POINT, stencil_extent)
+    @assertEqual(110001_i_def, stencil_id)
+    stencil_id = generate_stencil_dofmap_id(STENCIL_1DX, stencil_extent)
+    @assertEqual(120001_i_def, stencil_id)
+    stencil_id = generate_stencil_dofmap_id(STENCIL_1DY, stencil_extent)
+    @assertEqual(130001_i_def, stencil_id)
+    stencil_id = generate_stencil_dofmap_id(STENCIL_CROSS, stencil_extent)
+    @assertEqual(140001_i_def, stencil_id)
+    stencil_id = generate_stencil_dofmap_id(STENCIL_REGION, stencil_extent)
+    @assertEqual(150001_i_def, stencil_id)
+    stencil_id = generate_stencil_dofmap_id(STENCIL_2D_CROSS, stencil_extent)
+    @assertEqual(160001_i_def, stencil_id)
+
+    stencil_extent = 2_i_def
+    stencil_id = generate_stencil_dofmap_id(STENCIL_POINT, stencil_extent)
+    @assertEqual(110002_i_def, stencil_id)
+    stencil_id = generate_stencil_dofmap_id(STENCIL_1DX, stencil_extent)
+    @assertEqual(120002_i_def, stencil_id)
+    stencil_id = generate_stencil_dofmap_id(STENCIL_1DY, stencil_extent)
+    @assertEqual(130002_i_def, stencil_id)
+    stencil_id = generate_stencil_dofmap_id(STENCIL_CROSS, stencil_extent)
+    @assertEqual(140002_i_def, stencil_id)
+    stencil_id = generate_stencil_dofmap_id(STENCIL_REGION, stencil_extent)
+    @assertEqual(150002_i_def, stencil_id)
+    stencil_id = generate_stencil_dofmap_id(STENCIL_2D_CROSS, stencil_extent)
+    @assertEqual(160002_i_def, stencil_id)
+
+  end subroutine test_generate_stencil_dofmap_id
+
+end module stencil_dofmap_helper_functions_mod_test

@@ -1,0 +1,17 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+abstract class iterative_solver_mod::abstract_iterative_solver_type{
+  -prec:abstract_preconditioner_type<<pointer>>
+    -lin_op:abstract_linear_operator_type<<pointer>>
+    -r_rol:real
+    -a_tol:real
+    -max_iter:integer
+
+    {abstract}+apply(<<inout>>self:abstract_iterative_solver_type, <<inout>>x:abstract_vector_type, <<inout>>b:abstract_vector_type)
+}
+
+iterative_solver_mod::abstract_iterative_solver_type *-- preconditioner_mod::abstract_preconditioner_type
+iterative_solver_mod::abstract_iterative_solver_type *-- linear_operator_mod::abstract_linear_operator_type
+iterative_solver_mod::abstract_iterative_solver_type o-- vector_mod::abstract_vector_type

@@ -1,0 +1,61 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2020 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief Exercises the simple I/O context.
+!>
+module simple_io_context_mod_test
+
+  use clock_mod,             only : clock_type
+  use constants_mod,         only : r_second, i_native
+  use field_mod,             only : field_type
+  use io_context_mod,        only : io_context_type
+  use pfunit_mod
+  use simple_io_context_mod, only : simple_io_context_type
+
+  implicit none
+
+  private
+  public :: test_initialisation
+
+contains
+
+  @test
+  subroutine test_initialisation()
+
+    implicit none
+
+    type(simple_io_context_type) :: test_unit
+    class(clock_type), pointer   :: clock
+
+    ! These arguments are, as yet, unused by the context so can be passed
+    ! through un-initialised
+    type(field_type) :: chi(3)
+    type(field_type) :: panel_id
+
+    call test_unit%initialise( 'test_context', 1_i_native, &
+                               chi, panel_id, '4', '7',    &
+                               2.5_r_second, 1.2_r_second, &
+                               "test_date", "test_calendar" )
+
+    ! Check clock is still correct.
+    call clock_val( test_unit%get_clock() )
+
+  end subroutine test_initialisation
+
+  subroutine clock_val( clock )
+
+    implicit none
+
+    class(clock_type), intent(in), pointer :: clock
+
+    @assertEqual( 4, clock%get_step() )
+    @assertEqual( 4, clock%get_first_step() )
+    @assertEqual( 7, clock%get_last_step() )
+    @assertFalse( clock%is_spinning_up() )
+    @assertEqual( 1.2_r_second, clock%get_seconds_per_step() )
+
+  end subroutine clock_val
+
+end module simple_io_context_mod_test

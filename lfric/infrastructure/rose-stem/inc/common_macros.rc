@@ -1,0 +1,474 @@
+{# HANDLE THE SCRIPTING ASPECT OF A SUITE #}
+{#---------------------------------------------------------------------------#}
+{# This nasty mess of traps is needed because cylc will try and run its
+ # messaging tool in the users environment. Therefore the environment must be
+ # returned on an error. Or not on an error of course.
+ #}
+{%- macro scripting( target, setup, teardown,
+                     prescript='', script='', finalscript='',
+                     postscript='', errorscript='' ) %}
+{%- set setup_commands = [] %}
+{%- for item in setup %}
+{%-   if item.startswith('compiler.') %}
+{%-     set compiler=item.split('.')[1] %}
+{%-     do setup_commands.extend(get_target_property(target, 'setup.compiler', compiler=compiler)) %}
+{%-   else %}
+{%-     do setup_commands.extend(get_target_property(target, 'setup.'+item)) %}
+{%- endif %}
+{%- endfor %}
+{%- do setup_commands.extend(get_target_property(target, 'setup.reveal')) %}
+{%- set teardown_commands = [] %}
+{%- for item in teardown %}
+{%-   do teardown_commands.extend(get_target_property(target, 'teardown.'+item)) %}
+{%- endfor %}
+pre-script = """
+             {{ prescript }}
+             """
+script = """
+wrapper '{{setup_commands|join("\n")}}; {{script}}; {{teardown_commands|join("\n")}}'
+         """
+post-script = """
+              {{finalscript}}
+              {{postscript}}
+              """
+err-script = """
+             {{finalscript}}
+             {{errorscript}}
+             """
+{%- endmacro %}
+
+{# UNIT TEST MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro unit_tests_graph( compiler, precision ) %}
+{%-   if UNIT_TEST_WITH is defined %}
+{%-     if compiler in UNIT_TEST_WITH %}
+{%-       set label = compiler | lower + '_' + precision + '-bit' %}
+    [[[R1]]]
+    export_source => build_unit_tests_with_{{label}}
+    build_unit_tests_with_{{label}} => run_unit_tests_with_{{label}}
+{%-     endif %}
+{%-   endif %}
+{%- endmacro %}
+
+
+{%- macro unit_test_tasks( family, target, compiler, precision ) %}
+{%-   set label = compiler | lower + '_' + precision + '-bit' %}
+{%-   if 'build_unit_tests_with_'+label in scheduledTasks %}
+  [[build_unit_tests_with_{{label}}]]
+    inherit = {{family}}
+
+    {{scripting(
+          target,
+          ['base', 'compiler.'+compiler, 'build'],
+          ['base'],
+          script='make -C $SOURCE_DIRECTORY -j 6 unit-tests/build'
+      )}}
+
+    [[[environment]]]
+        WORKING_DIR    = {{get_target_property(target, 'build_root')}}/{{label}}/unit-test
+        RDEF_PRECISION = {{precision}}
+
+{{      directives(target, 'build') }}
+{%-   endif %}
+
+{%-   if 'run_unit_tests_with_'+label in scheduledTasks %}
+  [[run_unit_tests_with_{{label}}]]
+    inherit = {{family}}
+
+    {{scripting(
+          target,
+          ['base', 'compiler.'+compiler, 'tech'],
+          ['base'],
+          script='make -C $SOURCE_DIRECTORY -j 6 unit-tests/rerun'
+      )}}
+
+    [[[environment]]]
+      WORKING_DIR = {{get_target_property(target,
+                                          'build_root')}}/{{label}}/unit-test
+
+{{      directives(target, 'tech') }}
+{%-   endif %}
+{%- endmacro %}
+
+
+{# INTEGRATION TEST MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro integration_tests_graph( compiler, precision ) %}
+{%-   if INTEGRATION_TEST_WITH is defined %}
+{%-     if compiler in INTEGRATION_TEST_WITH %}
+{%-       set label = compiler | lower + '_' + precision + '-bit' %}
+    [[[R1]]]
+    export_source => build_integration_tests_with_{{label}}
+    build_integration_tests_with_{{label}} => run_integration_tests_with_{{label}}
+{%-     endif %}
+{%-   endif %}
+{%- endmacro %}
+
+
+{%- macro integration_test_tasks( family, target, compiler, precision ) %}
+{%-   set label = compiler | lower + '_' + precision + '-bit' %}
+{%-   if 'build_integration_tests_with_'+label in scheduledTasks %}
+  [[build_integration_tests_with_{{label}}]]
+    inherit = {{family}}
+
+    {{scripting(
+          target,
+          ['base', 'compiler.'+compiler, 'build'],
+          ['base'],
+          script='make -C $SOURCE_DIRECTORY -j 6 integration-tests/build'
+      )}}
+
+    [[[environment]]]
+        WORKING_DIR    = {{get_target_property(target, 'build_root')}}/{{label}}/unit-test
+        RDEF_PRECISION = {{precision}}
+
+{{      directives(target, 'build') }}
+{%-   endif %}
+
+{%-   if 'run_integration_tests_with_'+label in scheduledTasks %}
+  [[run_integration_tests_with_{{label}}]]
+    inherit = {{family}}
+
+    {{scripting(
+          target,
+          ['base', 'compiler.'+compiler, 'tech'],
+          ['base'],
+          script='make -C $SOURCE_DIRECTORY integration-tests/rerun'
+      )}}
+
+    [[[environment]]]
+      WORKING_DIR = {{get_target_property(target,
+                                          'build_root')}}/{{label}}/integration-test
+
+{{      directives(target, 'tech') }}
+{%-   endif %}
+{%- endmacro %}
+
+
+{# CHECK STYLE MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro check_style_graph() %}
+{%-   if 'check_style' in RUN_TECHNICAL %}
+    [[[R1]]]
+    export_source => check_style
+{%-   endif %}
+{%- endmacro %}
+
+{%- macro check_style_task( family, target ) %}
+{%-   if 'check_style' in scheduledTasks %}
+  [[check_style]]
+    inherit = {{family}}
+
+    {{scripting(
+          target,
+          ['base', 'tech'],
+          ['base'],
+          script='stylist -verbose $SOURCE_DIRECTORY'
+      )}}
+
+    [[[environment]]]
+      PYTHONPATH = $CYLC_SUITE_SHARE_DIR/source/infrastructure/tools/lib-python:${PYTHONPATH:-}
+      PATH = $CYLC_SUITE_SHARE_DIR/source/infrastructure/tools/bin:$PATH
+{%-   endif %}
+{%- endmacro %}
+
+
+{# CHECK CONFGI-DUMP MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro check_config_dump_graph() %}
+{%-   if 'check_config_dump' in RUN_TECHNICAL %}
+    [[[R1]]]
+    export_source => check_config_dump
+{%-   endif %}
+{%- endmacro %}
+
+{%- macro check_config_dump_task( family, target ) %}
+{%-   if 'check_config_dump' in scheduledTasks %}
+  [[check_config_dump]]
+    inherit = {{family}}
+
+    {{scripting(
+          target,
+          ['base', 'tech'],
+          ['base'],
+          script="rose task-run --app-key=check_config_dump"
+      )}}
+{%-   endif %}
+{%- endmacro %}
+
+
+
+{# NULL TASK MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro null_task_graph() %}
+    [[[R1]]]
+      null_task1 => null_task2
+{%- endmacro %}
+
+{%- macro null_tasks() %}
+  [[null_task1]]
+    script = "echo Null Task: No scheduled task in graph, check suite_control.rc"
+
+  [[null_task2]]
+    script = "echo Null Task: No scheduled task in graph, check suite_control.rc"
+{%- endmacro %}
+
+
+
+{# VALIDATE ROSE METADATA MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro validate_rose_meta_graph( projectName, appName=None ) %}
+
+{%-   if appName %}
+{%-     set taskName=appName %}
+{%-   else %}
+{%-     set taskName=projectName %}
+{%-   endif %}
+
+{%-   if 'validate_metadata' in RUN_TECHNICAL %}
+    [[[R1]]]
+    export_source => validate_{{taskName}}_rose-meta
+{%-   endif %}
+{%- endmacro %}
+
+{%- macro validate_rose_meta_task( projectName, family, appName=None ) %}
+
+{%-   if appName %}
+{%-     set taskName=appName %}
+{%-     set taskInput=projectName+':'+appName %}
+{%-   else %}
+{%-     set taskName=projectName %}
+{%-     set taskInput=projectName+':none' %}
+{%-   endif %}
+
+{%-   if 'validate_' + taskName + '_rose-meta' in scheduledTasks %}
+  [[validate_{{taskName}}_rose-meta]]
+    inherit = {{family}}
+    script = $SOURCE_ROOT/bin/validate_rose_meta {{taskInput}}
+{%-   endif %}
+{%- endmacro %}
+
+
+
+{# DESIGN DOCUMENTATION MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro design_documentation_graph( publish=False ) %}
+{%-   if 'documentation' in RUN_TECHNICAL %}
+    [[[R1]]]
+    export_source => design_documentation
+{%-     if publish %}
+    design_documentation => publish_design_documentation
+    publish_design_documentation:finish => publish_node
+{%-     endif %}
+{%-   endif %}
+{%- endmacro %}
+
+
+{#- In order to allow the document generation and publication to appear in
+ #  different family groups this macro takes both as arguments.
+ #
+ #  TODO: There may be a better way to handle this.
+ #}
+{%- macro design_documentation_task(doc_family, doc_target, pub_family, pub_target) %}
+{%-   if 'design_documentation' in scheduledTasks %}
+  [[design_documentation]]
+    inherit = {{doc_family}}
+
+    # The sleep is to help mitigate problems with
+    # overloaded Lustre filesystems.
+
+    {{scripting(
+          doc_target,
+          ['base', 'tech'],
+          ['base'],
+          prescript='mkdir -p $DOCUMENT_DIR; sleep 30',
+          script='make -C $SOURCE_DIRECTORY document-latex '+verboseMake(),
+          finalscript="""
+RELATIVE_LOG_ROOT=$(echo $CYLC_TASK_LOG_ROOT | sed 's|$HOME/||')
+echo $RELATIVE_LOG_ROOT > $DOCUMENT_DIR/design.log.path
+                      """
+      )}}
+
+    [[[environment]]]
+      DOCUMENT_DIR = $OUTPUT_ROOT/documents/design
+
+{%-   endif %}
+
+
+{%-   if 'publish_design_documentation' in scheduledTasks %}
+  [[publish_design_documentation]]
+    inherit = {{pub_family}}
+    pre-script = """
+                 {{ensureDestination()}}
+                 sleep 5
+                 """
+    script = rose task-run --app-key=publish --command-key=directory
+
+    [[[environment]]]
+      DIRECTORY = $OUTPUT_ROOT/documents/design
+      DESTINATION = {{publish_destination}}/documentation/design/
+      FILTERS = --exclude='*' --include='*.pdf'
+
+    [[[job]]]
+      execution retry delays = 3*PT5S
+{%-   endif %}
+{%- endmacro %}
+
+
+{# API DOCUMENTATION MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro api_documentation_graph( publish=False ) %}
+{%-   if 'documentation' in RUN_TECHNICAL %}
+    [[[R1]]]
+    export_source => api_documentation
+{%-     if publish %}
+    api_documentation => publish_api_documentation
+    publish_api_documentation:finish => publish_node
+    api_documentation => publish_api_log
+    publish_api_log:finish => publish_node
+{%-     endif %}
+{%-   endif %}
+{%- endmacro %}
+
+
+{#- In order to allow the document generation and publication to appear in
+ #  different family groups this macro takes both as arguments.
+ #
+ #  TODO: There may be a better way to handle this.
+ #}
+{%- macro api_documentation_task(doc_family, doc_target, pub_family, pub_target) %}
+{%-   if 'api_documentation' in scheduledTasks %}
+  [[api_documentation]]
+    inherit = {{doc_family}}
+
+    {{scripting(
+          doc_target,
+          ['base', 'tech'],
+          ['base'],
+          prescript='mkdir -p $DOCUMENT_DIR',
+          script='make -C $SOURCE_DIRECTORY document-api',
+          finalscript="""
+# Future publisher stages need this information
+RELATIVE_LOG_ROOT=$(echo $CYLC_TASK_LOG_ROOT | sed 's|$HOME/||')
+echo $RELATIVE_LOG_ROOT > $DOCUMENT_DIR/api.log.path
+                       """
+      )}}
+
+    [[[environment]]]
+      DOCUMENT_DIR = $OUTPUT_ROOT/documents/api
+{%-   endif %}
+
+
+{%-   if 'publish_api_log' in scheduledTasks %}
+{%-     set pub_hostname = get_target_property(pub_target, 'hostname') %}
+  [[publish_api_log]]
+    inherit = {{pub_family}}
+    pre-script = """
+                 {{ensureDestination()}}
+                 mkdir -p $OUTPUT_DIRECTORY/api
+                 cd $OUTPUT_DIRECTORY/api
+                 RELATIVE_DESTINATION_DIRECTORY=`echo $DOCUMENT_DIR | sed "s|$HOME/||"`
+                 scp {{pub_hostname}}:$RELATIVE_DESTINATION_DIRECTORY/api.log.path .
+                 scp {{pub_hostname}}:$(cat api.log.path).status .
+                 scp {{pub_hostname}}:$(cat api.log.path).out .
+                 scp {{pub_hostname}}:$(cat api.log.path).err .
+                 """
+    script = rose task-run --app-key=publish_doxygen
+
+    [[[environment]]]
+      DOCUMENT_DIR     = $OUTPUT_ROOT/documents/api
+      LOG_STATUS       = $DESTINATION_DIRECTORY/api/job.status
+      LOG_ERR          = $DESTINATION_DIRECTORY/api/job.err
+      OUTPUT_DIRECTORY = $OUTPUT_ROOT/{{pub_target['compiler']}}_fast-debug
+{%-   endif %}
+
+
+{%-   if 'publish_api_documentation' in scheduledTasks %}
+  [[publish_api_documentation]]
+    inherit = {{pub_family}}
+    pre-script = """
+                 {{ensureDestination()}}
+                 """
+    script = rose task-run --app-key=publish --command-key=directory
+
+    [[[environment]]]
+      DIRECTORY   = $OUTPUT_ROOT/documents/api
+      DESTINATION = {{publish_destination}}/documentation/api
+{%-   endif %}
+{%- endmacro %}
+
+
+{# UML DOCUMENTATION MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro uml_documentation_graph( publish=False ) %}
+{%-   if 'documentation' in RUN_TECHNICAL %}
+    [[[R1]]]
+    export_source => uml_documentation
+{%-     if publish %}
+    uml_documentation => publish_uml_documentation
+    publish_uml_documentation:finish => publish_node
+{%-     endif %}
+{%-   endif %}
+{%- endmacro %}
+
+
+{#- In order to allow the document generation and publication to appear in
+ #  different family groups this macro takes both as arguments.
+ #
+ #  TODO: There may be a better way to handle this.
+ #}
+{%- macro uml_documentation_task(doc_family, doc_target, pub_family, pub_target) %}
+{%-   if 'uml_documentation' in scheduledTasks %}
+  [[uml_documentation]]
+    inherit = {{doc_family}}
+
+    {{scripting(
+          doc_target,
+          ['base', 'tech'],
+          ['base'],
+          prescript='mkdir -p $DOCUMENT_DIR',
+          script='make -C $SOURCE_DIRECTORY document-uml'
+      )}}
+
+    [[[environment]]]
+      DOCUMENT_DIR = $OUTPUT_ROOT/documents/uml
+{%-   endif %}
+
+
+{%-   if 'publish_uml_documentation' in scheduledTasks %}
+  [[publish_uml_documentation]]
+    inherit = {{pub_family}}
+    pre-script = """
+                 {{ensureDestination()}}
+                 """
+    script = rose task-run --app-key=publish --command-key=directory
+
+    [[[environment]]]
+      DIRECTORY   = $OUTPUT_ROOT/documents/uml
+      DESTINATION = {{publish_destination}}/documentation/uml
+{%-   endif %}
+{%- endmacro %}
+
+{# SCRIPT MACROS #}
+{#---------------------------------------------------------------------------#}
+{%- macro verboseMake() %}
+{%-   if VERBOSE_TASKS is defined %}VERBOSE=1{% endif %}
+{%- endmacro %}
+
+{%- macro ensureDestination() %}
+    mkdir -p $DESTINATION
+{%- endmacro %}
+
+{%- macro deleteDirectory( directory ) %}
+  test -w "{{directory}}" -o ! -e "{{directory}}" && rm -rf {{directory}} || ( echo ** Unable to delete "{{directory}}", not writable >&2; false )
+{%- endmacro %}
+
+{# PUBLISH NODE MACRO #}
+{#---------------------------------------------------------------------------#}
+{%- macro publish_node_task(family) %}
+{%- if 'publish_node' in scheduledTasks %}
+    [[publish_node]]
+        inherit = {{family}}
+        script = true
+{%- endif %}
+{%- endmacro %}

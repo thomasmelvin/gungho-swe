@@ -1,0 +1,144 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2022 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> Tests logging with a clock
+!>
+module log_mod_clock_test
+
+  use constants_mod, only : i_timestep, r_second
+  use log_mod,       only : finalise_logging,     &
+                            initialise_logging,   &
+                            log_event,            &
+                            log_level,            &
+                            log_level_warning,    &
+                            log_level_info,       &
+                            log_set_timestep,     &
+                            log_forget_timestep,  &
+                            log_set_alert_stream, &
+                            log_set_info_stream,  &
+                            log_set_level
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: log_clock_test, setUp, tearDown
+
+  integer, parameter :: info_unit  = 12
+  integer, parameter :: alert_unit = 13
+
+contains
+
+  !> Create log file fixtures.
+  !>
+  @before
+  subroutine setUp()
+    implicit none
+    integer :: condition
+    call initialise_logging(0, 1, 'log_mod_clock_test')
+    open( info_unit, status='scratch', action='readwrite', &
+          iostat=condition )
+    @assertEqual( condition, 0 )
+    open( alert_unit, status='scratch', action='readwrite', &
+          iostat=condition )
+    @assertEqual( condition, 0 )
+    call log_set_level( log_level_info )
+  end subroutine setUp
+
+  @after
+  subroutine tearDown()
+    implicit none
+    integer :: condition
+    call finalise_logging()
+    close( alert_unit, iostat=condition )
+    @assertEqual( condition, 0 )
+    close( info_unit, iostat=condition )
+    @assertEqual( condition, 0 )
+  end subroutine tearDown
+
+  !> Tests the addition and removal of a clock.
+  !>
+  @test
+  subroutine log_clock_test()
+
+    implicit none
+
+    character(8)        :: info_tag, alert_tag
+    character(80)       :: info_message, alert_message
+    character(1)        :: info_field, alert_field
+    integer(i_timestep) :: info_step, alert_step
+
+    @assertEqual( LOG_LEVEL_INFO, log_level() )
+
+    call log_set_info_stream( info_unit )
+    call log_set_alert_stream( alert_unit )
+
+    call log_event( "No clock", log_level_info )
+    call log_event( "Clock none", log_level_warning )
+
+    call log_set_timestep( 1 )
+
+    call log_event( "First step", log_level_info )
+    call log_event( "Step the first", log_level_warning )
+
+    call log_set_timestep( 2 )
+
+    call log_event( "Second step", log_level_info )
+    call log_event( "Step the second", log_level_warning )
+
+    call log_forget_timestep()
+
+    call log_event( "No clock", log_level_info )
+    call log_event( "Clock none", log_level_warning )
+
+    rewind( info_unit )
+    rewind( alert_unit )
+    read( info_unit,  '(23X,A8,A)' ) info_tag, info_message
+    read( alert_unit, '(23X,A8,A)' ) alert_tag, alert_message
+
+    @assertEqual( ':INFO :', info_tag )
+    @assertEqual( "No clock", info_message )
+    @assertEqual( ':WARN :', alert_tag )
+    @assertEqual( "Clock none", alert_message )
+
+    read( info_unit,  &
+          '(24X,A1,I1,A8,A)' ) info_field, info_step, info_tag, info_message
+    read( alert_unit, &
+          '(24X,A1,I1,A8,A)' ) alert_field, alert_step, alert_tag, alert_message
+
+    @assertEqual( 'S', info_field )
+    @assertEqual( 1, info_step )
+    @assertEqual( ':INFO :', info_tag )
+    @assertEqual( "First step", info_message )
+    @assertEqual( 'S', alert_field )
+    @assertEqual( 1, alert_step )
+    @assertEqual( ':WARN :', alert_tag )
+    @assertEqual( "Step the first", alert_message )
+
+    read( info_unit,  &
+          '(24X,A1,I1,A8,A)' ) info_field, info_step, info_tag, info_message
+    read( alert_unit, &
+          '(24X,A1,I1,A8,A)' ) alert_field, alert_step, alert_tag, alert_message
+
+    @assertEqual( 'S', info_field )
+    @assertEqual( 2, info_step )
+    @assertEqual( ':INFO :', info_tag )
+    @assertEqual( "Second step", info_message )
+    @assertEqual( 'S', alert_field )
+    @assertEqual( 2, alert_step )
+    @assertEqual( ':WARN :', alert_tag )
+    @assertEqual( "Step the second", alert_message )
+
+    read( info_unit,  '(23X,A8,A)' ) info_tag, info_message
+    read( alert_unit, '(23X,A8,A)' ) alert_tag, alert_message
+
+    @assertEqual( ':INFO :', info_tag )
+    @assertEqual( "No clock", info_message )
+    @assertEqual( ':WARN :', alert_tag )
+    @assertEqual( "Clock none", alert_message )
+
+  end subroutine log_clock_test
+
+end module log_mod_clock_test

@@ -1,0 +1,145 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!
+!-------------------------------------------------------------------------------
+!> @brief   One-dimensional operators for the 3D FFSL transport scheme.
+!> @details These routines are required for 3D flux-form semi-Lagrangian (FFSL)
+!!          splittings. They provide the calculation of one dimensional fluxes.
+
+module ffsl_1d_flux_alg_mod
+
+  use constants_mod,                     only: r_def, i_def
+  use ffsl_1d_cons_inc_alg_mod,          only: ffsl_1d_cons_inc_alg
+  use ffsl_divergence_alg_mod,           only: ffsl_divergence_alg
+  use ffsl_horizontal_mass_flux_alg_mod, only: ffsl_horizontal_mass_flux_alg
+  use field_mod,                         only: field_type
+  use flux_direction_mod,                only: z_direction
+  use function_space_mod,                only: function_space_type
+  use ffsl_vert_conservative_alg_mod,    only: ffsl_vert_conservative_alg
+
+  implicit none
+
+  private
+
+  public :: ffsl_1d_flux_diff_horz
+  public :: ffsl_1d_flux_diff_vert
+
+contains
+
+  !===========================================================================!
+  !> @brief   Algorithm to calculate the flux form FFSL increment in one horizontal dimension.
+  !> @details The algorithm calculates the flux difference in the given direction.
+  !!          The mass flux is calculated, then the divergence taken to give the
+  !!          increment.
+  !!
+  !> @param[in]     direction         Direction (x/y)
+  !> @param[in]     rho_x             Density calculated from steps in x [kg m^-3]
+  !> @param[in]     rho_y             Density calculated from steps in y [kg m^-3]
+  !> @param[in]     cell_orientation  Orientation of cells held in W3 field
+  !> @param[in]     dep_pts_x         Departure points in the x direction
+  !> @param[in]     dep_pts_y         Departure points in the y direction
+  !> @param[in]     detj_at_w2        Det(J) at W2 dofs
+  !> @param[in]     dt                The model timestep length
+  !> @param[in,out] increment         Density rate increment [kg m^-3 s^-1]
+  subroutine ffsl_1d_flux_diff_horz( direction,        &
+                                     rho_x,            &
+                                     rho_y,            &
+                                     cell_orientation, &
+                                     dep_pts_x,        &
+                                     dep_pts_y,        &
+                                     detj_at_w2,       &
+                                     dt,               &
+                                     increment )
+
+    implicit none
+
+    integer(i_def),   intent(in)    :: direction
+    type(field_type), intent(in)    :: rho_x
+    type(field_type), intent(in)    :: rho_y
+    type(field_type), intent(in)    :: cell_orientation
+    type(field_type), intent(in)    :: dep_pts_x
+    type(field_type), intent(in)    :: dep_pts_y
+    type(field_type), intent(in)    :: detj_at_w2
+    real(r_def),      intent(in)    :: dt
+    type(field_type), intent(inout) :: increment
+
+    ! Mass fluxes
+    type(field_type) :: mass_flux_x
+    type(field_type) :: mass_flux_y
+
+    type(function_space_type), pointer :: flux_fs => null()
+
+    flux_fs => dep_pts_x%get_function_space()
+
+    call mass_flux_x%initialise( vector_space = flux_fs )
+    call mass_flux_y%initialise( vector_space = flux_fs )
+
+    ! Calculate the mass flux for the specified horizontal direction
+    call invoke( setval_c(mass_flux_x, 0.0_r_def), &
+                 setval_c(mass_flux_y, 0.0_r_def) )
+
+    call ffsl_horizontal_mass_flux_alg( dep_pts_x, dep_pts_y, cell_orientation, &
+                                        rho_x, rho_y, mass_flux_x, mass_flux_y, dt )
+
+    ! Calculate divergence (increment) in the specified direction
+    call ffsl_1d_cons_inc_alg( increment, mass_flux_x, mass_flux_y, &
+                               cell_orientation, direction, detj_at_w2 )
+
+    nullify( flux_fs )
+
+  end subroutine ffsl_1d_flux_diff_horz
+
+
+  !===========================================================================!
+  !> @brief   Algorithm to calculate the flux form FFSL increment in the vertical.
+  !> @details The algorithm calculates the flux difference in the vertical.
+  !!          The mass flux is calculated, then the divergence taken to give the
+  !!          increment.
+  !!
+  !> @param[in]     rho               Density field to compute mass flux [kg m^-3]
+  !> @param[in]     cell_orientation  Orientation of cells held in W3 field
+  !> @param[in]     dep_pts_z         Departure points in the z direction
+  !> @param[in]     detj_at_w2        Det(J) at W2 dofs
+  !> @param[in]     dt                Model timestep length [s]
+  !> @param[in,out] increment         Density rate increment [kg m^-3 s^-1]
+  subroutine ffsl_1d_flux_diff_vert( rho,              &
+                                     cell_orientation, &
+                                     dep_pts_z,        &
+                                     detj_at_w2,       &
+                                     dt,               &
+                                     increment )
+
+    implicit none
+
+    type(field_type), intent(in)    :: rho
+    type(field_type), intent(in)    :: cell_orientation
+    type(field_type), intent(in)    :: dep_pts_z
+    type(field_type), intent(in)    :: detj_at_w2
+    real(r_def),      intent(in)    :: dt
+    type(field_type), intent(inout) :: increment
+
+    ! Mass fluxes
+    type(field_type) :: mass_flux_z
+
+    type(function_space_type), pointer :: flux_fs => null()
+
+    flux_fs => dep_pts_z%get_function_space()
+    call mass_flux_z%initialise( vector_space = flux_fs )
+
+    ! Calculate the mass flux in the Z direction
+    call invoke( setval_c(mass_flux_z, 0.0_r_def) )
+
+    call ffsl_vert_conservative_alg( mass_flux_z, rho, dep_pts_z, dt )
+
+    ! Calculate the divergence (icrement) in the Z direction
+    call ffsl_divergence_alg( increment, mass_flux_z, detj_at_w2, &
+                              cell_orientation, z_direction )
+
+    nullify( flux_fs )
+
+  end subroutine ffsl_1d_flux_diff_vert
+
+end module ffsl_1d_flux_alg_mod

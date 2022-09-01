@@ -1,0 +1,80 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> Test the local mesh map collection object
+!>
+module local_mesh_map_collection_mod_test
+
+  use pFUnit_Mod
+  use constants_mod,                 only: i_def
+  use local_mesh_map_mod,            only: local_mesh_map_type
+  use local_mesh_map_collection_mod, only: local_mesh_map_collection_type
+
+  implicit none
+
+  private
+  public :: test_local_mesh_map_collection
+
+  @TestCase
+  type, extends(TestCase), public :: local_mesh_map_collection_test_type
+
+  contains
+    procedure test_local_mesh_map_collection
+  end type local_mesh_map_collection_test_type
+
+  integer(i_def), parameter :: source_id     = 1
+  integer(i_def), parameter :: target_id     = 2
+
+  integer(i_def), parameter :: SourceToTarget_map( 2, 2, 4  ) = &
+                                      reshape([  1,  2,  5,  6, &
+                                                 3,  4,  7,  8, &
+                                                 9, 10, 13, 14, &
+                                                11, 12, 15, 16 ],  [ 2, 2, 4 ] )
+contains
+
+  !> Test local_mesh_map_collection module functionality
+  !>
+  @test
+  subroutine test_local_mesh_map_collection( this )
+
+    implicit none
+
+    class(local_mesh_map_collection_test_type), intent(inout) :: this
+
+    type(local_mesh_map_collection_type) :: local_mesh_map_collection
+    type(local_mesh_map_type), pointer :: test_local_mesh_map => null()
+
+    ! Create a mesh map collection
+    local_mesh_map_collection = local_mesh_map_collection_type()
+
+    ! Test api to add and retrieve a local_mesh_map object from the collection
+    call local_mesh_map_collection%add_local_mesh_map( source_id, &
+                                                       target_id, &
+                                                       SourceToTarget_map )
+
+    test_local_mesh_map => local_mesh_map_collection%get_local_mesh_map(    &
+                                                                 source_id, &
+                                                                 target_id )
+
+    ! Test that the local mesh map returned has the correct info
+    @assertEqual( 1, test_local_mesh_map%get_source_id() )
+    @assertEqual( 2, test_local_mesh_map%get_target_id() )
+    @assertEqual( 4, test_local_mesh_map%get_nsource_cells() )
+    @assertEqual( 2, test_local_mesh_map%get_ntarget_cells_per_source_cell_x() )
+    @assertEqual( 2, test_local_mesh_map%get_ntarget_cells_per_source_cell_y() )
+
+    ! Test that a null pointer is returned if no map is present
+    test_local_mesh_map =>                                        &
+        local_mesh_map_collection%get_local_mesh_map( source_id,  &
+                                                      source_id )
+    @assertNotAssociated(test_local_mesh_map)
+
+    ! Clear the collection
+    call local_mesh_map_collection%clear()
+
+  end subroutine test_local_mesh_map_collection
+
+end module local_mesh_map_collection_mod_test

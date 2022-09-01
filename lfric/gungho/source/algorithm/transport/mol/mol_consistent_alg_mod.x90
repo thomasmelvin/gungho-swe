@@ -1,0 +1,311 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2022 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief Contains MOL routine for consistent conservative transport equation.
+
+module mol_consistent_alg_mod
+
+  use advective_increment_alg_mod,    only: advective_increment_alg
+  use constants_mod,                  only: r_def, i_def, l_def
+  use dg_matrix_vector_kernel_mod,    only: dg_matrix_vector_kernel_type
+  use enforce_lower_bound_kernel_mod, only: enforce_lower_bound_kernel_type
+  use extrusion_mod,                  only: SHIFTED
+  use fem_constants_mod,              only: get_im3_div
+  use flux_alg_mod,                   only: flux_alg
+  use field_mod,                      only: field_type
+  use finite_element_config_mod,      only: element_order
+  use fs_continuity_mod,              only: W2, W3
+  use function_space_mod,             only: function_space_type
+  use function_space_collection_mod,  only: function_space_collection
+  use io_config_mod,                  only: subroutine_timers
+  use inject_sh_w3_to_wt_kernel_mod,  only: inject_sh_w3_to_wt_kernel_type
+  use inject_wt_to_sh_w3_kernel_mod,  only: inject_wt_to_sh_w3_kernel_type
+  use log_mod,                        only: log_event, LOG_LEVEL_ERROR
+  use mesh_mod,                       only: mesh_type
+  use mesh_collection_mod,            only: mesh_collection
+  use operator_mod,                   only: operator_type
+  use psykal_lite_mod,                only: invoke_impose_min_flux_kernel_type
+  use runge_kutta_init_mod,           only: get_rk_transport_weights
+  use timer_mod,                      only: timer
+  use transport_config_mod,           only: runge_kutta_method
+  use transport_metadata_mod,         only: transport_metadata_type
+  use transport_runtime_alg_mod,      only: transport_runtime_type
+  use transport_runtime_collection_mod,   &
+                                      only: get_transport_runtime
+  use boundaries_config_mod,          only: limited_area, transport_boundary_depth
+  use limited_area_lbc_alg_mod,       only: overwrite_blending_zone
+  use base_mesh_config_mod,           only: topology, topology_non_periodic
+
+  implicit none
+
+  public  :: mol_consistent_alg
+
+  contains
+
+  !> @brief Transporting (consistent-form) of a field with the MOL scheme.
+  !> @details Performs a whole time step transport, solving the consistent,
+  !!          conservative transport equation for a mixing ratio field. This
+  !!          involves computing the density corresponding to the mixing ratio
+  !!          on a shifted mesh, but using the pre-computed dry mass flux and
+  !!          the mixing ratio to build the flux for the new density field.
+  !> @param[in,out] mr_wt_np1  Mixing ratio in Wtheta at end of time step
+  !> @param[in]     mr_wt_in   Mixing ratio in Wtheta at start of transport step
+  !> @param[in]     direction  Direction of advection (vertical, horizontal, or 3d)
+  !> @param[in]     transport_metadata
+  !!                           Contains the configuration options for
+  !!                           transporting these fields
+  subroutine mol_consistent_alg( mr_wt_np1, mr_wt_in, direction, transport_metadata )
+
+    implicit none
+
+    ! Arguments
+    type(field_type),              intent(inout) :: mr_wt_np1
+    type(field_type),              intent(in)    :: mr_wt_in
+    integer(kind=i_def),           intent(in)    :: direction
+    type(transport_metadata_type), intent(in)    :: transport_metadata
+
+    ! ------------------------------------------------------------------------ !
+    ! Internal variables
+    ! ------------------------------------------------------------------------ !
+    integer(kind=i_def)                :: primary_mesh_id
+    integer(kind=i_def)                :: shifted_mesh_id
+    integer(kind=i_def)                :: stage, s
+    integer(kind=i_def)                :: substeps, transport_step
+    integer(kind=i_def)                :: nstage_this_substep
+    integer(kind=i_def)                :: nstage, number_substeps
+    integer(kind=i_def)                :: monotonicity
+    logical(kind=l_def)                :: use_reversible_scheme
+    logical(kind=l_def)                :: enforce_min_value
+    logical(kind=l_def)                :: logspace
+    logical(kind=l_def)                :: include_div_term_with_density
+    real(kind=r_def)                   :: dt_substep
+    real(kind=r_def)                   :: min_value
+    real(kind=r_def),      allocatable :: rk_weights(:,:)
+    type(function_space_type), pointer :: w3_sh_fs => null()
+    type(function_space_type), pointer :: w2_sh_fs => null()
+    type(function_space_type), pointer :: wt_fs => null()
+    type(operator_type),       pointer :: div => null()
+    type(field_type),          pointer :: primary_advecting_wind => null()
+    type(field_type),          pointer :: dry_flux => null()
+    type(field_type),          pointer :: rho_d_n => null()
+    type(field_type),          pointer :: rho_d_np1 => null()
+    type(field_type),          pointer :: divergence_factor => null()
+    type(field_type)                   :: flux_X
+    type(field_type)                   :: mr_sh_w3_n, mr_sh_w3_np1
+    type(field_type)                   :: mr_sh_w3_for_flux, mr_wt_for_flux
+    type(field_type)                   :: mr_wt_n
+    type(field_type)                   :: rho_X_n, rho_X_np1
+    type(field_type)                   :: rhs_adv, rhs_flux, rhs_field
+    type(field_type),      allocatable :: rk_field(:)
+    type(mesh_type),           pointer :: primary_mesh => null()
+    type(mesh_type),           pointer :: shifted_mesh => null()
+    type(transport_runtime_type), pointer :: transport_runtime => null()
+
+    ! ------------------------------------------------------------------------ !
+    if ( subroutine_timers ) call timer('mol_consistent_alg')
+    ! ------------------------------------------------------------------------ !
+    ! Get all the stuff needed by the transport algorithm
+    ! ------------------------------------------------------------------------ !
+
+    primary_mesh => mr_wt_in%get_mesh()
+    shifted_mesh => mesh_collection%get_mesh(primary_mesh, SHIFTED)
+    primary_mesh_id = primary_mesh%get_id()
+    shifted_mesh_id = shifted_mesh%get_id()
+
+    transport_runtime => get_transport_runtime(primary_mesh)
+    transport_step = transport_runtime%get_tracer_step_ctr()
+    primary_advecting_wind => transport_runtime%get_advecting_wind(primary_mesh_id)
+    wt_fs => mr_wt_in%get_function_space()
+    w3_sh_fs => function_space_collection%get_fs(shifted_mesh, element_order, W3)
+    w2_sh_fs => function_space_collection%get_fs(shifted_mesh, element_order, W2)
+    dry_flux => transport_runtime%get_dry_flux(shifted_mesh_id, transport_step)
+    rho_d_n => transport_runtime%get_rho_d_n(shifted_mesh_id, transport_step)
+    rho_d_np1 => transport_runtime%get_rho_d_np1(shifted_mesh_id, transport_step)
+    div => get_im3_div(shifted_mesh_id)
+
+    call get_rk_transport_weights( nstage, rk_weights, runge_kutta_method )
+    allocate( rk_field(nstage) )
+
+    ! Initialise fields
+    call flux_X%initialise( vector_space = w2_sh_fs )
+    call mr_wt_n%initialise( vector_space = wt_fs )
+    call mr_sh_w3_n%initialise( vector_space = w3_sh_fs )
+    call mr_sh_w3_np1%initialise( vector_space = w3_sh_fs )
+    call mr_sh_w3_for_flux%initialise( vector_space = w3_sh_fs )
+    call mr_wt_n%initialise( vector_space = wt_fs )
+    call mr_wt_for_flux%initialise( vector_space = wt_fs )
+    call rho_X_n%initialise( vector_space = w3_sh_fs )
+    call rho_X_np1%initialise( vector_space = w3_sh_fs )
+    call rhs_flux%initialise( vector_space = w3_sh_fs )
+    call rhs_adv%initialise( vector_space = wt_fs )
+    call rhs_field%initialise( vector_space = wt_fs )
+    do stage = 1, nstage
+      call rk_field(stage)%initialise( vector_space = wt_fs )
+    end do
+
+    ! Set initial values of Wtheta mixing ratios
+    call mr_wt_in%copy_field(mr_wt_n)
+    call mr_wt_in%copy_field(mr_wt_np1)
+
+    ! Get transport runtime settings
+    number_substeps = transport_runtime%get_number_substeps(shifted_mesh_id,direction,transport_metadata%get_splitting())
+    dt_substep = transport_runtime%get_dt_substep(shifted_mesh_id,direction,transport_metadata%get_splitting())
+    logspace = transport_metadata%get_log_space()
+    monotonicity = transport_metadata%get_monotone()
+    enforce_min_value = transport_metadata%get_enforce_min_value()
+    include_div_term_with_density = transport_metadata%get_divergence_factor()
+
+    ! Get the div-term if required: not implemented yet
+    if ( include_div_term_with_density ) then
+      divergence_factor => transport_runtime%get_div_factor(shifted_mesh_id)
+      call log_event('mol_consistent_alg not implemented with divergence factor', &
+                     LOG_LEVEL_ERROR)
+    end if
+
+    ! Transform mixing ratio to shifted W3
+    call invoke( inject_wt_to_sh_w3_kernel_type(mr_sh_w3_n, mr_wt_n),     &
+                 inject_wt_to_sh_w3_kernel_type(mr_sh_w3_np1, mr_wt_np1), &
+                 ! Compute rho_X at start of step
+                 X_times_Y(rho_X_n, mr_sh_w3_n, rho_d_n),                 &
+                 ! Initialise the mixing ratio used for the flux to zero
+                 setval_c( mr_wt_for_flux, 0.0_r_def ) )
+
+    ! ------------------------------------------------------------------------ !
+    ! Do advective form for until last stage of last substep
+    ! ------------------------------------------------------------------------ !
+    substep_loop: do substeps = 1, number_substeps
+
+      if (substeps == number_substeps) then
+        nstage_this_substep = nstage - 1
+      else
+        nstage_this_substep = nstage
+      end if
+
+      use_reversible_scheme = .false.
+
+      ! Set initial value for mr used in flux calculation
+      call mr_wt_np1%copy_field(mr_wt_n)
+      call invoke( inc_X_plus_bY(mr_wt_for_flux, rk_weights(nstage, 1), mr_wt_n) )
+
+      stage_loop: do stage = 1, nstage_this_substep
+
+        if ( stage == nstage .and. transport_metadata%get_reversible() ) &
+            use_reversible_scheme= .true.
+
+        ! Compute the field for this stage:
+        ! rhs_field = sum(s=1,stage): a(stage,s)*field^(s)
+        call invoke( setval_X( rk_field(stage), mr_wt_np1 ), &
+                     setval_c( rhs_field, 0.0_r_def ) )
+        do s = 1, stage
+          call invoke( inc_X_plus_bY( rhs_field, rk_weights(stage,s), rk_field(s) ) )
+        end do
+
+        ! Compute update: rhs_adv = u.grad(rhs_field)
+        call advective_increment_alg(rhs_adv, rhs_field,                 &
+                                     primary_advecting_wind, dt_substep, &
+                                     direction, use_reversible_scheme,   &
+                                     monotonicity=monotonicity,          &
+                                     logspace=logspace)
+
+        ! Update field: f = f^n - dt_substep*rhs
+        call invoke( X_minus_bY(mr_wt_np1, mr_wt_n, dt_substep, rhs_adv) )
+
+        ! Increment mixing ratio used for flux in last step
+        if (stage /= nstage) then
+          call invoke( inc_X_plus_bY(mr_wt_for_flux, &
+                                     rk_weights(nstage, stage+1), mr_wt_np1) )
+        end if
+
+        if ( limited_area .and. topology == topology_non_periodic ) then
+          ! This code is required while LAMs loop over cells right up to
+          ! the edge of a limited area domain.  It can be removed if
+          ! we only loop over columns in the interior domain.
+
+          ! Don't update the field near the edge of the domain. A depth of 1 is chosen
+          ! here to avoid problems right at the lateral boundary edge,
+          ! but ticket #3112 will investigate further options.
+          call overwrite_blending_zone(mr_wt_np1, mr_wt_n, depth=1)
+        end if
+
+      end do stage_loop
+
+      if ( limited_area .and. topology == topology_non_periodic ) then
+        ! This code is required while LAMs loop over cells right up to
+        ! the edge of a limited area domain.  It can be removed if
+        ! we only loop over columns in the interior domain.
+
+        ! Don't update the field near the edge of the domain. A configurable depth of using
+        ! the transport_boundary_depth is chosen here.  This will depend
+        ! on the number of RK stages and spatial reconstruction order.
+        ! Ticket #3112 will investigate further options.
+        call overwrite_blending_zone(mr_wt_np1, mr_wt_n, depth=transport_boundary_depth)
+      end if
+
+    end do substep_loop
+
+    ! Shift accumulated mixing ratio
+
+    ! ------------------------------------------------------------------------ !
+    ! Conservative form: in shifted W3
+    ! ------------------------------------------------------------------------ !
+
+    if ( transport_metadata%get_reversible() ) use_reversible_scheme= .true.
+
+    ! For final stage of RK scheme, we go to flux form. We use the
+    ! mixing ratio in place of density, and dry flux for advecting wind
+    call invoke( inject_wt_to_sh_w3_kernel_type(mr_sh_w3_for_flux, &
+                                                mr_wt_for_flux),   &
+                 setval_c(flux_X, 0.0_r_def) )
+    call flux_alg(flux_X, mr_sh_w3_for_flux, dry_flux, &
+                  direction, use_reversible_scheme,    &
+                  monotonicity=monotonicity,           &
+                  logspace=logspace)
+
+    ! Enforce a minimum value by modifying the fluxes
+    if ( enforce_min_value ) then
+      min_value = transport_metadata%get_min_value()
+      ! Use dt_substep here as num substeps hidden in flux_X
+      call invoke_impose_min_flux_kernel_type(rho_X_n, flux_X,       &
+                                              div, min_value, dt_substep)
+    end if
+
+    ! Compute div(flux_X)
+    call invoke( dg_matrix_vector_kernel_type(rhs_flux, flux_X, div),  &
+    ! Increment rho_X
+                 X_minus_bY(rho_X_np1, rho_X_n, dt_substep, rhs_flux), &
+    ! Turn density back into mixing ratio
+                 X_divideby_Y(mr_sh_w3_np1, rho_X_np1, rho_d_np1) )
+    ! Turn back to Wtheta -- separate invoke as on different mesh
+    call invoke( inject_sh_w3_to_wt_kernel_type(mr_wt_np1, mr_sh_w3_np1) )
+
+    if ( limited_area .and. topology == topology_non_periodic ) then
+      ! This code is required while LAMs loop over cells right up to
+      ! the edge of a limited area domain.  It can be removed if
+      ! we only loop over columns in the interior domain.
+
+      ! Don't update the field near the edge of the domain. A configurable depth of using
+      ! the transport_boundary_depth is chosen here.  This will depend
+      ! on the number of RK stages and spatial reconstruction order.
+      ! Ticket #3112 will investigate further options.
+      call overwrite_blending_zone(mr_wt_np1, mr_wt_n, depth=transport_boundary_depth)
+    end if
+
+    ! ------------------------------------------------------------------------ !
+    ! End of whole step things
+    ! ------------------------------------------------------------------------ !
+
+    call transport_runtime%inc_tracer_step_ctr()
+
+    if ( allocated( rk_field ) ) deallocate( rk_field )
+    if ( allocated( rk_weights ) ) deallocate( rk_weights )
+
+    nullify( wt_fs, w3_sh_fs, w2_sh_fs, dry_flux, div, &
+             rho_d_n, rho_d_np1, primary_advecting_wind )
+
+    if ( subroutine_timers ) call timer('mol_consistent_alg')
+
+  end subroutine mol_consistent_alg
+
+end module mol_consistent_alg_mod

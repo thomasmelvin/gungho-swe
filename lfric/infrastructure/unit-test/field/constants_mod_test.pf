@@ -1,0 +1,73 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the mesh module
+!>
+module constants_mod_test
+
+  use pFUnit_Mod
+
+  implicit none
+
+contains
+
+  !> Test to ensure that real type r_native is the same kind as a default real
+  !>
+  @test
+  subroutine test_constants_r_native( )
+    use constants_mod, only : r_native
+    implicit none
+
+    real (kind=r_native) :: val_native
+    real                 :: val_default
+
+    @assertEqual(kind(val_native), kind(val_default))
+
+  end subroutine test_constants_r_native
+
+  !> Test to ensure that integer type i_native is the same kind as a default integer
+  !>
+  @test
+  subroutine test_constants_i_native( )
+    use constants_mod, only : i_native
+    implicit none
+
+    integer (kind=i_native) :: val_native
+    integer                 :: val_default
+
+    @assertEqual(kind(val_native), kind(val_default))
+
+  end subroutine test_constants_i_native
+
+  !> Test to ensure that logical type l_native is the same kind as a default logical
+  !>
+  @test
+  subroutine test_constants_l_native( )
+    use constants_mod, only : l_native
+    implicit none
+
+    logical (kind=l_native) :: val_native
+    logical                 :: val_default
+
+    @assertEqual(kind(val_native), kind(val_default))
+
+  end subroutine test_constants_l_native
+
+  !> Test to ensure that character type c_native is the same kind as a default character
+  !>
+  @test
+  subroutine test_constants_c_native( )
+    use constants_mod, only : c_native
+    implicit none
+
+    character (kind=c_native) :: val_native
+    character                 :: val_default
+
+    @assertEqual(kind(val_native), kind(val_default))
+
+  end subroutine test_constants_c_native
+
+end module constants_mod_test

@@ -1,0 +1,14 @@
+' (c) Crown copyright 2022 Met Office. All rights reserved.
+' The file LICENCE, distributed with this code, contains details of the terms
+' under which the code may be used.
+
+abstract class clock_type {
+  +{abstract}tick(): Boolean
+  +{abstract}get_first_step(): Integer
+  +{abstract}get_step(): Integer
+  +{abstract}get_last_step(): Integer
+  +{abstract}get_seconds_per_step(): Float
+  +{abstract}seconds_from_step(period: Integer): Float
+  +{abstract}is_initialisation(): Boolean
+  +{abstract}is_spinning_up(): Boolean
+}

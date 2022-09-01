@@ -1,0 +1,719 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief   Algorithms for 3D FFSL transport scheme step.
+!> @details Algorithms solve either the 3D conservative transport equation
+!!          \f$\frac{\partial \rho}{\partial t} + \nabla \cdot (\mathbf{u} \rho) = 0)\f$,
+!!          or the 3D advective transport equation
+!!          \f$\frac{\partial \rho}{\partial t} + \mathbf{u} \cdot \nabla \rho = 0)\f$,
+!!          using the flux-form semi-Lagrangian (FFSL) transport scheme and a
+!!          choice of splitting methods. The output increment is either
+!!          \f$\nabla \cdot (\mathbf{u} \rho)\f$ or \f$\mathbf{u} \cdot \nabla \rho\f$,
+!!          and so the transport equation can be updated as
+!!          \f$rho^{n+1} = rho^{n} - \Delta{t}\times \mbox{increment}\f$.
+module ffsl_transport_alg_mod
+
+  use constants_mod,         only: r_def, i_def
+  use field_mod,             only: field_type
+  use function_space_mod,    only: function_space_type
+  use timer_mod,             only: timer
+  use flux_direction_mod,    only: x_direction, y_direction, z_direction
+
+  ! Algorithms
+  use ffsl_1d_advect_alg_mod, only: ffsl_1d_advect_diff,      &
+                                    ffsl_1d_horz_advect_diff, &
+                                    ffsl_1d_advect_step,      &
+                                    ffsl_1d_horz_advect_step
+  use ffsl_1d_flux_alg_mod,   only: ffsl_1d_flux_diff_horz, &
+                                    ffsl_1d_flux_diff_vert
+
+  ! Configuration options
+  use io_config_mod,         only: subroutine_timers
+  use transport_config_mod,  only: ffsl_flux_splitting,                         &
+                                   ffsl_flux_splitting_timesplit_vertical,      &
+                                   ffsl_flux_splitting_macho,                   &
+                                   ffsl_flux_splitting_afc,                     &
+                                   ffsl_flux_splitting_full,                    &
+                                   ffsl_advective_splitting,                    &
+                                   ffsl_advective_splitting_timesplit_vertical, &
+                                   ffsl_advective_splitting_macho,              &
+                                   ffsl_advective_splitting_afc,                &
+                                   ffsl_advective_splitting_full
+
+  use transport_enumerated_types_mod,   only: direction_3d, &
+                                              direction_h,  &
+                                              direction_v
+
+  implicit none
+
+  private
+
+  public :: ffsl_conservative_transport_step
+  public :: ffsl_advective_transport_step
+
+contains
+
+
+  !> @brief   Algorithm for 3D FFSL conservative transport scheme step.
+  !> @details The algorithm solves the 3D conservative transport equation,
+  !!          giving increment = div(u rho). One-dimensional flux differences
+  !!          denoted F, G, H (and advective differences, f, g, h) are computed
+  !!          and used with the chosen option for splitting. The transport equation
+  !!          can be updated as rho_np1 = rho_n - dt*increment.
+  !> @param[in]     rho               Density field
+  !> @param[in]     dep_pts_x         Departure points in x direction
+  !> @param[in]     dep_pts_y         Departure points in y direction
+  !> @param[in]     dep_pts_z         Departure points in z direction
+  !> @param[in]     detj_at_w2        Det(J) at W2 dofs
+  !> @param[in]     cell_orientation  Orientation of halo cells
+  !> @param[in]     dt                Time step
+  !> @param[in]     direction         Either 3D/vertical/horizontal FFSL transport
+  !> @param[in,out] increment         Density increment
+  subroutine ffsl_conservative_transport_step( rho,              &
+                                               dep_pts_x,        &
+                                               dep_pts_y,        &
+                                               dep_pts_z,        &
+                                               detj_at_w2,       &
+                                               cell_orientation, &
+                                               dt,               &
+                                               direction,        &
+                                               increment )
+
+    implicit none
+
+    type(field_type), intent(in)    :: rho
+    type(field_type), intent(in)    :: dep_pts_x
+    type(field_type), intent(in)    :: dep_pts_y
+    type(field_type), intent(in)    :: dep_pts_z
+    type(field_type), intent(in)    :: detj_at_w2
+    type(field_type), intent(in)    :: cell_orientation
+    real(r_def),      intent(in)    :: dt
+    integer(kind=i_def), intent(in) :: direction
+    type(field_type), intent(inout) :: increment
+
+    ! Subroutine name for timer
+    character(*), parameter :: routine_name = 'ffsl_conservative_transport_step'
+
+    ! Density substeps in given direction
+    type(field_type) :: rho_y
+    type(field_type) :: rho_x
+    type(field_type) :: rho_z
+    type(field_type) :: rho_xy
+    type(field_type) :: rho_xz
+    type(field_type) :: rho_yz
+    type(field_type) :: rho_yx
+    type(field_type) :: rho_zx
+    type(field_type) :: rho_zy
+    type(field_type) :: rho_star
+    type(field_type) :: rho_starstar
+    type(field_type) :: rho_for_F
+    type(field_type) :: rho_for_G
+    type(field_type) :: rho_for_H
+
+    ! Density increments (flux differences) in given direction
+    type(field_type) :: increment_x
+    type(field_type) :: increment_y
+    type(field_type) :: increment_xy
+    type(field_type) :: increment_z
+
+    ! Size of substep
+    real(r_def) :: step_scale
+
+    ! Splitting option for case statement
+    integer(i_def) :: splitting_option
+
+    ! Coordinate fields
+    type(function_space_type), pointer :: dep_fs => null()
+    type(function_space_type), pointer :: rho_fs => null()
+
+    ! Function space for departure points
+    dep_fs => dep_pts_x%get_function_space()
+    ! Function space for rho
+    rho_fs => rho%get_function_space()
+
+    call rho_x%initialise( vector_space = rho_fs )
+    call rho_y%initialise( vector_space = rho_fs )
+    call rho_z%initialise( vector_space = rho_fs )
+    call rho_star%initialise( vector_space = rho_fs )
+    call rho_starstar%initialise( vector_space = rho_fs )
+    call rho_xy%initialise( vector_space = rho_fs )
+    call rho_xz%initialise( vector_space = rho_fs )
+    call rho_yz%initialise( vector_space = rho_fs )
+    call rho_yx%initialise( vector_space = rho_fs )
+    call rho_zx%initialise( vector_space = rho_fs )
+    call rho_zy%initialise( vector_space = rho_fs )
+    call rho_for_F%initialise( vector_space = rho_fs )
+    call rho_for_G%initialise( vector_space = rho_fs )
+    call rho_for_H%initialise( vector_space = rho_fs )
+    call increment_xy%initialise( vector_space = rho_fs )
+    call increment_x%initialise( vector_space = rho_fs )
+    call increment_y%initialise( vector_space = rho_fs )
+    call increment_z%initialise( vector_space = rho_fs )
+
+    if ( subroutine_timers ) call timer(routine_name)
+
+    ! Use timesplit_vertical_splitting for direction_h or direction_v
+    if ( direction /= direction_3d ) then
+      splitting_option = ffsl_flux_splitting_timesplit_vertical
+    else
+      splitting_option = ffsl_flux_splitting
+    end if
+
+    select case(splitting_option)
+
+    case(ffsl_flux_splitting_timesplit_vertical)
+
+      ! Timesplit vertical
+      ! Uses 2D COSMIC in horizontal. It has the form
+      !
+      !   rho_x  = rho - dt/2 f(rho)
+      !   rho_y  = rho - dt/2 g(rho)
+      !   rho_xy = rho - dt F(rho_y) - dt G(rho_x)
+      !
+      ! Output: F(rho_y) + G(rho_x) + H(rho_xy)
+
+      if ( direction /= direction_v ) then
+
+        ! Half step for advective steps
+        step_scale = 0.5_r_def
+
+        ! Calculate advective half steps in x and y
+        call ffsl_1d_advect_step( x_direction, rho, rho, cell_orientation, dep_pts_x, &
+                                  detj_at_w2, step_scale, dt, rho_x )
+        call ffsl_1d_advect_step( y_direction, rho, rho, cell_orientation, dep_pts_y, &
+                                  detj_at_w2, step_scale, dt, rho_y )
+
+        ! Calculate increments in x and y
+        call ffsl_1d_flux_diff_horz( x_direction, rho_x, rho_y, cell_orientation, &
+                                     dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_x )
+        call ffsl_1d_flux_diff_horz( y_direction, rho_x, rho_y, cell_orientation, &
+                                     dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_y )
+
+        if ( direction == direction_h ) then
+          ! Combine increments
+          call invoke( X_plus_Y(increment, increment_x, increment_y) )
+        else
+          ! Calculate update in horizontal ( rho_xy )
+          call invoke( X_plus_Y(increment_xy, increment_x, increment_y), &
+                       X_minus_bY(rho_xy, rho, dt, increment_xy) )
+        end if
+
+      end if
+
+      if ( direction /= direction_h ) then
+
+        if ( direction == direction_v ) then
+          call invoke (setval_X(rho_xy, rho) )
+        end if
+
+        ! Calculate vertical increment ( H(rho_xy) )
+        call ffsl_1d_flux_diff_vert( rho_xy, cell_orientation, dep_pts_z, &
+                                     detj_at_w2, dt, increment_z )
+
+        if ( direction == direction_3d ) then
+          ! Combine for total increment
+          call invoke( X_plus_Y(increment, increment_xy, increment_z) )
+        else
+          ! Only need vertical increment
+          call invoke (setval_X(increment, increment_z) )
+        end if
+      end if
+
+    case(ffsl_flux_splitting_macho)
+
+      ! MACHO splitting (Leonard et al. 1996).
+      ! It has the form
+      !
+      !   rho*  = rho - dt f(rho)
+      !   rho** = rho* - dt g(rho*)
+      !
+      ! Output: F(rho) + G(rho*) + H(rho**)
+
+      ! Full step for advective steps
+      step_scale = 1.0_r_def
+
+      ! Calculate advective step in x
+      ! ( rho* = rho - dt f(rho) )
+      call ffsl_1d_advect_step( x_direction, rho, rho, cell_orientation, dep_pts_x, &
+                                detj_at_w2, step_scale, dt, rho_star )
+
+      ! Calculate advective step in y using x step
+      ! ( rho** = rho* - dt g(rho*) )
+      call ffsl_1d_advect_step( y_direction, rho_star, rho_star, cell_orientation, &
+                                dep_pts_y, detj_at_w2, step_scale, dt, rho_starstar )
+
+      ! Calculate fluxes and increments
+      call ffsl_1d_flux_diff_horz( x_direction, rho_star, rho, cell_orientation, &
+                                   dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_x )
+      call ffsl_1d_flux_diff_horz( y_direction, rho_star, rho, cell_orientation, &
+                                   dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_y )
+      call ffsl_1d_flux_diff_vert( rho_starstar, cell_orientation, dep_pts_z, &
+                                   detj_at_w2, dt, increment_z )
+
+      ! Combine to get final increment
+      call invoke( X_plus_Y(increment_xy, increment_x, increment_y), &
+                   X_plus_Y(increment, increment_xy, increment_z) )
+
+    case(ffsl_flux_splitting_afc)
+
+      ! Asymmetrical Flux (AFC) splitting
+      ! It has the form
+      !
+      !   rho_x = rho - dt/3 f(rho)  |
+      !   rho_y = rho - dt/3 g(rho)  | First advective step terms
+      !   rho_z = rho - dt/3 h(rho)  |
+      !
+      !   rho_xy = rho - dt f(rho_y) |
+      !   rho_yz = rho - dt g(rho_z) | Second advective step terms
+      !   rho_zx = rho - dt h(rho_x) |
+      !
+      ! Output: F(rho_yz) + G(rho_zx) + H(rho_xy)
+
+      ! One-third step for first advective steps
+      step_scale = 1.0_r_def/3.0_r_def
+
+      ! Do first advective steps
+      call ffsl_1d_advect_step( x_direction, rho, rho, cell_orientation, dep_pts_x, &
+                                detj_at_w2, step_scale, dt, rho_x )
+      call ffsl_1d_advect_step( y_direction, rho, rho, cell_orientation, dep_pts_y, &
+                                detj_at_w2, step_scale, dt, rho_y )
+      call ffsl_1d_advect_step( z_direction, rho, rho, cell_orientation, dep_pts_z, &
+                                detj_at_w2, step_scale, dt, rho_z )
+
+      ! Full step for second advective steps
+      step_scale = 1.0_r_def
+
+      ! Do second advective step
+      call ffsl_1d_horz_advect_step( x_direction, rho, rho_x, rho_y, cell_orientation, &
+                                     dep_pts_x, dep_pts_y, detj_at_w2, step_scale, dt, &
+                                     rho_xy )
+      call ffsl_1d_advect_step( y_direction, rho, rho_z, cell_orientation, dep_pts_y, &
+                                detj_at_w2, step_scale, dt, rho_yz )
+      call ffsl_1d_advect_step( z_direction, rho, rho_x, cell_orientation, dep_pts_z, &
+                                detj_at_w2, step_scale, dt, rho_zx )
+
+      ! Calculate fluxes and increments
+      ! F(rho_yz), G(rho_zx), H(rho_xy)
+      call ffsl_1d_flux_diff_horz( x_direction, rho_zx, rho_yz, cell_orientation, &
+                                   dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_x )
+      call ffsl_1d_flux_diff_horz( y_direction, rho_zx, rho_yz, cell_orientation, &
+                                   dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_y )
+      call ffsl_1d_flux_diff_vert( rho_xy, cell_orientation, dep_pts_z, &
+                                   detj_at_w2, dt, increment_z )
+
+      ! Combine to get final increment
+      call invoke( X_plus_Y(increment_xy, increment_x, increment_y), &
+                   X_plus_Y(increment, increment_xy, increment_z) )
+
+    case(ffsl_flux_splitting_full)
+
+      ! Full COSMIC splitting (from Leonard et al. 1996).
+      ! It has the form
+      !
+      !   rho_x = rho - dt/3 f(rho)  |
+      !   rho_y = rho - dt/3 g(rho)  | First advective step terms
+      !   rho_z = rho - dt/3 h(rho)  |
+      !
+      !   rho_xy = rho - dt f(rho_y) |
+      !   rho_yz = rho - dt g(rho_z) |
+      !   rho_zx = rho - dt h(rho_x) | Second advective step terms
+      !   rho_xz = rho - dt f(rho_z) |
+      !   rho_yx = rho - dt g(rho_x) |
+      !   rho_zy = rho - dt h(rho_y) |
+      !
+      ! Output: F( (rho_yz + rho_yz)/2 ) + G( (rho_xz + rho_zx)/2 )
+      !                                  + H( (rho_xy + rho_yx)/2 )
+
+      ! One-third step for first advective steps
+      step_scale = 1.0_r_def/3.0_r_def
+
+      ! Do first advective steps
+      call ffsl_1d_advect_step( x_direction, rho, rho, cell_orientation, dep_pts_x, &
+                                detj_at_w2, step_scale, dt, rho_x )
+      call ffsl_1d_advect_step( y_direction, rho, rho, cell_orientation, dep_pts_y, &
+                                detj_at_w2, step_scale, dt, rho_y )
+      call ffsl_1d_advect_step( z_direction, rho, rho, cell_orientation, dep_pts_z, &
+                                detj_at_w2, step_scale, dt, rho_z )
+
+      ! Full step for second advective steps
+      step_scale = 1.0_r_def
+
+      ! Do second advective step
+      call ffsl_1d_horz_advect_step( x_direction, rho, rho_x, rho_y, cell_orientation, &
+                                     dep_pts_x, dep_pts_y, detj_at_w2, step_scale, dt, &
+                                     rho_xy )
+      call ffsl_1d_advect_step( y_direction, rho, rho_z, cell_orientation, dep_pts_y, &
+                                detj_at_w2, step_scale, dt, rho_yz )
+      call ffsl_1d_advect_step( z_direction, rho, rho_x, cell_orientation, dep_pts_z, &
+                                detj_at_w2, step_scale, dt, rho_zx )
+      call ffsl_1d_advect_step( x_direction, rho, rho_z, cell_orientation, dep_pts_x, &
+                                detj_at_w2, step_scale, dt, rho_xz )
+      call ffsl_1d_horz_advect_step( y_direction, rho, rho_x, rho_y, cell_orientation, &
+                                     dep_pts_x, dep_pts_y, detj_at_w2, step_scale, dt, &
+                                     rho_yx )
+      call ffsl_1d_advect_step( z_direction, rho, rho_y, cell_orientation, dep_pts_z, &
+                                detj_at_w2, step_scale, dt, rho_zy )
+
+      ! Add together to get symmetrical update to use in the flux calculation
+      call invoke( aX_plus_bY(rho_for_F, 0.5_r_def, rho_yz, 0.5_r_def, rho_zy), &
+                   aX_plus_bY(rho_for_G, 0.5_r_def, rho_xz, 0.5_r_def, rho_zx), &
+                   aX_plus_bY(rho_for_H, 0.5_r_def, rho_yx, 0.5_r_def, rho_xy) )
+
+      ! Calculate fluxes and increments
+      call ffsl_1d_flux_diff_horz( x_direction, rho_for_G, rho_for_F, cell_orientation, &
+                                   dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_x )
+      call ffsl_1d_flux_diff_horz( y_direction, rho_for_G, rho_for_F, cell_orientation, &
+                                   dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_y )
+      call ffsl_1d_flux_diff_vert( rho_for_H, cell_orientation, dep_pts_z, &
+                                   detj_at_w2, dt, increment_z )
+
+      ! Combine to get final increment
+      call invoke( X_plus_Y(increment_xy, increment_x, increment_y), &
+                   X_plus_Y(increment, increment_xy, increment_z) )
+
+    end select
+
+    if ( subroutine_timers ) call timer(routine_name)
+
+    nullify( rho_fs )
+
+  end subroutine ffsl_conservative_transport_step
+
+
+  !> @brief   Algorithm for 3D FFSL advective transport scheme step.
+  !> @details The algorithm solves the 3D advective transport equation,
+  !!          giving increment = u dot grad rho. One-dimensional advective
+  !!          differences denoted f, g, h, are computed and used with the
+  !!          chosen option for splitting. The transport equation can be
+  !!          updated as rho_np1 = rho_n - dt*increment.
+  !> @param[in]     rho               Density field
+  !> @param[in]     dep_pts_x         Departure points in x direction
+  !> @param[in]     dep_pts_y         Departure points in y direction
+  !> @param[in]     dep_pts_z         Departure points in z direction
+  !> @param[in]     detj_at_w2        Det(J) at W2 dofs
+  !> @param[in]     cell_orientation  Orientation of halo cells
+  !> @param[in]     dt                Time step
+  !> @param[in]     direction         Either 3D/vertical/horizontal FFSL transport
+  !> @param[in,out] increment         Density increment
+  subroutine ffsl_advective_transport_step( rho,              &
+                                            dep_pts_x,        &
+                                            dep_pts_y,        &
+                                            dep_pts_z,        &
+                                            detj_at_w2,       &
+                                            cell_orientation, &
+                                            dt,               &
+                                            direction,        &
+                                            increment )
+
+    implicit none
+
+    type(field_type), intent(in)    :: rho
+    type(field_type), intent(in)    :: dep_pts_x
+    type(field_type), intent(in)    :: dep_pts_y
+    type(field_type), intent(in)    :: dep_pts_z
+    type(field_type), intent(in)    :: detj_at_w2
+    type(field_type), intent(in)    :: cell_orientation
+    real(r_def),      intent(in)    :: dt
+    integer(kind=i_def), intent(in) :: direction
+    type(field_type), intent(inout) :: increment
+
+    ! Subroutine name for timer
+    character(*), parameter :: routine_name = 'ffsl_advective_transport_step'
+
+    ! Density substeps in given direction
+    type(field_type) :: rho_y
+    type(field_type) :: rho_x
+    type(field_type) :: rho_z
+    type(field_type) :: rho_xy
+    type(field_type) :: rho_xz
+    type(field_type) :: rho_yz
+    type(field_type) :: rho_yx
+    type(field_type) :: rho_zx
+    type(field_type) :: rho_zy
+    type(field_type) :: rho_star
+    type(field_type) :: rho_starstar
+    type(field_type) :: rho_for_F
+    type(field_type) :: rho_for_G
+    type(field_type) :: rho_for_H
+
+    ! Density increments (advective differences) in given direction
+    type(field_type) :: increment_x
+    type(field_type) :: increment_y
+    type(field_type) :: increment_xy
+    type(field_type) :: increment_z
+
+    ! Size of substep
+    real(r_def) :: step_scale
+
+    ! Splitting option for case statement
+    integer(i_def) :: splitting_option
+
+    ! Constant -1/dt
+    real(r_def) :: minus_one_over_dt
+
+    ! Coordinate fields
+    type(function_space_type), pointer :: rho_fs => null()
+
+    ! Function space for rho
+    rho_fs => rho%get_function_space()
+
+    call rho_x%initialise( vector_space = rho_fs )
+    call rho_y%initialise( vector_space = rho_fs )
+    call rho_z%initialise( vector_space = rho_fs )
+    call rho_star%initialise( vector_space = rho_fs )
+    call rho_starstar%initialise( vector_space = rho_fs )
+    call rho_xy%initialise( vector_space = rho_fs )
+    call rho_xz%initialise( vector_space = rho_fs )
+    call rho_yz%initialise( vector_space = rho_fs )
+    call rho_yx%initialise( vector_space = rho_fs )
+    call rho_zx%initialise( vector_space = rho_fs )
+    call rho_zy%initialise( vector_space = rho_fs )
+    call rho_for_F%initialise( vector_space = rho_fs )
+    call rho_for_G%initialise( vector_space = rho_fs )
+    call rho_for_H%initialise( vector_space = rho_fs )
+    call increment_xy%initialise( vector_space = rho_fs )
+    call increment_x%initialise( vector_space = rho_fs )
+    call increment_y%initialise( vector_space = rho_fs )
+    call increment_z%initialise( vector_space = rho_fs )
+
+    if ( subroutine_timers ) call timer(routine_name)
+
+    minus_one_over_dt = -1.0_r_def / dt
+
+    ! Use timesplit_vertical_splitting for direction_h or direction_v
+    if ( direction /= direction_3d ) then
+      splitting_option = ffsl_advective_splitting_timesplit_vertical
+    else
+      splitting_option = ffsl_advective_splitting
+    end if
+
+    select case(splitting_option)
+
+    case(ffsl_advective_splitting_timesplit_vertical)
+
+      ! Timesplit vertical
+      ! Uses 2D COSMIC in horizontal. It has the form
+      !
+      !   rho_x  = rho - dt/2 f(rho)
+      !   rho_y  = rho - dt/2 g(rho)
+      !   rho_xy = rho - dt f(rho_y) - dt g(rho_x)
+      !
+      ! Output: f(rho_y) + g(rho_x) + h(rho_xy)
+
+      if ( direction /= direction_v ) then
+
+        ! Half step for advective steps
+        step_scale = 0.5_r_def
+
+        ! Calculate half steps in x and y
+        call ffsl_1d_advect_step( x_direction, rho, rho, cell_orientation, dep_pts_x, &
+                                  detj_at_w2, step_scale, dt, rho_x )
+        call ffsl_1d_advect_step( y_direction, rho, rho, cell_orientation, dep_pts_y, &
+                                  detj_at_w2, step_scale, dt, rho_y )
+
+        ! Calculate advective increment in x and y
+        call ffsl_1d_horz_advect_diff( x_direction, rho_x, rho_y, cell_orientation, &
+                                       dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_x )
+        call ffsl_1d_horz_advect_diff( y_direction, rho_x, rho_y, cell_orientation, &
+                                       dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_y )
+
+        if ( direction == direction_h ) then
+          ! Combine increments and divide by -dt to get
+          ! the correct form for ffsl_control
+          call invoke( X_plus_Y(increment, increment_x, increment_y), &
+                       inc_a_times_X(minus_one_over_dt, increment) )
+        else
+          ! Calculate update in horizontal ( rho_xy )
+          call invoke( X_plus_Y(increment_xy, increment_x, increment_y), &
+                       X_plus_Y(rho_xy, rho, increment_xy) )
+        end if
+
+      end if
+
+      if ( direction /= direction_h ) then
+
+        if ( direction == direction_v ) then
+          call invoke (setval_X(rho_xy, rho) )
+        end if
+
+        ! Calculate vertical increment
+        call ffsl_1d_advect_diff( z_direction, rho_xy, cell_orientation, dep_pts_z, &
+                                  detj_at_w2, dt, increment_z )
+
+        if ( direction == direction_3d ) then
+          ! Combine for total increment and divide by -dt to get
+          ! the correct form for ffsl_control
+          call invoke( X_plus_Y(increment, increment_xy, increment_z), &
+                                inc_a_times_X(minus_one_over_dt, increment) )
+        else
+          ! Only need vertical increment and divide by -dt to get
+          ! the correct form for ffsl_control
+          call invoke (setval_X(increment, increment_z), &
+                       inc_a_times_X(minus_one_over_dt, increment) )
+        end if
+      end if
+
+    case(ffsl_advective_splitting_macho)
+
+      ! MACHO splitting (Leonard et al. 1996).
+      ! It has the form
+      !
+      !   rho*  = rho - dt f(rho)
+      !   rho** = rho* - dt g(rho*)
+      !
+      ! Output: f(rho) + g(rho*) + h(rho**)
+
+      ! Full step for advective steps
+
+      ! Calculate advective increment in x
+      call ffsl_1d_advect_diff( x_direction, rho, cell_orientation, dep_pts_x, &
+                                detj_at_w2, dt, increment_x )
+      call invoke( X_plus_Y(rho_star, rho, increment_x) )
+
+      ! Calculate advective increment in y
+      call ffsl_1d_advect_diff( y_direction, rho, cell_orientation, dep_pts_y, &
+                                detj_at_w2, dt, increment_y )
+      call invoke( X_plus_Y(rho_starstar, rho_star, increment_y) )
+
+      ! Calculate advective increment in z
+      call ffsl_1d_advect_diff( z_direction, rho_starstar, cell_orientation, dep_pts_z, &
+                                detj_at_w2, dt, increment_z )
+
+      ! Combine increments, and divide by -dt to get the
+      ! correct form for ffsl_control
+      call invoke( X_plus_Y(increment_xy, increment_x, increment_y), &
+                   X_plus_Y(increment, increment_xy, increment_z),   &
+                   inc_a_times_X(minus_one_over_dt, increment) )
+
+    case(ffsl_advective_splitting_afc)
+
+      ! Asymmetrical Flux (AFC) splitting
+      ! It has the form
+      !
+      !   rho_x = rho - dt/3 f(rho)  |
+      !   rho_y = rho - dt/3 g(rho)  | First advective step terms
+      !   rho_z = rho - dt/3 h(rho)  |
+      !
+      !   rho_xy = rho - dt f(rho_y) |
+      !   rho_yz = rho - dt g(rho_z) | Second advective step terms
+      !   rho_zx = rho - dt h(rho_x) |
+      !
+      ! Output: f(rho_yz) + g(rho_zx) + h(rho_xy)
+
+      ! One-third step for first advective steps
+      step_scale = 1.0_r_def/3.0_r_def
+
+      ! Do first advective steps
+      call ffsl_1d_advect_step( x_direction, rho, rho, cell_orientation, dep_pts_x, &
+                                detj_at_w2, step_scale, dt, rho_x )
+      call ffsl_1d_advect_step( y_direction, rho, rho, cell_orientation, dep_pts_y, &
+                                detj_at_w2, step_scale, dt, rho_y )
+      call ffsl_1d_advect_step( z_direction, rho, rho, cell_orientation, dep_pts_z, &
+                                detj_at_w2, step_scale, dt, rho_z )
+
+      ! Full step for second advective steps
+      step_scale = 1.0_r_def
+
+      ! Do second advective step
+      call ffsl_1d_horz_advect_step( x_direction, rho, rho_x, rho_y, cell_orientation, &
+                                     dep_pts_x, dep_pts_y, detj_at_w2, step_scale, dt, &
+                                     rho_xy )
+      call ffsl_1d_advect_step( y_direction, rho, rho_z, cell_orientation, dep_pts_y, &
+                                detj_at_w2, step_scale, dt, rho_yz )
+      call ffsl_1d_advect_step( z_direction, rho, rho_x, cell_orientation, dep_pts_z, &
+                                detj_at_w2, step_scale, dt, rho_zx )
+
+      ! Calculate advective increments
+      call ffsl_1d_horz_advect_diff( x_direction, rho_zx, rho_yz, cell_orientation, &
+                                     dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_x )
+      call ffsl_1d_horz_advect_diff( y_direction, rho_zx, rho_yz, cell_orientation, &
+                                     dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_y )
+      call ffsl_1d_advect_diff( z_direction, rho_xy, cell_orientation, dep_pts_z, &
+                                detj_at_w2, dt, increment_z )
+
+      ! Combine increments, and divide by -dt to get the
+      ! correct form for ffsl_control
+      call invoke( X_plus_Y(increment_xy, increment_x, increment_y), &
+                   X_plus_Y(increment, increment_xy, increment_z),   &
+                   inc_a_times_X(minus_one_over_dt, increment) )
+
+    case(ffsl_advective_splitting_full)
+
+      ! Full COSMIC splitting (from Leonard et al. 1996).
+      ! It has the form
+      !
+      !   rho_x = rho - dt/3 f(rho)  |
+      !   rho_y = rho - dt/3 g(rho)  | First advective step terms
+      !   rho_z = rho - dt/3 h(rho)  |
+      !
+      !   rho_xy = rho - dt f(rho_y) |
+      !   rho_yz = rho - dt g(rho_z) |
+      !   rho_zx = rho - dt h(rho_x) | Second advective step terms
+      !   rho_xz = rho - dt f(rho_z) |
+      !   rho_yx = rho - dt g(rho_x) |
+      !   rho_zy = rho - dt h(rho_y) |
+      !
+      ! Output: f( (rho_yz+rho_yz)/2 ) + g( (rho_xz+rho_zx)/2 )
+      !                                + h( (rho_xy+rho_yx)/2 )
+
+      ! One-third step for first advective steps
+      step_scale = 1.0_r_def/3.0_r_def
+
+      ! Do first advective steps
+      call ffsl_1d_advect_step( x_direction, rho, rho, cell_orientation, dep_pts_x, &
+                                detj_at_w2, step_scale, dt, rho_x )
+      call ffsl_1d_advect_step( y_direction, rho, rho, cell_orientation, dep_pts_y, &
+                                detj_at_w2, step_scale, dt, rho_y )
+      call ffsl_1d_advect_step( z_direction, rho, rho, cell_orientation, dep_pts_z, &
+                                detj_at_w2, step_scale, dt, rho_z )
+
+      ! Full step for second advective steps
+      step_scale = 1.0_r_def
+
+      ! Do second advective step
+      call ffsl_1d_horz_advect_step( x_direction, rho, rho_x, rho_y, cell_orientation, &
+                                     dep_pts_x, dep_pts_y, detj_at_w2, step_scale, dt, &
+                                     rho_xy )
+      call ffsl_1d_advect_step( y_direction, rho, rho_z, cell_orientation, dep_pts_y, &
+                                detj_at_w2, step_scale, dt, rho_yz )
+      call ffsl_1d_advect_step( z_direction, rho, rho_x, cell_orientation, dep_pts_z, &
+                                detj_at_w2, step_scale, dt, rho_zx )
+      call ffsl_1d_advect_step( x_direction, rho, rho_z, cell_orientation, dep_pts_x, &
+                                detj_at_w2, step_scale, dt, rho_xz )
+      call ffsl_1d_horz_advect_step( y_direction, rho, rho_x, rho_y, cell_orientation, &
+                                     dep_pts_x, dep_pts_y, detj_at_w2, step_scale, dt, &
+                                     rho_yx )
+      call ffsl_1d_advect_step( z_direction, rho, rho_y, cell_orientation, dep_pts_z, &
+                                detj_at_w2, step_scale, dt, rho_zy )
+
+      ! Add together to get symmetrical update to use
+      ! in the difference calculation
+      call invoke( aX_plus_bY(rho_for_F, 0.5_r_def, rho_yz, 0.5_r_def, rho_zy), &
+                   aX_plus_bY(rho_for_G, 0.5_r_def, rho_xz, 0.5_r_def, rho_zx), &
+                   aX_plus_bY(rho_for_H, 0.5_r_def, rho_yx, 0.5_r_def, rho_xy) )
+
+      ! Calculate advective increments
+      call ffsl_1d_horz_advect_diff( x_direction, rho_for_G, rho_for_F, cell_orientation, &
+                                     dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_x )
+      call ffsl_1d_horz_advect_diff( y_direction, rho_for_G, rho_for_F, cell_orientation, &
+                                     dep_pts_x, dep_pts_y, detj_at_w2, dt, increment_y )
+      call ffsl_1d_advect_diff( z_direction, rho_for_H, cell_orientation, dep_pts_z, &
+                                detj_at_w2, dt, increment_z )
+
+      ! Combine increments, and divide by -dt to get the
+      ! correct form for ffsl_control
+      call invoke( X_plus_Y(increment_xy, increment_x, increment_y), &
+                   X_plus_Y(increment, increment_xy, increment_z),   &
+                   inc_a_times_X(minus_one_over_dt, increment) )
+
+    end select
+
+    if ( subroutine_timers ) call timer(routine_name)
+
+    nullify( rho_fs )
+
+  end subroutine ffsl_advective_transport_step
+
+end module ffsl_transport_alg_mod

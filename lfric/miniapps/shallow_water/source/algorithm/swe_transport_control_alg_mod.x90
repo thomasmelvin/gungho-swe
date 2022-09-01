@@ -1,0 +1,346 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2022 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief Module controlling the transport of the shallow water miniapp's
+!!        prognostic variables.
+
+module swe_transport_control_alg_mod
+
+  use constants_mod,                     only: i_def, r_def, l_def
+  use enforce_bc_kernel_mod,             only: enforce_bc_kernel_type
+  use field_mod,                         only: field_type
+  use field_indices_mod,                 only: isw_u, isw_g, isw_b, isw_q
+  use field_vector_mod,                  only: field_vector_type
+  use finite_element_config_mod,         only: element_order, nqp_exact
+  use fs_continuity_mod,                 only: W1, W3
+  use function_space_mod,                only: function_space_type
+  use function_space_collection_mod,     only: function_space_collection
+  use geometric_constants_mod,           only: get_coordinates, &
+                                               get_panel_id
+  use local_mesh_mod,                    only: local_mesh_type
+  use log_mod,                           only: log_event,       &
+                                               LOG_LEVEL_ERROR, &
+                                               LOG_LEVEL_INFO,  &
+                                               log_scratch_space
+  use matrix_vector_kernel_mod,          only: matrix_vector_kernel_type
+  use mesh_mod,                          only: mesh_type
+  use mesh_collection_mod,               only: mesh_collection
+  use quadrature_rule_gaussian_mod,      only: quadrature_rule_gaussian_type
+  use quadrature_xyoz_mod,               only: quadrature_xyoz_type
+  use runtime_tools_mod,                 only: find_mesh_index
+  use shallow_water_settings_config_mod, only: thermal_swe,            &
+                                               momentum_form,          &
+                                               momentum_form_momentum, &
+                                               momentum_form_vector_invariant
+  use transport_enumerated_types_mod,    only: equation_conservative, &
+                                               equation_advective
+  use transport_metadata_mod,            only: transport_metadata_type
+  use transport_metadata_collection_mod, only: transport_metadata_collection_type
+  use transport_runtime_alg_mod,         only: transport_runtime_type
+  use transport_runtime_collection_mod,  only: init_transport_runtime_collection, &
+                                               set_transport_runtime,             &
+                                               get_transport_runtime
+  use vorticity_advection_kernel_mod,    only: vorticity_advection_kernel_type
+
+  implicit none
+
+  private
+
+  type(transport_metadata_collection_type) :: transport_metadata_collection
+
+  ! Contained suroutines
+  public :: swe_transport_control_alg_init
+  public :: swe_transport_control_alg_step
+  public :: swe_transport_control_alg_final
+
+contains
+
+  !=============================================================================
+  !> @brief Create all the initialisation structures required for transport in
+  !!        the shallow water model.
+  !> @params[in] mesh_id   The ID of the mesh to initialise on
+  subroutine swe_transport_control_alg_init(mesh)
+
+    use reconstruct_w3_field_alg_mod, only: reconstruct_w3_field_alg_init
+    use wt_advective_update_alg_mod,  only: wt_advective_update_alg_init
+    use transport_config_mod,         only: profile_size,      &
+                                            field_names,       &
+                                            scheme,            &
+                                            monotone,          &
+                                            splitting,         &
+                                            horizontal_method, &
+                                            vertical_method,   &
+                                            enforce_min_value, &
+                                            min_value,         &
+                                            log_space,         &
+                                            reversible,        &
+                                            use_density_predictor
+
+    implicit none
+
+    type(mesh_type), pointer, intent(in) :: mesh
+
+    integer(kind=i_def)           :: equation_form
+    integer(kind=i_def)           :: config
+    logical(kind=l_def)           :: use_divergence_factor
+    type(transport_metadata_type) :: transport_metadata
+
+    integer(kind=i_def), allocatable :: local_mesh_ids(:)
+    type(local_mesh_type),   pointer :: local_mesh => null()
+
+    ! Set up metadata field collection
+    transport_metadata_collection = transport_metadata_collection_type()
+
+    ! Set up configs using namelist entries
+    do config = 1, profile_size
+
+      write(log_scratch_space,'(3A)') 'Setting up ',trim(field_names(config)),' transport metadata'
+      call log_event(log_scratch_space, LOG_LEVEL_INFO)
+
+      ! Set hardwired defaults based upon which field is being advected
+      if ( trim(field_names(config)) == 'geopot' .or. &
+           trim(field_names(config)) == 'q' ) then
+        equation_form = equation_conservative
+      else
+        equation_form = equation_advective
+      end if
+      if ( trim(field_names(config)) == 'geopot' .or. &
+           trim(field_names(config)) == 'q' ) then
+        use_divergence_factor = use_density_predictor
+      else
+        use_divergence_factor = .false.
+      end if
+
+      transport_metadata = transport_metadata_type( field_names(config),        &
+                                                    equation_form,              &
+                                                    splitting(config),          &
+                                                    scheme(config),             &
+                                                    horizontal_method(config),  &
+                                                    vertical_method(config),    &
+                                                    monotone(config),           &
+                                                    enforce_min_value(config),  &
+                                                    min_value(config),          &
+                                                    log_space(config),          &
+                                                    use_divergence_factor,      &
+                                                    reversible(config) )
+
+      call transport_metadata_collection%set_transport_metadata(transport_metadata)
+
+    end do
+
+    ! Initialise any necessary transport fields or coefficients
+    call reconstruct_w3_field_alg_init( mesh )
+    call wt_advective_update_alg_init( mesh )
+
+    ! Initialise transport_runtime_collection
+    ! Only one mesh
+    allocate(local_mesh_ids(1))
+    local_mesh => mesh%get_local_mesh()
+    local_mesh_ids(1) = local_mesh%get_id()
+    call init_transport_runtime_collection(local_mesh_ids)
+
+  end subroutine swe_transport_control_alg_init
+
+
+  !=============================================================================
+  !> @brief Advection of prognostic variables for the shallow water miniapp.
+  !> @param[in,out] advection_inc   Advection increment of the shallow water
+  !!                                prognostics [u, geopot, buoyancy, q]
+  !> @param[in]     advected_fields Fields to advect: [u, geopot, buoyancy, q]
+  !> @param[in]     state_np1       Estimate of fields at time n+1
+  !> @param[in]     model_dt        Difference in time through model time step
+
+  subroutine swe_transport_control_alg_step( advection_inc,    &
+                                             advected_fields,  &
+                                             state_np1,        &
+                                             model_dt )
+
+    use fem_constants_mod,               only: get_mass_matrix
+    use operator_mod,                    only: operator_type
+    use transport_field_mod,             only: transport_field
+    use wind_transport_alg_mod,          only: wind_transport_alg
+    use io_config_mod,                   only: subroutine_timers
+    use timer_mod,                       only: timer
+
+    implicit none
+
+    ! Arguments
+    type(field_vector_type),         intent(inout) :: advection_inc
+    type(field_vector_type), target, intent(in)    :: advected_fields
+    type(field_vector_type), target, intent(in)    :: state_np1
+    real(kind=r_def),                intent(in)    :: model_dt
+
+    ! Fields from advected_fields and state_np1 vector
+    type(field_type), pointer :: wind_np1 => null(), &
+                                 wind_n   => null(), &
+                                 geopot   => null(), &
+                                 buoyancy => null(), &
+                                 q        => null()
+
+    ! Fields updated during transport (but not used in model update)
+    type(field_type) :: geopot_np1
+    type(field_type) :: q_np1
+    type(field_type) :: buoyancy_np1
+
+    ! Function space
+    type(function_space_type), pointer :: w1_fs => null()
+
+    ! Internal variables
+    type(transport_runtime_type) :: transport_runtime
+    type(transport_runtime_type), pointer :: transport_runtime_get => null()
+    type(transport_metadata_type), pointer :: transport_metadata => null()
+    type(field_type), pointer :: q_mass_flux => null()
+    type(field_type) :: buoy_inc,     &
+                        constant_one, &
+                        q_geopot
+
+    ! Coordinates, Panel ID, and Mass Matrix
+    type(field_type),    pointer :: chi(:)   => null()
+    type(field_type),    pointer :: panel_id => null()
+    type(operator_type), pointer :: mm_wb    => null()
+
+    ! Quadrature
+    type(quadrature_xyoz_type)          :: qr
+    type(quadrature_rule_gaussian_type) :: quadrature_rule
+
+    if ( subroutine_timers ) call timer('swe_transport_control_alg_step')
+
+    ! ------------------------------------------------------------------------ !
+    ! Pre-transport initialisation tasks
+    ! ------------------------------------------------------------------------ !
+
+    ! Get individual advected and state_np1 fields
+    wind_n   => advected_fields%vector(isw_u)
+    q        => advected_fields%vector(isw_q)
+    buoyancy => advected_fields%vector(isw_b)
+    geopot   => advected_fields%vector(isw_g)
+    wind_np1 => state_np1%vector(isw_u)
+
+    ! Create transport_runtime object (advecting wind etc)
+    transport_runtime = transport_runtime_type(wind_n, wind_np1, model_dt)
+    call set_transport_runtime(transport_runtime)
+
+    ! Initialise geopotential variables
+    call geopot_np1%initialise(vector_space = geopot%get_function_space())
+
+    ! ------------------------------------------------------------------------ !
+    ! Transport of prognostic variables
+    ! ------------------------------------------------------------------------ !
+
+    ! ------------------------------------------------------------------------ !
+    ! Transport geopotential
+    call log_event( "Transporting geopotential...", LOG_LEVEL_INFO)
+    transport_metadata => transport_metadata_collection%get_transport_metadata('geopot')
+    call transport_field( geopot_np1, geopot, &
+                          model_dt, transport_metadata )
+    call invoke( X_minus_Y( advection_inc%vector(isw_g), geopot_np1, &
+                            geopot ) )
+
+    ! ------------------------------------------------------------------------ !
+    ! Transport buoyancy
+    if ( thermal_swe ) then
+
+      ! Initialise updated buoyancy
+      call buoyancy_np1%initialise(vector_space = buoyancy%get_function_space())
+
+      call log_event( "Transporting buoyancy...", LOG_LEVEL_INFO)
+      transport_metadata => transport_metadata_collection%get_transport_metadata('buoyancy')
+      call transport_field( buoyancy_np1, buoyancy, &
+                            model_dt, transport_metadata )
+      call invoke( X_minus_Y( advection_inc%vector(isw_b), buoyancy_np1, &
+                              buoyancy ) )
+      ! The increment is now pointwise. Depending upon the temporal discretisation
+      ! this may need converting into weak form by multiplying by the mass matrix
+      mm_wb => get_mass_matrix(W3, buoyancy%get_mesh_id() )
+      call buoy_inc%initialise( vector_space = &
+                                buoyancy_np1%get_function_space() )
+      call invoke( setval_X(buoy_inc, advection_inc%vector(isw_b)),       &
+                   setval_c(advection_inc%vector(isw_b), 0.0_r_def),      &
+                   matrix_vector_kernel_type(advection_inc%vector(isw_b), &
+                                             buoy_inc, mm_wb) )
+
+      nullify( mm_wb )
+
+    end if
+
+    ! ------------------------------------------------------------------------ !
+    ! Transport wind field
+
+    ! Vector invariant or momentum form of the momentum equations determines
+    ! advection terms for wind
+
+    select case (momentum_form)
+
+    case(momentum_form_vector_invariant)
+
+      ! If vector invariant form, calculate the PV mass flux, Q=q*geopot*u
+      ! and use this in the momentum equations.
+      call log_event( "Transporting PV...", LOG_LEVEL_INFO)
+
+      ! Get transport runtime
+      transport_runtime_get => get_transport_runtime(geopot%get_mesh())
+
+      ! Initialise PV variables
+      call q_geopot%initialise(vector_space = q%get_function_space())
+      call q_np1%initialise(vector_space = q%get_function_space())
+
+      ! Initialise vorticity advection function spaces and quadrature
+      w1_fs    => function_space_collection%get_fs( geopot%get_mesh(), element_order, W1 )
+      chi      => get_coordinates(geopot%get_mesh_id())
+      panel_id => get_panel_id(geopot%get_mesh_id())
+      qr = quadrature_xyoz_type(nqp_exact, quadrature_rule)
+
+      ! Calculate q*phi and get q mass flux
+      call invoke( X_times_Y(q_geopot,q,geopot) )
+      transport_metadata => transport_metadata_collection%get_transport_metadata('q')
+      call transport_field( q_np1, q_geopot, &
+                            model_dt, transport_metadata )
+      q_mass_flux => transport_runtime_get%get_dry_flux(geopot%get_mesh_id(), 1)
+
+      ! If vector_invariant form, use the PV mass flux for the velocity advection
+      call constant_one%initialise( vector_space = w1_fs )
+      call invoke( setval_c(constant_one, 1.0_r_def),                                &
+                   setval_c(advection_inc%vector(isw_u), 0.0_r_def),                 &
+                   vorticity_advection_kernel_type(advection_inc%vector(isw_u),      &
+                                                   q_mass_flux,                      &
+                                                   constant_one, chi, panel_id, qr), &
+                   enforce_bc_kernel_type(advection_inc%vector(isw_u)),              &
+                   inc_a_times_X(model_dt,advection_inc%vector(isw_u)) )
+
+      nullify( w1_fs, chi, panel_id )
+
+    case(momentum_form_momentum)
+
+      call log_event( "Transporting wind...", LOG_LEVEL_INFO)
+      transport_metadata => transport_metadata_collection%get_transport_metadata('wind')
+      call wind_transport_alg( advection_inc%vector(isw_u), wind_n, &
+                               model_dt, transport_metadata )
+      ! We don't change advection_inc%vector(isw_u) as wind_transport_alg
+      ! already returns weak increment
+
+    end select    ! momentum_form
+
+    if ( subroutine_timers ) call timer('swe_transport_control_alg_step')
+
+  end subroutine swe_transport_control_alg_step
+
+  !=============================================================================
+  !> @brief Calls finalising routines for shallow water transport.
+  subroutine swe_transport_control_alg_final()
+
+    use reconstruct_w3_field_alg_mod,     only: reconstruct_w3_field_alg_final
+    use wt_advective_update_alg_mod,      only: wt_advective_update_alg_final
+    use transport_runtime_collection_mod, only: transport_runtime_collection_final
+
+    implicit none
+
+    call reconstruct_w3_field_alg_final()
+    call wt_advective_update_alg_final()
+    call transport_runtime_collection_final()
+
+  end subroutine swe_transport_control_alg_final
+
+
+end module swe_transport_control_alg_mod

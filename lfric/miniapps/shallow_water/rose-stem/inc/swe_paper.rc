@@ -1,0 +1,70 @@
+{# Here we set a dictionary of jobs used in Shallow Water tests. #}
+{# These can then be imported into the main rose stem groups as required #}
+
+{%- set swe_paper_groups = {
+'paper_plots': [
+      'run_application("shallow_water", "galewsky_vi", resolutions=[("C24",1800.0),("C48",900.0),("C96",450.0),("C192",225.0),("C384",112.5)],
+                 env={"crun":1,"nrun":{"default":288, ("C48",900.0):576,("C96",450.0):1152,("C192",225.0):2304, ("C384",112.5):4608 },
+                      "directives":{"default":{"mpi_parts":24,"threads":3,"wallclock":"02:00:00","use_xios":"False"} } },
+                 plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR C q 576:4608 $PLOT_DIR",
+                 checkkgo=False)',
+       'run_application("shallow_water", "williamson2_vi", resolutions=[("C24",3600.0),("C48",1800.0),("C96",900.0)],
+                 env={"crun":1,"nrun":{"default":360, ("C24",1800.0):360, ("C48",1800.0):720, ("C96",900.0):1440 },
+                      "directives":{"default":{"mpi_parts":6,"threads":3,"wallclock":"02:00:00","use_xios":"False"} } },
+                 plotstr="plot_error.py ' + plotStemName + ' $NODAL_DATA_DIR C geopot:wind 360:1440 $PLOT_DIR",
+                 checkkgo=False)',
+        'run_application("shallow_water", "williamson5_vi", resolutions=[("C24",3600.0),("C48",1800.0),("C96",900.0)],
+                 env={"crun":1,"nrun":{"default":360, ("C24",3600.0):360, ("C48",1800.0):720, ("C96",900.0):1440 },
+                      "directives":{"default":{"mpi_parts":6,"threads":3,"wallclock":"02:00:00","use_xios":"False"} } },
+                 plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR C geopot 360:1440 $PLOT_DIR",
+                 checkkgo=False)',
+      'run_application("shallow_water", "vortex_sphere_vi", resolutions=[("C24",1800.0),("C48",900.0)],
+                 env={"crun":1,"nrun":{"default":720, ("C24",1800.0):720, ("C48",900.0):1440 },
+                      "directives":{"default":{"mpi_parts":6,"threads":3,"wallclock":"02:00:00","use_xios":"False"} } },
+                 plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR C q 360:1440 $PLOT_DIR",
+                 checkkgo=False)',
+],
+'paper_comparison': [
+      'run_application("shallow_water", "galewsky_hr_vi", resolutions=[("C96",450.0),("C192",225.0)],
+                 env={"crun":1,"nrun":{"default":1152, ("C96",450.0):1152, ("C192",225.0):2304 },
+                      "directives":{"default":{"mpi_parts":96,"threads":3,"wallclock":"03:00:00","use_xios":"False"} } },
+                 plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR C q 1152:2304 $PLOT_DIR",
+                 checkkgo=False)',
+      'run_application("shallow_water", "galewsky_hr", resolutions=[("C96",450.0),("C192",225.0)],
+                 env={"crun":1,"nrun":{"default":1152, ("C96",450.0):1152, ("C192",225.0):2304 },
+                      "directives":{"default":{"mpi_parts":96,"threads":3,"wallclock":"02:00:00","use_xios":"False"} } },
+                 plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR C q 1152:2304 $PLOT_DIR",
+                 checkkgo=False)',
+      'run_application("shallow_water", "vortex_sphere_vi", resolutions=[("C96",450.0),("C192",225.0)],
+                 env={"crun":1,"nrun":{"default":2880, ("C96",450.0):2880, ("C192",225.0):5760 } ,
+                      "directives":{"default":{"mpi_parts":54,"threads":3,"wallclock":"03:00:00","use_xios":"False"} } },
+                 plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR C q 1440:5760 $PLOT_DIR",
+                 checkkgo=False)',
+      'run_application("shallow_water", "vortex_sphere", resolutions=[("C96",450.0),("C192",225.0)],
+                 env={"crun":1,"nrun":{"default":2880, ("C96",450.0):2880, ("C192",225.0):5760 } ,
+                      "directives":{"default":{"mpi_parts":54,"threads":3,"wallclock":"02:00:00","use_xios":"False"} } },
+                 plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR C q 1440:5760 $PLOT_DIR",
+                 checkkgo=False)',
+       'run_application("shallow_water", "williamson2_vi", resolutions=[("C24",3600.0),("C48",1800.0),("C96",900.0)],
+                 env={"crun":1,"nrun":{"default":360, ("C24",1800.0):360, ("C48",1800.0):720, ("C96",900.0):1440 },
+                      "directives":{"default":{"mpi_parts":6,"threads":3,"wallclock":"02:00:00","use_xios":"False"} } },
+                 plotstr="plot_error.py ' + plotStemName + ' $NODAL_DATA_DIR C geopot:wind 360:1440 $PLOT_DIR",
+                 checkkgo=False)',
+       'run_application("shallow_water", "williamson2", resolutions=[("C24",3600.0),("C48",1800.0),("C96",900.0)],
+                 env={"crun":1,"nrun":{"default":360, ("C24",1800.0):360, ("C48",1800.0):720, ("C96",900.0):1440 },
+                      "directives":{"default":{"mpi_parts":6,"threads":3,"wallclock":"02:00:00","use_xios":"False"} } },
+                 plotstr="plot_error.py ' + plotStemName + ' $NODAL_DATA_DIR C geopot:wind 360:1440 $PLOT_DIR",
+                 checkkgo=False)',
+],
+}
+%}
+
+{# If we want to run all the tests in one go, then collect them into a single group... #}
+{% if 'swe_paper-all' not in swe_paper_groups.keys() %}
+{%   do swe_paper_groups.update({'swe_paper-all':[]}) %}
+{% endif %}
+{% for swe_paper_subgroup in swe_paper_groups.keys() %}
+{%   if swe_paper_subgroup != 'swe_paper-all' %}
+{%     do swe_paper_groups['swe_paper-all'].extend(swe_paper_groups[swe_paper_subgroup]) %}
+{%   endif %}
+{% endfor %}

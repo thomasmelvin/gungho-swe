@@ -1,0 +1,21 @@
+' (C) Crown copyright 2017 Met Office. All rights reserved.
+' For further details please refer to the file LICENCE which you should have
+' received as part of this distribution.
+
+@startuml
+
+!include look.iuml
+!include quadrature/quadrature_mod.iuml
+
+!include quadrature/quadrature_xoyoz_mod.iuml
+!include quadrature/quadrature_xyz_mod.iuml
+!include quadrature/quadrature_xyoz_mod.iuml
+!include quadrature/quadrature_face_mod.iuml
+!include quadrature/quadrature_edge_mod.iuml
+
+quadrature_xoyoz_mod -[hidden]- quadrature_xyz_mod
+quadrature_xyz_mod -[hidden]- quadrature_xyoz_mod
+quadrature_xyoz_mod -[hidden]- quadrature_face_mod
+quadrature_face_mod -[hidden]- quadrature_edge_mod
+
+@enduml

@@ -1,0 +1,29 @@
+{%- set projectName = 'infrastructure' %}
+{%- set projectDir  = 'infrastructure' %}
+{%- set miniappFlag = False %}
+
+{%- set projectApps = [ None ] %}
+
+
+{# Set the  compiler debug profile for runs in this suite #}
+{# Options are ['fast-debug'|'full-debug'|'production'], omission defaults to 'fast-debug' #}
+{%- set run_application_profile = '' %}
+
+{%- set rdef_default  = "64" %}
+{%- set mesh_rdef     = "64" %}
+{%- set mesh_build    = "fast-debug" %}
+{%- set mesh_compiler = "intel" %}
+{%- set MAXRUNAHEAD     = 1 %}
+
+{%- set groups = {'developer': ['validate_rose_meta_graph("infrastructure")',
+                                'check_compilers("fast-debug", publish=True)',
+                                'api_documentation_graph(publish=True)',
+                                'uml_documentation_graph(publish=True)',
+                                'design_documentation_graph(publish=True)',
+                                'check_config_dump_graph()',
+                                'check_style_graph()',
+                                'build_system'],
+                  'nightly':   ['check_compilers("full-debug", publish=True)',
+                                'build_system',
+                                'publish_commit']} %}
+

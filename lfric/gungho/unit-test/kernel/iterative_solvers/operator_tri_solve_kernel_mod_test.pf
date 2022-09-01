@@ -1,0 +1,79 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+module operator_tri_solve_kernel_mod_test
+
+  use constants_mod, only: r_def, i_def
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: operator_tri_solve_kernel_test_type
+    private
+  contains
+    procedure test_all
+  end type operator_tri_solve_kernel_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_all( this )
+
+    use operator_tri_solve_kernel_mod, only: operator_tri_solve_code
+
+    implicit none
+
+    class(operator_tri_solve_kernel_test_type), intent(inout) :: this
+
+    real(kind=r_def) :: tol = 1.0e010_r_def
+
+    integer(kind=i_def), parameter :: nz = 10
+    integer(kind=i_def) :: map(2)
+    real(kind=r_def) :: x(nz), y(nz)
+    real(kind=r_def) :: a0, ap, am
+    real(kind=r_def) :: tri(2,2,nz-1)
+    real(kind=r_def) :: answer(nz)
+
+    integer(kind=r_def) :: k
+
+    map(:) = (/ 1_i_def, 2_i_def /)
+
+    x      = real((/ 1, 4, 6, 2, -4, 2, 5, 8, -3, 2 /),r_def)
+    answer = real((/ 0.595740342096225, &
+                     1.536623742649890, &
+                     1.921640812369115, &
+                     0.678807366246152, &
+                    -0.699910115193080, &
+                     0.805771536505973, &
+                     1.903359140732273, &
+                     2.277107208194344, &
+                    -0.248802850816906, &
+                     0.456459501107042 /),r_def)
+    ! Set up tridiagonal matrix: [AM, A0, AP] as a local assembly operator
+    a0 =  4.0_r_def
+    ap = -0.9_r_def
+    am = -0.7_r_def
+
+    do k = 1,nz-1
+      tri(1,1,k) = 0.5_r_def*a0
+      tri(2,2,k) = 0.5_r_def*a0
+      tri(1,2,k) = ap
+      tri(2,1,k) = am
+    end do
+
+    call operator_tri_solve_code(1_i_def, nz-1, y, x, 1_i_def, tri, 2_i_def, nz, map)
+
+    @assertEqual( answer, y, tol )
+
+  end subroutine test_all
+
+end module operator_tri_solve_kernel_mod_test
+

@@ -1,0 +1,68 @@
+' (c) The copyright relating to this work is owned jointly by the Crown,
+' Met Office and NERC 2014. However, it has been created with the help of the
+' GungHo Consortium, whose members are identified at
+' https://puma.nerc.ac.uk/trac/GungHo/wiki
+
+class gen_planar_mod::gen_planar_type {
+
+  -mesh_name: string
+  -geometry: integer
+  -topology: integer
+  -coord_sys: integer
+  -coord_units_x: string
+  -coord_units_y: string
+  -constructor_inputs: string
+  -dx: real
+  -dy: real
+  -edge_cells_x: integer
+  -edge_cells_y: integer
+  -npanels: integer
+  -nmaps: integer
+
+  -rotate_mesh: logical
+  -first_node: real[2]
+
+  -nedges_cell: integer
+  -n_nodes: integer
+  -n_edges: integer
+  -n_faces: integer
+  -periodic_x: logical
+  -periodic_y: logical
+
+  -north_cells: integer[:] <<allocatable>>
+  -east_cells:  integer[:] <<allocatable>>
+  -south_cells: integer[:] <<allocatable>>
+  -west_cells:  integer[:] <<allocatable>>
+
+  -target_mesh_names: string[:] <<allocatable>>
+  -target_edge_cells_x: integer[:] <<allocatable>>
+  -target_edge_cells_y: integer[:] <<allocatable>>
+  -global_mesh_maps: global_mesh_map_collection_type <<allocatable>>
+
+  -cell_next: integer[::] <<allocatable>>
+  -verts_on_cell: integer[::] <<allocatable>>
+  -edges_on_cell: integer[::] <<allocatable>>
+  -verts_on_edge: integer[::] <<allocatable>>
+  -vert_coords: real[::] <<allocatable>>
+  -cell_coords: real[::] <<allocatable>>
+
+  -north_pole: real[2]
+  -null_island: real[2]
+
+  +<<create>>gen_planar_constructor( \n\t<<in>> reference_element: reference_cube_type,\n\t<<in>> mesh_name: string,\n\t<<in>> edge_cells_x: integer,\n\t<<in>> edge_cells_y: integer,\n\t<<in>> periodic_x: logical,\n\t<<in>> periodic_y: logical,\n\t<<in>> domain_x: integer,\n\t<<in>> domain_y: integer,\n\t<<in>> coord_sys: integer,\n\t<<in, optional>> target_mesh_names: string[:],\n\t<<in, optional>> target_mesh_names: string[:],\n\t<<in, optional>> target_mesh_names: string[:],\n\t<<in, optional>> target_edge_cells_x: integer[:],\n\t<<in, optional>> target_edge_cells_y: integer[:],\n\t<<in, optional>> rotate_mesh: logical,\n\t<<in, optional>> target_north_pole: real[2],\n\t<<in, optional>> target_null_pole: real[2],\n\t<<in, optional>> first_node: real[2] ): gen_planar_type
+
+  +is_generated() : logical
+  +get_corner_gid( <<in>> corner: integer ): integer
+
+  +generate( ... )
+  +get_metadata( ... )
+  +get_dimensions( ... )
+  +get_coordinates( ... )
+  +get_connectivity( ... )
+  +get_global_mesh_maps( ... )
+
+  +write_mesh()
+  +clear()
+}
+
+gen_planar_mod::gen_planar_type -|> ugrid_generator_mod::ugrid_generator_type

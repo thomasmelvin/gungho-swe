@@ -1,0 +1,194 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the multiplication of two columnwise assembled operators
+!> For this, multiply the operators and check that the product operator
+!> has the same entries as the corresponding dense matrix.
+!> The operators it uses are D : W_theta -> W_3 and D^T, where D is a
+!> derivative operator.
+module columnwise_op_mul_kernel_mod_test
+
+  use constants_mod,                 only : i_def, r_def, r_solver
+
+  use get_unit_test_m3x3_q3x3x3_sizes_mod, &
+       only : get_wtheta_m3x3_q3x3x3_size, get_w3_m3x3_q3x3x3_size
+  use get_unit_test_m3x3_cma_data_mod, &
+       only : get_cma_size
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: columnwise_op_mul_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type columnwise_op_mul_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(columnwise_op_mul_test_type), intent(inout) :: this
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod,        only: final_configuration
+
+    implicit none
+
+    class(columnwise_op_mul_test_type), intent(inout) :: this
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use columnwise_op_mul_kernel_mod, only : &
+         columnwise_op_mul_kernel_code
+
+    implicit none
+
+    class(columnwise_op_mul_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter :: tol = 1.0e-6_r_def
+
+    integer(kind=i_def) :: i, j, cell
+
+    ! Dense representations of the operators D and D^T.D
+    real(kind=r_def), allocatable, dimension(:,:) :: densematrix_D, &
+         densematrix_DT_D
+
+    ! The matrices themselves
+    real(kind=r_solver), allocatable, dimension(:,:,:) :: clm_mat_D, clm_mat_DT, clm_mat_DTD
+
+    integer(kind=i_def) :: j_minus, j_plus
+    real(kind=r_def)    :: matrixentry ! Sparse matrix entry to compare in test
+
+    integer(kind=i_def) :: nlayers, ndf_T, undf_T, unused, ncell_2d
+    integer(kind=i_def) :: alpha_TT, beta_TT, g_m_TT, g_p_TT, bw_TT, ncol_TT, nrow_TT
+
+    integer(kind=i_def) :: ndf_3, alpha_T3, beta_T3, g_m_T3, g_p_T3, bw_T3, ncol_T3, nrow_T3
+    integer(kind=i_def) ::        alpha_3T, beta_3T, g_m_3T, g_p_3T, bw_3T, ncol_3T, nrow_3T
+
+    nlayers = 3_i_def
+    call get_wtheta_m3x3_q3x3x3_size(ndf_T, unused, unused, unused, unused, unused, unused, nlayers=nlayers)
+    call get_w3_m3x3_q3x3x3_size(ndf_3, unused, unused, unused, unused, unused, unused, nlayers=nlayers)
+                                      ! ndf_face_to, ndf_interior_to, nf_f, ni_f
+    call get_cma_size(nlayers, ndf_T, ndf_T, 1_i_def, 0_i_def, 1_i_def, 0_i_def, &
+         alpha_TT, beta_TT, g_m_TT, g_p_TT, bw_TT, ncol_TT, nrow_TT)
+
+    call get_cma_size(nlayers, ndf_T, ndf_3, 1_i_def, 0_i_def, 0_i_def, 1_i_def, &
+         alpha_T3, beta_T3, g_m_T3, g_p_T3, bw_T3, ncol_T3, nrow_T3)
+
+    call get_cma_size(nlayers, ndf_3, ndf_T, 0_i_def, 1_i_def, 1_i_def, 0_i_def, &
+             alpha_3T,  beta_3T, g_m_3T, g_p_3T, bw_3T, ncol_3T, nrow_3T)
+
+    cell = 1_i_def
+
+    ! Construct banded and dense matrix representation,
+    ! fill with (scaled) theta mass matrix.
+    allocate(densematrix_D( nrow_3T,ncol_3T) )
+    allocate(densematrix_DT_D( nrow_TT,ncol_TT) )
+    densematrix_D(:,:) = 0.0_r_def
+
+    ! CMA data structures for the actual matrix should have the last index be ncells, but
+    ! here only one column is used for the test, so just allocate 1 cell.
+    ncell_2d = 1_i_def
+    allocate(clm_mat_D(bw_3T, nrow_3T, ncell_2d))
+    allocate(clm_mat_DT(bw_T3, nrow_T3, ncell_2d))
+    allocate(clm_mat_DTD(bw_TT, nrow_TT, ncell_2d))
+
+    clm_mat_D(:,:,:) = 0.0_r_solver
+    clm_mat_DT(:,:,:) = 0.0_r_solver
+    clm_mat_DTD(:,:,:) = 0.0_r_solver
+
+    do i = 1_i_def, nrow_3T
+       clm_mat_D(1_i_def,i,cell) = +1.0_r_solver
+       clm_mat_D(2_i_def,i,cell) = -1.0_r_solver
+       densematrix_D(i,i)   = +1.0_r_def
+       densematrix_D(i,i+1_i_def) = -1.0_r_def
+    end do
+
+    do i = 1_i_def, nrow_T3
+       clm_mat_DT(1_i_def,i,cell) = -1.0_r_solver
+       clm_mat_DT(2_i_def,i,cell) = +1.0_r_solver
+    end do
+
+
+!   Sanity check the transpose operator sizes
+    @assertEqual(alpha_T3, beta_3T)
+    @assertEqual(nrow_T3,ncol_3T)
+    @assertEqual(nrow_3T,ncol_T3)
+    @assertEqual(bw_T3,bw_3T)
+    @assertEqual(g_m_T3,g_p_3T)
+    @assertEqual(g_p_T3,g_m_3T)
+
+    call columnwise_op_mul_kernel_code(cell,        &
+                                       ncell_2d,    &
+                                       clm_mat_DT,  &
+                                       nrow_T3,     &
+                                       ncol_T3,     &
+                                       bw_T3,       &
+                                       alpha_T3,    &
+                                       beta_T3,     &
+                                       g_m_T3,      &
+                                       g_p_T3,      &
+                                       clm_mat_D,   &
+                                       nrow_3T,     &
+                                       ncol_3T,     &
+                                       bw_3T,       &
+                                       alpha_3T,    &
+                                       beta_3T,     &
+                                       g_m_3T,      &
+                                       g_p_3T,      &
+                                       clm_mat_DTD, &
+                                       nrow_TT,     &
+                                       ncol_TT,     &
+                                       bw_TT,       &
+                                       alpha_TT,    &
+                                       beta_TT,     &
+                                       g_m_TT,      &
+                                       g_p_TT)
+
+    ! Same calculation with dense matrices
+    densematrix_DT_D(:,:) = matmul( transpose( densematrix_D(:,:) ), &
+                                               densematrix_D(:,:)    )
+
+    ! Check result by comparing non-zero matrix entries in columnwise and
+    ! dense matrices
+    do i = 1_i_def, nrow_TT
+       j_minus = ceiling( ( alpha_TT*i - g_p_TT) / (1.0_r_def*beta_TT),i_def )
+       j_plus = floor( ( alpha_3T*i + g_m_TT) / (1.0_r_def*beta_TT),i_def )
+       do j = MAX(1_i_def,j_minus), MIN( ncol_TT, j_plus )
+          matrixentry &
+               = real(clm_mat_DTD(j-j_minus+1_i_def,i,cell), r_def)
+          @assertEqual( densematrix_DT_D(i,j), matrixentry, tol )
+
+       end do
+    end do
+
+    deallocate(densematrix_D)
+    deallocate(densematrix_DT_D)
+    deallocate(clm_mat_D)
+    deallocate(clm_mat_DT)
+    deallocate(clm_mat_DTD)
+
+  end subroutine test_all
+
+end module columnwise_op_mul_kernel_mod_test

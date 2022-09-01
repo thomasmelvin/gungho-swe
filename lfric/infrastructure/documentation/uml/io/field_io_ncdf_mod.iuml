@@ -1,0 +1,20 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class ugrid::field_io_ncdf {
+  -field_data_id: integer
+  -field_dim_id: integer
+  -field_size: integer
+  -file_name: string
+  -ncid: integer
+
+  file_close()
+  file_new( <<in>>file_name: string )
+  file_open( <<in>>file_name: string )
+  get_dimensions( <<out>>field_size: integer )
+  read_field_data( <<out>>field_data: real[] )
+  write_field_data( <<in>>field_data: real[] ))
+}
+
+ugrid::field_io_strategy <|.. ugrid::field_io_ncdf

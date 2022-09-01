@@ -1,0 +1,417 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2018 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> Test the field collection object
+!>
+module field_collection_mod_test
+
+    use constants_mod,                 only : i_def, r_def, l_def
+    use function_space_mod,            only : function_space_type
+    use function_space_collection_mod, only : function_space_collection_type, &
+                                              function_space_collection
+    use halo_comms_mod,                only : initialise_halo_comms, &
+                                              finalise_halo_comms
+    use mesh_collection_mod,           only : mesh_collection_type, &
+                                              mesh_collection
+    use mesh_mod,                      only : mesh_type
+    use halo_routing_collection_mod,   only : halo_routing_collection_type, &
+                                              halo_routing_collection
+    use field_mod,                     only : field_type,field_proxy_type
+    use field_parent_mod,              only : field_parent_type
+    use integer_field_mod,             only : integer_field_type, &
+                                              integer_field_proxy_type
+    use field_collection_mod,          only : field_collection_type
+    use fs_continuity_mod,             only : W0, W2, W3
+    use linked_list_mod,               only : linked_list_item_type
+    use local_mesh_mod,                only : local_mesh_type
+    use pure_abstract_field_mod,       only : pure_abstract_field_type
+    use mpi_mod,                       only : store_comm, clear_comm
+    use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+  public :: test_assignment_r_def
+  public :: test_assignment_integer
+
+  @TestCase
+  type, extends(MPITestCase), public :: field_collection_test_type
+    private
+    type(function_space_type), pointer :: w0_fs => null()
+    type(function_space_type), pointer :: w2_fs => null()
+    type(function_space_type), pointer :: w3_fs => null()
+    type(local_mesh_type)              :: unit_test_local_mesh
+    type(mesh_type), pointer           :: mesh => null()
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure get_local_mesh_ptr
+    procedure test_all
+    procedure test_assignment_r_def
+    procedure test_assignment_integer
+  end type field_collection_test_type
+
+  integer(i_def), parameter :: element_order = 0
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use mesh_mod, only : mesh_type, PLANE_BI_PERIODIC
+
+    implicit none
+
+    class(field_collection_test_type), intent(inout) :: this
+
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    type(mesh_type) :: unit_test_mesh
+    integer(i_def)  :: mesh_id
+
+    !Store the MPI communicator for later use
+    call store_comm(this%getMpiCommunicator())
+    ! Initialise halo functionality
+    call initialise_halo_comms( this%getMpiCommunicator() )
+
+    ! Create top level mesh collection
+    mesh_collection = mesh_collection_type()
+    ! Create top level function space collection
+    function_space_collection = function_space_collection_type()
+    ! Create top level halo_routing collection
+    halo_routing_collection = halo_routing_collection_type()
+
+    call this%unit_test_local_mesh%initialise()
+    unit_test_local_mesh_ptr => this%get_local_mesh_ptr()
+
+    ! Dummy mesh mod has 9 cells, 3 layers and is uniform in vertical
+    unit_test_mesh = mesh_type( PLANE_BI_PERIODIC, unit_test_local_mesh_ptr )
+    mesh_id = mesh_collection%add_new_mesh( unit_test_mesh )
+    this%mesh => mesh_collection%get_mesh( mesh_id )
+
+    this%w0_fs => function_space_collection%get_fs( this%mesh,     &
+                                                    element_order, &
+                                                    W0 )
+
+    this%w2_fs => function_space_collection%get_fs( this%mesh,     &
+                                                    element_order, &
+                                                    W2 )
+
+    this%w3_fs => function_space_collection%get_fs( this%mesh,     &
+                                                    element_order, &
+                                                    W3 )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(field_collection_test_type), intent(inout) :: this
+
+    call function_space_collection%clear()
+    call mesh_collection%clear()
+
+    ! Finalise halo functionality
+    call finalise_halo_comms()
+    ! Clear the stored MPI communicator
+    call clear_comm()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  function get_local_mesh_ptr(this) result(unit_test_local_mesh_ptr)
+    implicit none
+    class(field_collection_test_type), intent(inout), target :: this
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    unit_test_local_mesh_ptr => this%unit_test_local_mesh
+  end function get_local_mesh_ptr
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  @Test( npes=[1] )
+  subroutine test_all( this )
+
+    implicit none
+
+    class(field_collection_test_type), intent(inout) :: this
+    class(pure_abstract_field_type), pointer         :: field_ptr
+
+    type(field_type)                    :: test_field1
+    type(integer_field_type)            :: test_field2
+
+    type(field_proxy_type)              :: test_field1_p
+    type(integer_field_proxy_type)      :: test_field2_p
+
+    type(field_type), pointer           :: returned_field1
+    type(field_type), pointer           :: returned_field1a
+    type(integer_field_type), pointer   :: returned_field2
+
+    type(field_proxy_type)              :: returned_field1_p
+    type(field_proxy_type)              :: returned_field1a_p
+    type(integer_field_proxy_type)      :: returned_field2_p
+    type(linked_list_item_type), pointer &
+                                        :: field_item
+
+    type(field_collection_type)         :: test_field_collectionA
+    type(field_collection_type)         :: test_field_collectionB
+
+    real(r_def), parameter              :: tol = 1.0e-6_r_def
+    integer(i_def)                      :: length
+    logical(l_def)                      :: exists
+
+    !------------------- Create real & integer fields ------------------------!
+    ! Create a field object with the name 'test_field1'
+    ! and put 99.0 in the first dof
+    call test_field1%initialise( this%w0_fs, name='test_field1' )
+    test_field1_p = test_field1%get_proxy()
+    test_field1_p%data(1) = 99.0_r_def
+
+    ! Create an integer field object with the name 'test_field2'
+    ! and put 33 in the first dof
+    call test_field2%initialise( this%w2_fs, name='test_field2' )
+    test_field2_p = test_field2%get_proxy()
+    test_field2_p%data(1) = 33_i_def
+
+    !----------------- Create field collection 'A' & test extracts -------------------!
+    ! Create a field_collection_A and put test_field1 and test_field2 in it
+    call test_field_collectionA%initialise(name="test_field_collectionA1", &
+                                           table_len=5)
+    call test_field_collectionA%add_field(test_field1)  ! a real field
+    call test_field_collectionA%add_field(test_field2)  ! an integer field
+
+    !---Check fields exist in collections
+    exists = test_field_collectionA%field_exists('test_field1')
+    @assertTrue(exists)
+    exists = test_field_collectionA%field_exists('test_field2')
+    @assertTrue(exists)
+
+    !---Real field extract
+    ! Extract the real field called 'test_field1' into returned_field1
+    returned_field1 => test_field_collectionA%get_field('test_field1')
+    returned_field1_p = returned_field1%get_proxy()
+    ! Check that test_field1 has 99.0 in the first dof
+    @assertEqual(99.0_r_def, returned_field1_p%data(1), tol)
+
+    !---Integer field extract
+    ! Extract the integer field called 'test_field2' into returned_field2
+    returned_field2 => test_field_collectionA%get_integer_field('test_field2')
+    returned_field2_p = returned_field2%get_proxy()
+    ! Check that test_field2 has 33 in the first dof
+    @assertEqual(33_i_def, returned_field2_p%data(1))
+
+    !---Check the order of the fields in the collection.
+    !   For a collection with a hash table length of 5 the fields
+    !   with the above names should be ordered as follows:
+    !   "test_field_1", "test_field2"
+
+    !---Check that first field is the real field
+    nullify(field_item)
+    !---Check that the first field is the real r_def field
+    field_item => test_field_collectionA%get_next_item(field_item)
+    select type(listfield => field_item%payload)
+      type is (field_type)
+        @assertTrue(associated(returned_field1,listfield))
+      class default
+        !If we've got here, there's a problem - throw an assert failure
+        @assertFail('Third field in collection [test_field_collectionA1] is not a real field.')
+    end select
+
+    !---Check that the second field is the integer field
+    field_item => test_field_collectionA%get_next_item(field_item)
+    select type(listfield => field_item%payload)
+      type is (integer_field_type)
+        @assertTrue(associated(returned_field2,listfield))
+      class default
+        !If we've got here, there's a problem - throw an assert failure
+        @assertFail('Final field in collection [test_field_collectionA1] is not an integer field.')
+    end select
+
+    !------------------ Check updating of fields in Collection------------------------!
+
+    ! Create a second field_collection and put a reference to the field that is
+    ! stored in the first field_collection into it
+    call test_field_collectionB%initialise(name="test_field_collectionB1", table_len=5)
+    field_ptr => returned_field1
+    call test_field_collectionB%add_reference_to_field(field_ptr)
+
+    ! Change the data in the original field
+    returned_field1_p%data(1)=999.0_r_def
+
+    ! Check that the reference to that field has been updated
+    returned_field1a => test_field_collectionB%get_field('test_field1')
+    returned_field1a_p = returned_field1a%get_proxy()
+    @assertEqual(999.0_r_def, returned_field1a_p%data(1), tol)
+
+
+    !-------------- Remove and Add Back the Real Field -------------------------!
+    ! Check we can remove a field from the field collection
+    call test_field_collectionA%remove_field("test_field1")
+    length=test_field_collectionA%get_length()
+    @assertEqual(1, length)
+
+    ! Check that test_field1 no longer exists in field_collection
+    exists = test_field_collectionA%field_exists('test_field1')
+    @assertFalse(exists)
+
+    ! Check we can add the field back into the collection
+    call test_field_collectionA%add_field(test_field1)
+    returned_field1 => test_field_collectionA%get_field('test_field1')
+    returned_field1_p = returned_field1%get_proxy()
+    @assertEqual(99.0_r_def, returned_field1_p%data(1), tol)
+
+  end subroutine test_all
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_assignment_r_def( self )
+
+    implicit none
+
+    class(field_collection_test_type), intent(inout) :: self
+    class(pure_abstract_field_type), pointer         :: field_ptr
+    type(field_type)                                 :: test_field1
+    type(field_type), target                         :: test_field2
+    type(field_type), pointer                        :: test_field2_ptr
+    type(field_type), pointer                        :: returned_field
+    type(field_proxy_type)                           :: proxy
+    type(field_collection_type)                      :: f_collection
+    type(field_collection_type)                      :: f_collection_copy
+
+    real(r_def), parameter :: tol = 1.0e-6_r_def
+
+    call f_collection%initialise("test_field_collectionA2", table_len=5)
+
+    ! Assert the copy has preserved the name.
+    call f_collection%copy_collection(f_collection_copy)
+    @assertEqual(f_collection_copy % get_name(), "test_field_collectionA2")
+
+    ! Create field with the name 'test_field1' and put 42.0 in the first dof.
+    call test_field1%initialise( self % w0_fs, name='test_field1' )
+    proxy = test_field1%get_proxy()
+    proxy%data(1) = 42.0
+
+    ! Check that adding a field to one collection doesn't result
+    ! in it being added to the copy.
+    call f_collection % add_field( test_field1 )
+    @assertEqual(f_collection_copy % get_length(), 0)
+
+    ! Copy the collection, and get hold of the copied field.
+    call f_collection%copy_collection(f_collection_copy)
+    returned_field => f_collection_copy % get_field( 'test_field1' )
+
+    ! Check the name is the same, but that changing the data on one field
+    ! doesn't change the data in the copy.
+    @assertEqual(test_field1 % get_name(), returned_field % get_name())
+    proxy = test_field1 % get_proxy()
+    proxy%data(1) = 112.0
+    proxy = returned_field % get_proxy()
+    @assertEqual(42.0, proxy%data(1), tol)
+
+    ! Make a pointer to another field, and add that as a reference to the collection.
+    call test_field2%initialise( self % w2_fs, name='test_field2' )
+    test_field2_ptr => test_field2
+    field_ptr => test_field2_ptr
+    call f_collection % add_reference_to_field( field_ptr )
+
+    ! Test that the copied collection didn't grow when the original grew.
+    @assertEqual(f_collection % get_length(), 2)
+    @assertEqual(f_collection_copy % get_length(), 1)
+
+    returned_field => f_collection % get_field('test_field2')
+    ! Check that the field pointer has the same target after copy, but that
+    ! the pointer object itself is different.
+    call f_collection%copy_collection(f_collection_copy)
+    returned_field => f_collection_copy % get_field('test_field2')
+    @assertTrue(associated(test_field2_ptr, returned_field))
+
+    ! Now if we nullify the original field pointer, we should still be able to use the
+    ! pointer from the copied collection, and we should be pointing at the same data.
+    nullify(test_field2_ptr)
+    proxy = test_field2 % get_proxy()
+    proxy%data(1) = 112.0
+    proxy = returned_field % get_proxy()
+    @assertEqual(112.0, proxy%data(1), tol)
+
+  end subroutine test_assignment_r_def
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_assignment_integer( self )
+
+    implicit none
+
+    class(field_collection_test_type), intent(inout) :: self
+    class(pure_abstract_field_type), pointer         :: field_ptr
+    type(integer_field_type)                         :: test_field1
+    type(integer_field_type), target                 :: test_field2
+    type(integer_field_type), pointer                :: test_field2_ptr
+    type(integer_field_type), pointer                :: returned_field
+    type(integer_field_proxy_type)                   :: proxy
+    type(field_collection_type)                      :: f_collection
+    type(field_collection_type)                      :: f_collection_copy
+
+
+    call f_collection%initialise("test_field_collectionA3", table_len=5)
+
+    ! Assert the copy has preserved the name.
+    call f_collection%copy_collection(f_collection_copy)
+    @assertEqual(f_collection_copy % get_name(), "test_field_collectionA3")
+
+    ! Create field with the name 'test_field1' and put 42 in the first dof.
+    call test_field1%initialise( self % w0_fs, name='test_field1' )
+    proxy = test_field1%get_proxy()
+    proxy%data(1) = 42
+
+    ! Check that adding a field to one collection doesn't result
+    ! in it being added to the copy.
+    call f_collection % add_field( test_field1 )
+    @assertEqual(f_collection_copy % get_length(), 0)
+
+    ! Copy the collection, and get hold of the copied field.
+    call f_collection%copy_collection(f_collection_copy)
+    returned_field => f_collection_copy % get_integer_field( 'test_field1' )
+
+    ! Check the name is the same, but that changing the data on one field
+    ! doesn't change the data in the copy.
+    @assertEqual(test_field1 % get_name(), returned_field % get_name())
+    proxy = test_field1 % get_proxy()
+    proxy%data(1) = 112
+    proxy = returned_field % get_proxy()
+    @assertEqual(42, proxy%data(1))
+
+    ! Make a pointer to another field, and add that as a reference to the collection.
+    call test_field2%initialise( self % w2_fs, name='test_field2' )
+    test_field2_ptr => test_field2
+    field_ptr => test_field2_ptr
+    call f_collection % add_reference_to_field( field_ptr )
+
+    ! Test that the copied collection didn't grow when the original grew.
+    @assertEqual(f_collection % get_length(), 2)
+    @assertEqual(f_collection_copy % get_length(), 1)
+
+    returned_field => f_collection % get_integer_field('test_field2')
+    ! Check that the field pointer has the same target after copy, but that
+    ! the pointer object itself is different.
+    call f_collection%copy_collection(f_collection_copy)
+    returned_field => f_collection_copy % get_integer_field('test_field2')
+    @assertTrue(associated(test_field2_ptr, returned_field))
+
+    ! Now if we nullify the original field pointer, we should still be able to use the
+    ! pointer from the copied collection, and we should be pointing at the same data.
+    nullify(test_field2_ptr)
+    proxy = test_field2 % get_proxy()
+    proxy%data(1) = 112
+    proxy = returned_field % get_proxy()
+    @assertEqual(112, proxy%data(1))
+
+  end subroutine test_assignment_integer
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+end module field_collection_mod_test

@@ -1,0 +1,194 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> Test the 1-2-1 filter that results from applications of wth_to_w0 followed
+!> by w0_to_wth
+
+module wth_121_filter_mod_test
+
+  use constants_mod, only : i_def, r_def
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_wth_to_w0_average_kernel
+  public :: test_w0_to_wth_average_kernel
+
+  @TestCase
+  type, extends(TestCase), public :: wth_121_filter_test_type
+    private
+    integer(kind=i_def) :: nlayers
+    integer(kind=i_def) :: ncells
+    integer(kind=i_def) :: ndf_wth, undf_wth
+    integer(kind=i_def) :: ndf_w0, undf_w0
+    integer(kind=i_def), allocatable :: map_wth(:,:)
+    integer(kind=i_def), allocatable :: map_w0(:,:)
+    real(kind=r_def),    allocatable :: field_wth(:)
+    real(kind=r_def),    allocatable :: field_w0(:)
+    real(kind=r_def),    allocatable :: rmultiplicity_w0(:)
+    real(kind=r_def),    allocatable :: answer(:)
+  contains
+    procedure SetUp
+    procedure tearDown
+    procedure test_wth_to_w0_average_kernel
+    procedure test_w0_to_wth_average_kernel
+  end type wth_121_filter_test_type
+
+  contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use get_unit_test_m3x3_dofmap_mod,       only : get_wtheta_m3x3_dofmap, &
+                                                    get_w0_m3x3_dofmap
+    use get_unit_test_m3x3_q3x3x3_sizes_mod, only : get_wtheta_m3x3_q3x3x3_size, &
+                                                    get_w0_m3x3_q3x3x3_size
+
+    implicit none
+
+    class(wth_121_filter_test_type), intent(inout) :: this
+
+    ! Quadrature (not used)
+    integer(kind=i_def) :: nqp_h, nqp_v
+
+    ! Dimensions (not used)
+    integer(kind=i_def) :: dim_space, dim_space_diff
+
+    ! Mesh
+    this%nlayers = 0
+
+    ! Setup WTHETA fields
+    call get_wtheta_m3x3_q3x3x3_size(this%ndf_wth, this%undf_wth, this%ncells, &
+                                     dim_space, dim_space_diff,                &
+                                     nqp_h, nqp_v,                             &
+                                     this%nlayers )
+
+    allocate(this%map_wth(this%ndf_wth,this%ncells))
+    allocate(this%field_wth(this%undf_wth))
+
+    call get_wtheta_m3x3_dofmap(this%map_wth, this%nlayers)
+
+    ! Setup w0 fields
+    call get_w0_m3x3_q3x3x3_size(this%ndf_w0, this%undf_w0, this%ncells, &
+                                 dim_space, dim_space_diff,              &
+                                 nqp_h, nqp_v,                           &
+                                 this%nlayers )
+
+    allocate(this%map_w0(this%ndf_w0,this%ncells))
+    allocate(this%field_w0(this%undf_w0))
+    allocate(this%rmultiplicity_w0(this%undf_w0))
+
+    call get_w0_m3x3_dofmap(this%map_w0, this%nlayers)
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(wth_121_filter_test_type), intent(inout) :: this
+
+    deallocate(this%map_wth)
+    deallocate(this%field_wth)
+    deallocate(this%map_w0)
+    deallocate(this%field_w0)
+    deallocate(this%rmultiplicity_w0)
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_wth_to_w0_average_kernel( this )
+
+    use wth_to_w0_average_kernel_mod, only : wth_to_w0_average_code
+
+    implicit none
+
+    class(wth_121_filter_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter :: tol = 1.0e-9_r_def
+
+    integer(kind=r_def) :: cell
+
+    ! Test smoothing from WTHETA to W0
+    this%field_wth(:) = 0.0_r_def
+    this%field_wth(5) = 16.0_r_def
+    this%field_w0(:) = 0.0_r_def
+
+    ! Define answer
+    allocate(this%answer(this%undf_w0))
+
+    this%answer(:) = 0.0_r_def
+    this%answer(3) = 4.0_r_def
+    this%answer(6) = 4.0_r_def
+    this%answer(7) = 4.0_r_def
+    this%answer(9) = 4.0_r_def
+
+    do cell=1,this%ncells
+      call wth_to_w0_average_code(this%nlayers,                                      &
+                                  this%field_w0, this%field_wth,                     &
+                                  this%ndf_w0, this%undf_w0, this%map_w0(:,cell),    &
+                                  this%ndf_wth, this%undf_wth, this%map_wth(:,cell)  &
+                                  )
+    end do
+
+    ! Checking all DoFs using the dot_product instead of checking them one by one in a DO loop
+    @assertEqual(dot_product(this%field_w0-this%answer, this%field_w0-this%answer), 0.0_r_def, tol)
+
+    deallocate(this%answer)
+
+  end subroutine test_wth_to_w0_average_kernel
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_w0_to_wth_average_kernel( this )
+
+    use w0_to_wth_average_kernel_mod, only : w0_to_wth_average_code
+
+    implicit none
+
+    class(wth_121_filter_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter :: tol = 1.0e-9_r_def
+
+    integer(kind=r_def) :: cell
+
+    ! Test smoothing from W0 to WTHETA
+    this%field_wth(:) = 0.0_r_def
+    this%rmultiplicity_w0(:) = 0.25_r_def
+
+    this%field_w0(:) = 0.0_r_def
+    this%field_w0(3) = 4.0_r_def
+    this%field_w0(6) = 4.0_r_def
+    this%field_w0(7) = 4.0_r_def
+    this%field_w0(9) = 4.0_r_def
+
+    ! Define answer
+    allocate(this%answer(this%undf_wth))
+
+    this%answer = [1.0_r_def, 2.0_r_def, 1.0_r_def, &
+                   2.0_r_def, 4.0_r_def, 2.0_r_def, &
+                   1.0_r_def, 2.0_r_def, 1.0_r_def]
+
+    do cell=1, this%ncells
+      call w0_to_wth_average_code(this%nlayers,                                      &
+                                  this%field_wth, this%field_w0,                     &
+                                  this%rmultiplicity_w0,                             &
+                                  this%ndf_wth, this%undf_wth, this%map_wth(:,cell), &
+                                  this%ndf_w0, this%undf_w0, this%map_w0(:,cell)     &
+                                  )
+    end do
+
+    ! Checking all DoFs using the dot_product instead of checking them one by one in a DO loop
+    @assertEqual(dot_product(this%field_wth-this%answer, this%field_wth-this%answer), 0.0_r_def, tol)
+
+    deallocate(this%answer)
+
+  end subroutine test_w0_to_wth_average_kernel
+
+end module wth_121_filter_mod_test

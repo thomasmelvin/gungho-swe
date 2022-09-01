@@ -1,0 +1,13 @@
+!------------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!------------------------------------------------------------------------------
+!
+! An XIOS clock exists within an XIOS context so testing it separately is going
+! to require some thinking about. In the mean time it is somewhat tested in
+! the context of lfric_xios_context_type.
+!
+module lfric_xios_clock_mod_test
+  implicit none
+end module lfric_xios_clock_mod_test

@@ -1,0 +1,13 @@
+abstract class vector_mod::abstract_vector_type{
+  {abstract} +set_scalar(<<inout>>self:abstract_vector_type, <<in>>scalar:real ) 
+  {abstract} +axpy(<<inout>>self:abstract_vector_type, <<in>>alpha:real, <<inout>>x:abstract_vector_type) 
+  {abstract} +aypx(<<inout>>self:abstract_vector_type, <<in>>alpha:real, <<inout>>x:abstract_vector_type) 
+  {abstract} +norm(<<in>>self:abstract_vector_type) :real
+  {abstract} +field_norm(<<in>>self:abstract_vector_type) :real
+  {abstract} +dot(<<in>>self:abstract_vector_type, <<in>>x:abstract_vector_type):real
+  {abstract} +scale(<<inout>>self:abstract_vector_type, <<in>>scalar:real) 
+  {abstract} +duplicate(<<in>>self:abstract_vector_type, <<inout>>vec:abstract_vector_type) 
+  {abstract} +copy(<<inout>>self:abstract_vector_type, <<in>>source:abstract_vector_type)
+  {abstract} +vector_size(<<inout>>self:abstract_vector_type, <<in>>source:abstract_vector_type)
+}
+

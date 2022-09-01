@@ -1,0 +1,202 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!>@brief Contains wrapper routines for working on arrays of fields.
+!!       Effectively these are generally wrapper functions to pointwise kernels
+module field_bundle_mod
+
+  use constants_mod,                   only: i_def, r_def
+  use field_mod,                       only: field_type
+  use function_space_collection_mod,   only: function_space_collection
+  use finite_element_config_mod,       only: element_order
+
+  implicit none
+
+contains
+
+!> @brief Create a bundle y of fields on the same function space as bundle x
+!> @param[in]     x Input bundle to clone
+!> @param[in,out] y Output bundle to contain fields of the same type as x
+!> @param[in]     bundle_size Number of fields in the bundle
+  subroutine clone_bundle(x, y, bundle_size)
+
+    use finite_element_config_mod, only: element_order
+
+    implicit none
+    integer(kind=i_def), intent(in)    :: bundle_size
+    type(field_type),    intent(in)    :: x(bundle_size)
+    type(field_type),    intent(inout) :: y(bundle_size)
+
+    integer(kind=i_def) :: i
+
+    do i = 1,bundle_size
+      call x(i)%copy_field_properties(y(i))
+    end do
+  end subroutine clone_bundle
+!=============================================================================!
+
+!> @brief Set all fields in a bundle x to the scalar value a
+!> @param[in] a Scalar
+!> @param[in, out] x Field bundle
+!> @param[in] bundle_size Number of fields in the bundle x
+  subroutine set_bundle_scalar(a, x, bundle_size)
+    implicit none
+    integer(kind=i_def), intent(in)    :: bundle_size
+    type(field_type),    intent(inout) :: x(bundle_size)
+    real(kind=r_def),    intent(in)    :: a
+    integer(kind=i_def) :: i
+
+    do i = 1,bundle_size
+       call invoke( setval_c( x(i), a ) )
+    end do
+  end subroutine set_bundle_scalar
+!=============================================================================!
+
+!> @brief Compute z = a*x + y for bundles x, y, z and scalar a
+!> @param[in] a Scalar
+!> @param[in] x First field bundle
+!> @param[in] y Second field bundle
+!> @param[in, out] z Result field bundle
+!> @param[in] bundle_size Number of fields in the bundle
+  subroutine bundle_axpy(a, x, y, z, bundle_size)
+    implicit none
+    integer(kind=i_def), intent(in)    :: bundle_size
+    real(kind=r_def),    intent(in)    :: a
+    type(field_type),    intent(in)    :: x(bundle_size), y(bundle_size)
+    type(field_type),    intent(inout) :: z(bundle_size)
+    integer(kind=i_def) :: i
+
+    do i = 1,bundle_size
+      call invoke( aX_plus_Y( z(i), a, x(i), y(i) ) )
+    end do
+  end subroutine bundle_axpy
+!=============================================================================!
+
+!> @brief Copy the data from bundle x to bundle y (y = x)
+!> @param[in] x First field bundle
+!> @param[in, out] y Second field bundle
+!> @param[in] bundle_size Number of fields in the bundle
+  subroutine copy_bundle(x, y, bundle_size)
+    implicit none
+    integer(kind=i_def), intent(in)    :: bundle_size
+    type(field_type),    intent(in)    :: x(bundle_size)
+    type(field_type),    intent(inout) :: y(bundle_size)
+    integer(kind=i_def) :: i
+
+    do i = 1,bundle_size
+       call invoke( setval_X( y(i), x(i) ) )
+    end do
+  end subroutine copy_bundle
+!=============================================================================!
+!> @brief Compute z = x - y for field bundles x, y and z
+!> @param[in] x First field bundle
+!> @param[in] y Second field bundle
+!> @param[in, out] z Result field bundle
+!> @param[in] bundle_size Number of fields in the bundle
+  subroutine minus_bundle(x, y, z, bundle_size)
+    implicit none
+    integer(kind=i_def), intent(in)    :: bundle_size
+    type(field_type),    intent(in)    :: x(bundle_size), y(bundle_size)
+    type(field_type),    intent(inout) :: z(bundle_size)
+    integer(kind=i_def) :: i
+
+    do i = 1,bundle_size
+      call invoke( X_minus_Y( z(i), x(i), y(i) ) )
+    end do
+  end subroutine minus_bundle
+!=============================================================================!
+!> @brief Compute y = a*x for bundles x and y and scaler a
+!> @param[in] a Scalar
+!> @param[in] x First field bundle
+!> @param[in, out] y Second field bundle
+!> @param[in] bundle_size Number of fields in the bundle
+  subroutine bundle_ax(a, x, y, bundle_size)
+    implicit none
+    integer(kind=i_def), intent(in)    :: bundle_size
+    type(field_type),    intent(inout) :: y(bundle_size)
+    type(field_type),    intent(in)    :: x(bundle_size)
+    real(kind=r_def),    intent(in)    :: a
+    integer(kind=i_def) :: i
+
+    do i = 1,bundle_size
+      call invoke( a_times_X( y(i), a, x(i) ) )
+    end do
+  end subroutine bundle_ax
+!=============================================================================!
+!> @brief Divide the dofs in bundle x by those in bundle y
+!> @param[in, out] x First field bundle
+!> @param[in, out] y Second field bundle
+!> @param[in] bundle_size Number of fields in the bundle
+  subroutine bundle_divide(x, y, bundle_size)
+    implicit none
+    integer(kind=i_def), intent(in)    :: bundle_size
+    type(field_type),    intent(inout) :: x(bundle_size), y(bundle_size)
+    integer(kind=i_def) :: i
+
+    do i = 1,bundle_size
+      call invoke( inc_X_divideby_Y( x(i), y(i) ) )
+    end do
+  end subroutine bundle_divide
+!=============================================================================!
+!> @brief Write the min and max values of a field bundle to the log file
+!> @param[in] x First field bundle
+!> @param[in] bundle_size Number of fields in the bundle
+  subroutine bundle_minmax(x, bundle_size)
+
+    use log_mod,                   only: lOG_LEVEL_INFO
+    use finite_element_config_mod, only: element_order
+
+    implicit none
+    integer(kind=i_def), intent(in) :: bundle_size
+    type(field_type),    intent(in) :: x(bundle_size)
+    integer(kind=i_def) :: i
+
+    do i = 1,bundle_size
+      call x(i)%log_minmax(LOG_LEVEL_INFO, 'field')
+    end do
+  end subroutine bundle_minmax
+
+!=============================================================================!
+!> @brief Compute z = a*x + b*y for bundles x, y, z and scalars a and b
+!> @param[in] a Scalar
+!> @param[in] x First field bundle
+!> @param[in] b Scalar
+!> @param[in] y Second field bundle
+!> @param[in, out] z Result field bundle
+!> @param[in] bundle_size Number of fields in the bundle
+  subroutine bundle_axpby(a, x, b, y, z, bundle_size)
+    implicit none
+    integer(kind=i_def), intent(in)    :: bundle_size
+    real(kind=r_def),    intent(in)    :: a, b
+    type(field_type),    intent(in)    :: x(bundle_size), y(bundle_size)
+    type(field_type),    intent(inout) :: z(bundle_size)
+    integer(kind=i_def) :: i
+
+    do i = 1,bundle_size
+      call invoke( aX_plus_bY( z(i), a, x(i), b, y(i) ) )
+    end do
+  end subroutine bundle_axpby
+!=============================================================================!
+!> @brief Compute z = x + y for field bundles x, y and z
+!> @param[in] x First field bundle
+!> @param[in] y Second field bundle
+!> @param[in, out] z Result field bundle
+!> @param[in] bundle_size Number of fields in the bundle
+  subroutine add_bundle(x, y, z, bundle_size)
+    implicit none
+    integer(kind=i_def), intent(in)    :: bundle_size
+    type(field_type),    intent(in)    :: x(bundle_size), y(bundle_size)
+    type(field_type),    intent(inout) :: z(bundle_size)
+    integer(kind=i_def) :: i
+
+    do i = 1,bundle_size
+      call invoke( X_plus_Y( z(i), x(i), y(i) ) )
+    end do
+  end subroutine add_bundle
+!=============================================================================!
+
+end module field_bundle_mod
+

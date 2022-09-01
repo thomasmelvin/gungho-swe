@@ -1,0 +1,156 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2017 Met Office. All rights reserved.
+! For further details please refer to the file LICENCE which you should have
+! received as part of this distribution.
+!-----------------------------------------------------------------------------
+module quadrature_xoyoz_mod_test
+
+  implicit none
+
+contains
+
+  @test
+  ! Test xoyoz quadrature with symmetrical constructor
+  subroutine test_quadrature_xoyoz_symmetrical()
+
+    use pFUnit_Mod
+
+    use quadrature_xoyoz_mod,         only: quadrature_xoyoz_type, quadrature_xoyoz_proxy_type
+    use constants_mod,                only: r_def
+    use quadrature_rule_gaussian_mod, only: quadrature_rule_gaussian_type
+
+    implicit none
+
+    integer, parameter :: nqp=3
+
+    real(kind=r_def) :: epsilon
+
+    real(kind=r_def) :: points_x(nqp), points_y(nqp), points_z(nqp)
+    real(kind=r_def) :: weights_x(nqp), weights_y(nqp), weights_z(nqp)
+
+    real(kind=r_def) :: test_points_x(nqp), test_points_y(nqp), test_points_z(nqp)
+    real(kind=r_def) :: test_weights_x(nqp), test_weights_y(nqp), test_weights_z(nqp)
+
+    type(quadrature_xoyoz_type)         :: qr
+    type(quadrature_xoyoz_proxy_type)   :: qr_proxy
+    type(quadrature_rule_gaussian_type) :: gaussian_quadrature
+
+
+    ! Get quadrature object and proxy
+    qr = quadrature_xoyoz_type(nqp, gaussian_quadrature)
+    qr_proxy = qr%get_quadrature_proxy()
+
+    epsilon = 1.0e-14_r_def
+
+    ! Define expected data
+    test_points_x(:) = [1.127016653792583E-001_r_def, &
+                        5.000000000000000E-001_r_def, &
+                        8.872983346207417E-001_r_def]
+
+    test_points_y(:) = test_points_x(:)
+
+    test_points_z(:) = test_points_x(:)
+
+    test_weights_x(:) = [2.777777777777763E-001_r_def, &
+                         4.444444444444444E-001_r_def, &
+                         2.777777777777763E-001_r_def]
+
+    test_weights_y(:) = test_weights_x(:)
+
+    test_weights_z(:) = test_weights_x(:)
+
+
+    ! Get the data from the object and compare
+    points_x = qr_proxy%points_x
+    @assertEqual( points_x, test_points_x, epsilon )
+
+    points_y = qr_proxy%points_y
+    @assertEqual( points_y, test_points_y, epsilon )
+
+    points_z = qr_proxy%points_z
+    @assertEqual( points_z, test_points_z, epsilon )
+
+    weights_x = qr_proxy%weights_x
+    @assertEqual( weights_x, test_weights_x, epsilon )
+
+    weights_y = qr_proxy%weights_y
+    @assertEqual( weights_y, test_weights_y, epsilon )
+
+    weights_z = qr_proxy%weights_z
+    @assertEqual( weights_z, test_weights_z, epsilon )
+
+  end subroutine test_quadrature_xoyoz_symmetrical
+
+  @test
+  ! Test xoyoz quadrature with variable constructor
+  subroutine test_quadrature_xoyoz_variable()
+
+    use pFUnit_Mod
+
+    use quadrature_xoyoz_mod,         only: quadrature_xoyoz_type, quadrature_xoyoz_proxy_type
+    use constants_mod,                only: r_def
+    use quadrature_rule_gaussian_mod, only: quadrature_rule_gaussian_type
+
+    implicit none
+
+    integer, parameter :: nqp_x=3, nqp_y=3, nqp_z=3
+
+    real(kind=r_def) :: epsilon
+
+    real(kind=r_def) :: points_x(nqp_x), points_y(nqp_y), points_z(nqp_z)
+    real(kind=r_def) :: weights_x(nqp_x), weights_y(nqp_y), weights_z(nqp_z)
+
+    real(kind=r_def) :: test_points_x(nqp_x), test_points_y(nqp_y), test_points_z(nqp_z)
+    real(kind=r_def) :: test_weights_x(nqp_x), test_weights_y(nqp_y), test_weights_z(nqp_z)
+
+    type(quadrature_xoyoz_type)         :: qr
+    type(quadrature_xoyoz_proxy_type)   :: qr_proxy
+    type(quadrature_rule_gaussian_type) :: gaussian_quadrature
+
+
+    ! Get quadrature object and proxy
+    qr = quadrature_xoyoz_type(nqp_x, nqp_y, nqp_z, gaussian_quadrature)
+    qr_proxy = qr%get_quadrature_proxy()
+
+    epsilon = 1.0e-14_r_def
+
+    ! Define expected data
+    test_points_x(:) = [1.127016653792583E-001_r_def, &
+                        5.000000000000000E-001_r_def, &
+                        8.872983346207417E-001_r_def]
+
+    test_points_y(:) = test_points_x(:)
+
+    test_points_z(:) = test_points_x(:)
+
+    test_weights_x(:) = [2.777777777777763E-001_r_def, &
+                         4.444444444444444E-001_r_def, &
+                         2.777777777777763E-001_r_def]
+
+    test_weights_y(:) = test_weights_x(:)
+
+    test_weights_z(:) = test_weights_x(:)
+
+
+    ! Get the data from the object and compare
+    points_x = qr_proxy%points_x
+    @assertEqual( points_x, test_points_x, epsilon )
+
+    points_y = qr_proxy%points_y
+    @assertEqual( points_y, test_points_y, epsilon )
+
+    points_z = qr_proxy%points_z
+    @assertEqual( points_z, test_points_z, epsilon )
+
+    weights_x = qr_proxy%weights_x
+    @assertEqual( weights_x, test_weights_x, epsilon )
+
+    weights_y = qr_proxy%weights_y
+    @assertEqual( weights_y, test_weights_y, epsilon )
+
+    weights_z = qr_proxy%weights_z
+    @assertEqual( weights_z, test_weights_z, epsilon )
+
+  end subroutine test_quadrature_xoyoz_variable
+
+end module quadrature_xoyoz_mod_test

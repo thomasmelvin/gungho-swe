@@ -1,0 +1,119 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief An algorithm for running the COSMIC transport scheme in the Y-Z plane.
+
+module yz_cosmic_scheme_alg_mod
+
+  use constants_mod,                     only: r_def
+  use field_mod,                         only: field_type
+  use function_space_mod,                only: function_space_type
+  use function_space_collection_mod,     only: function_space_collection
+  use fs_continuity_mod,                 only: W2, W3
+  use ffsl_vert_advective_alg_mod,       only: ffsl_vert_advective_alg
+  use ffsl_vert_conservative_alg_mod,    only: ffsl_vert_conservative_alg
+  use ffsl_1d_advective_update_alg_mod,  only: ffsl_1d_advective_first_update_alg
+  use ffsl_1d_mass_flux_alg_mod,         only: ffsl_1d_mass_flux_alg
+  use ffsl_divergence_alg_mod,           only: ffsl_divergence_alg
+  use flux_direction_mod,                only: y_direction, z_direction
+
+  implicit none
+
+  private
+
+  public :: yz_cosmic_scheme_alg
+
+contains
+
+  !> @brief Algorithm for running the COSMIC transport scheme in the Y-Z plane.
+  !> @details The algorithm iterates forwards in time and transports the density
+  !!          field using the COSMIC (i.e. flux form semi-Lagrangian with COSMIC
+  !!          splitting) advection scheme. This implementation is only for use on
+  !!          the biperiodic planar domain.
+  !> @param[in,out] increment    Density increment
+  !> @param[in]     rho          Density field
+  !> @param[in]     dep_pts_y    Departure points in the y-direction
+  !> @param[in]     dep_pts_z    Departure points in the z-direction
+  !> @param[in]     detj_at_w2   Det(J) at W2 dofs
+  !> @param[in]     dt           The model timestep length
+  subroutine yz_cosmic_scheme_alg( increment,  &
+                                   rho,        &
+                                   dep_pts_y,  &
+                                   dep_pts_z,  &
+                                   detj_at_w2, &
+                                   dt )
+
+    implicit none
+
+    type(field_type), intent(inout) :: increment
+    type(field_type), intent(in)    :: rho
+    type(field_type), intent(in)    :: dep_pts_y
+    type(field_type), intent(in)    :: dep_pts_z
+    type(field_type), intent(in)    :: detj_at_w2
+    real(r_def),      intent(in)    :: dt
+
+    type(field_type) :: cell_orientation
+    type(field_type) :: mass_flux_y, mass_flux_z
+    type(field_type) :: rho_adv_z, rho_hat_adv_z
+    type(field_type) :: rho_adv_y, rho_hat_adv_y
+    type(field_type) :: increment_y
+    type(field_type) :: increment_z
+
+    type(function_space_type), pointer :: w2_fs     => null()
+    type(function_space_type), pointer :: w3_fs     => null()
+
+    w2_fs      => dep_pts_y%get_function_space()
+    w3_fs      => rho%get_function_space()
+
+    call mass_flux_y%initialise( vector_space = w2_fs )
+    call mass_flux_z%initialise( vector_space = w2_fs )
+
+    call cell_orientation%initialise( vector_space = w3_fs )
+    call rho_hat_adv_y%initialise( vector_space = w3_fs )
+    call rho_adv_y%initialise( vector_space = w3_fs )
+    call rho_hat_adv_z%initialise( vector_space = w3_fs )
+    call rho_adv_z%initialise( vector_space = w3_fs )
+    call increment_y%initialise( vector_space = w3_fs )
+    call increment_z%initialise( vector_space = w3_fs )
+
+    ! Calculate the departure points for W2 nodal points at lowest order
+    call invoke( setval_c(cell_orientation, 1.0_r_def) )
+
+    ! Perform advective update in the Y direction.
+    call ffsl_1d_advective_first_update_alg( y_direction, dep_pts_y, cell_orientation,    &
+                                       rho, rho_adv_y, dt )
+
+    ! Perform advective update in the Z direction.
+    call ffsl_vert_advective_alg( rho_adv_z, rho, dep_pts_z, detj_at_w2,     &
+                                  cell_orientation, dt )
+
+    ! This step is equation (37) of Leonard, Lock and MacVean (1996) or equivalenlty
+    ! equations (17) and (18) of Putman and Lin, 2007.
+    call invoke( name = "average_advective_density", &
+                 aX_plus_bY(rho_hat_adv_y, 0.5_r_def, rho, 0.5_r_def, rho_adv_y), &
+                 aX_plus_bY(rho_hat_adv_z, 0.5_r_def, rho, 0.5_r_def, rho_adv_z) )
+
+    ! Calculate the mass flux in the Y direction.
+    call ffsl_1d_mass_flux_alg( y_direction, dep_pts_y, cell_orientation, &
+                                rho_hat_adv_z, rho_hat_adv_z, mass_flux_y, dt )
+
+    ! Calculate the divergence in the Y direction and update density.
+    call ffsl_divergence_alg( increment_y, mass_flux_y, detj_at_w2,          &
+                              cell_orientation, y_direction )
+
+    ! Calculate the mass flux in the Z direction.
+    call ffsl_vert_conservative_alg( mass_flux_z, rho_hat_adv_y, dep_pts_z, dt )
+
+    ! Calculate the divergence in the Z direction and update density.
+    call ffsl_divergence_alg( increment_z, mass_flux_z, detj_at_w2,          &
+                              cell_orientation, z_direction )
+
+    call invoke( X_plus_Y( increment, increment_y, increment_z ) )
+
+    nullify( w2_fs, w3_fs )
+
+  end subroutine yz_cosmic_scheme_alg
+
+end module yz_cosmic_scheme_alg_mod

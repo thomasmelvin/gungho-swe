@@ -1,0 +1,128 @@
+' (c) Crown copyright 2020 Met Office. All rights reserved.
+' The file LICENCE, distributed with this code, contains details of the terms
+' under which the code may be used.
+
+abstract class reference_element_mod::reference_element_type {
+  -number_vertices : integer
+  -number_faces : integer
+  -number_edges : integer
+  -number_horizontal_faces : integer
+  -number_horizontal_edges : integer
+  -number_vertical_faces : integer
+  -number_vertical_edges : integer
+  -number_2d_vertices : integer
+  -number_2d_edges : integer
+  -number_verts_per_edge : integer
+  -number_faces_per_edge : integer
+  -vertex_coords : real[::] <<allocatable>>
+  -edge_coords : real[::] <<allocatable>>
+  -face_coords : real[::] <<allocatable>>
+  -volume_coords : real[::] <<allocatable>>
+  -vert_on_face : integer[::] <<allocatable>>
+  -vert_on_edge : integer[::] <<allocatable>>
+  -edge_on_face : integer[::] <<allocatable>>
+  -edge_on_vert : integer[::] <<allocatable>>
+  -face_on_edge : integer[::] <<allocatable>>
+  -normals_to_faces: real[::] <<allocatable>>
+  -normals_to_horizontal_faces : real[::] <<allocatable>>
+  -normals_to_vertical_faces : real[::] <<allocatable>>
+  -tangent_to_edge : real[::] <<allocatable>>
+  -outward_normals_to_faces : real[::] <<allocatable>>
+  -outward_normals_to_horizontal_faces : real[::] <<allocatable>>
+  -outward_normals_to_vertical_faces : real[::] <<allocatable>>
+  -vertex_entities : integer[:] <<allocatable>>
+  -edge_entities : integer[:] <<allocatable>>
+  -face_entities : integer[:] <<allocatable>>
+
+  +<<create>>reference_element_init( <<in>>horiz_vertices: integer, <<in>>horiz_faces: integer, <<in>>horiz_edges: integer )
+  +reference_element_final()
+
+  +get_number_2d_vertices() : integer
+  +get_number_2d_edges : integer
+  +get_number_vertices : integer
+  +get_number_edges : integer
+  +get_number_horizontal_edges : integer
+  +get_number_vertical_edges : integer
+  +get_number_faces : integer
+  +get_number_horizontal_faces : integer
+  +get_number_vertical_faces : integer
+  +get_number_verts_per_edge : integer
+  +get_edge_on_face( <<in>>face_index: integer, <<out>>edges: integer[:] )
+  +get_vertex( <<in>>vertex_index: integer )
+  +get_vertex_coordinates( <<out>>vertices: integer[::] <<allocatable>> )
+  +get_edge_centre_coordinates( <<out>>edges: integer[::] <<allocatable>> )
+  +get_face_centre_coordinates( <<out>>face: integer[::] <<allocatable>> )
+  +get_volume_centre_coordinates( <<out>>volume: integer[::] <<allocatable>> )
+  +get_normal_to_face( <<in>>face_index: integer, <<out>>normal: real[:] )
+  +get_normals_to_faces( <<out>>normals_to_faces: real[::] <<allocatable>> )
+  +get_normals_to_horizontal_faces( <<out>>normals_to_horizontal_faces: real[::] <<allocatable>> )
+  +get_normals_to_vertical_faces( <<out>>normals_to_vertical_faces: real[::] <<allocatable>> )
+  +get_tangent_to_edge( <<in>>edge_index: integer, <<out>>tanget: real[:] )
+  +get_outward_normal_to_face( <<in>>face_index: integer, <<out>>normal: real[:] )
+  +get_outward_normals_to_faces( <<out>>outward_normals_to_faces: real[::] <<allocatable>> )
+  +get_outward_normals_to_horizontal_faces( <<out>>outward_normals_to_horizontal_faces: real[::] <<allocatable>> )
+  +get_outward_normals_to_vertical_faces( <<out>>outward_normals_to_vertical_faces: real[::] <<allocatable>> )
+  +get_face_entity( <<in>>face_index: integer ) : integer
+  +get_edge_entity( <<in>>vertex_index: integer ) : integer
+  +get_vertex_entity( <<in>>edge_index: integer ) : integer
+  +{abstract}populate_entity_labels( <<out>>vertex_entities:integer[:], <<out>>edge_entities:integer[:], <<out>>face_entities:integer[:] )
+  +{abstract}populate_vertices( <<out>>vertex:real[::] )
+  +{abstract}populate_entity_centres( <<out>>edges:real[::], <<out>>faces:real[::], <<out>>volumes:real[::] )
+  +{abstract}populate_vertices_on_faces( <<out>>vertex_on_face:real[::] )
+  +{abstract}populate_vertices_on_edges( <<out>>vertex_on_edge:real[::] )
+  +{abstract}populate_edge_on_face( <<out>>edge_on_face: integer[::] )
+  +{abstract}populate_edge_on_vertex( <<out>>edge_on_vertex: integer[::] )
+  +{abstract}populate_face_on_edge( <<out>>edges: integer[::] )
+  +{abstract}populate_normals_to_faces( <<out>>normals:real[::] )
+  +{abstract}populate_normals_to_horizontal_faces( <<out>>normals:real[::] )
+  +{abstract}populate_normals_to_vertical_faces( <<out>>normals:real[::] )
+  +{abstract}populate_tangent_to_edge( <<out>>tangents:real[::] )
+  +{abstract}populate_outward_normals_to_faces( <<out>>normals:real[::] )
+  +{abstract}populate_outward_normals_to_horizontal_faces( <<out>>normals:real[::] )
+  +{abstract}populate_outward_normals_to_vertical_faces( <<out>>normals:real[::] )
+}
+
+class reference_element_mod::reference_cube_type {
+  +<<create>>  reference_cube_constructor() : reference_cube_type
+  +<<destroy>> reference_cube_destructor()
+
+  +populate_entity_labels( <<out>>vertex_entities:integer[:], <<out>>edge_entities:integer[:], <<out>>face_entities:integer[:] )
+  +populate_vertices( <<out>>vertex:real[::] )
+  +populate_entity_centres( <<out>>edges:real[::], <<out>>faces:real[::], <<out>>volumes:real[::] )
+  +populate_vertices_on_faces( <<out>>vertex_on_face:real[::] )
+  +populate_vertices_on_edges( <<out>>vertex_on_edge:real[::] )
+  +populate_edge_on_face( <<out>>edge_on_face: integer[::] )
+  +populate_edge_on_vertex( <<out>>edge_on_vertex: integer[::] )
+  +populate_face_on_edge( <<out>>edges: integer[::] )
+  +populate_normals_to_faces( <<out>>normals:real[::] )
+  +populate_normals_to_horizontal_faces( <<out>>normals:real[::] )
+  +populate_normals_to_vertical_faces( <<out>>normals:real[::] )
+  +populate_tangent_to_edge( <<out>>tangents:real[::] )
+  +populate_outward_normals_to_faces( <<out>>normals:real[::] )
+  +populate_outward_normals_to_horizontal_faces( <<out>>normals:real[::] )
+  +populate_outward_normals_to_vertical_faces( <<out>>normals:real[::] )
+}
+
+class reference_element_mod::reference_prism_type {
+  +<<create>>  reference_prism_constructor() : reference_prism_type
+  +<<destroy>> reference_prism_destructor()
+
+  +populate_entity_labels( <<out>>vertex_entities:integer[:], <<out>>edge_entities:integer[:], <<out>>face_entities:integer[:] )
+  +populate_vertices( <<out>>vertex:real[::] )
+  +populate_entity_centres( <<out>>edges:real[::], <<out>>faces:real[::], <<out>>volumes:real[::] )
+  +populate_vertices_on_faces( <<out>>vertex_on_face:real[::] )
+  +populate_vertices_on_edges( <<out>>vertex_on_edge:real[::] )
+  +populate_edge_on_face( <<out>>edge_on_face: integer[::] )
+  +populate_edge_on_vertex( <<out>>edge_on_vertex: integer[::] )
+  +populate_face_on_edge( <<out>>edges: integer[::] )
+  +populate_normals_to_faces( <<out>>normals:real[::] )
+  +populate_normals_to_horizontal_faces( <<out>>normals:real[::] )
+  +populate_normals_to_vertical_faces( <<out>>normals:real[::] )
+  +populate_tangent_to_edge( <<out>>tangents:real[::] )
+  +populate_outward_normals_to_faces( <<out>>normals:real[::] )
+  +populate_outward_normals_to_horizontal_faces( <<out>>normals:real[::] )
+  +populate_outward_normals_to_vertical_faces( <<out>>normals:real[::] )
+}
+
+reference_element_mod::reference_element_type <|-- reference_element_mod::reference_cube_type
+reference_element_mod::reference_element_type <|-- reference_element_mod::reference_prism_type

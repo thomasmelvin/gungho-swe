@@ -1,0 +1,5 @@
+access-list=*
+owner=lfric
+project=shallow_water
+title=Functional testing suite for shallow water equations miniapp
+

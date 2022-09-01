@@ -1,0 +1,29 @@
+' (c) Crown copyright 2019 Met Office. All rights reserved.
+' The file LICENCE, distributed with this code, contains details of the terms
+' under which the code may be used.
+
+class field_collection_iterator_mod::field_collection_iterator_type {
+  -collection: <<pointer>> field_collection_type
+  -current: <<pointer>> linked_list_item_type
+
+  +initialise(<<in>> collection : field_collection_type )
+  +next() : <<pointer>> parent_field_type
+  +has_next() : logical 
+}
+
+class field_collection_iterator_mod::field_collection_real_iterator_type {
+  -collection: <<pointer>> field_collection_type
+  -current: <<pointer>> linked_list_item_type
+
+  +initialise(<<in>> collection : field_collection_type )
+  +next() : <<pointer>> field_type
+  +has_next() : logical 
+}
+
+note right
+ Again, only real fields
+ shown, Other varieties
+ of field objects (such
+ as 'integer' fields) are
+ also implemented,
+end note

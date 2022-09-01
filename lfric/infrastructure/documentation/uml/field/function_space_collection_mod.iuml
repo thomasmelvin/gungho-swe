@@ -1,0 +1,16 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class function_space_collection_mod::function_space_collection_type {
+  -fs_list: linked_list_type
+
+  <<create>>+function_space_collection_constructor() : function_space_collection_type
+  <<destroy>>+function_space_collection_destructor()
+
+  +clear()
+  +get_fs( <<in, pointer>>mesh: mesh_type, <<in>>element_order: integer, <<in>>gungho_fs: integer, <<in, optional>>ndata: integer) : function_space_type
+  +get_fs_collection_size() : integer
+}
+
+function_space_collection_mod::function_space_collection_type o-> "*" function_space_mod::function_space_type

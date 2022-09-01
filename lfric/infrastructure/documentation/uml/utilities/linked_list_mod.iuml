@@ -1,0 +1,29 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class linked_list_mod::linked_list_type {
+  -current: linked_list_item_type <<pointer>>
+  -head: linked_list_item_type <<pointer>>
+  -tail: linked_list_item_type <<pointer>>
+  -length: integer
+  +<<create>> linked_list_constructor() : linked_list_type
+  +clear()
+  +set_current(<<in>>linked_list_item_type:<<pointer>>)
+  +get_current(): linked_list_item_type <<pointer>>
+  +get_head(): linked_list_item_type <<pointer>>
+  +get_tail(): linked_list_item_type <<pointer>>
+  +get_length(): integer
+  +insert_item(<<in>>new_data: linked_list_data_type,<<inout>>insert_point: linked_list_item_type<<pointer>><<optional>>, <<in>>placement: integer<<optional>> )
+  +remove_item(<<inout>>item: linked_list_data_type<<pointer>><<optional>> )
+  +item_exists(<<in>>id: integer, <<in>>start: linked_list_item_type<<pointer>><<optional>>, <<in>>finish: linked_list_item_type<< pointer >><< optional >> ) : logical
+}
+
+class linked_list_mod::linked_list_item_type {
+  +next: linked_list_item_type <<pointer>>
+  +payload: linked_list_data_type <<pointer>>
+  +prev: linked_list_item_type <<pointer>>
+}
+
+linked_list_mod::linked_list_type o-> "*" linked_list_mod::linked_list_item_type
+linked_list_mod::linked_list_item_type *-> linked_list_data_mod::linked_list_data_type

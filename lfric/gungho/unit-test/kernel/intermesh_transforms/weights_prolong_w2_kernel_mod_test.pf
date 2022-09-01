@@ -1,0 +1,172 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! For further details please refer to the file COPYRIGHT.txt
+! which you should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+!> Test for the prolongation kernel
+module weights_prolong_w2_kernel_mod_test
+  use pFUnit_mod
+  use constants_mod, only : i_def, r_def
+
+  implicit none
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: weights_prolong_w2_test_type
+     private
+   contains
+     procedure :: test_all
+  end type weights_prolong_w2_test_type
+
+contains
+  @test
+  subroutine test_all( this )
+    use weights_prolong_w2_kernel_mod, only : weights_prolong_w2_kernel_code
+    implicit none
+    class(weights_prolong_w2_test_type), intent(inout) :: this
+
+    integer(kind=i_def) :: lp_x, lp_y, k, df, cell_f
+
+    ! Scalars
+    integer(kind=i_def) :: nlayers
+    integer(kind=i_def) :: ncell_f_per_c_x ! number of fine cells per coarse in x
+    integer(kind=i_def) :: ncell_f_per_c_y ! number of fine cells per coarse in y
+    integer(kind=i_def) :: ncell_f         ! number of fine cells
+    integer(kind=i_def) :: ndf_f           ! number of dofs per fine cell
+    integer(kind=i_def) :: ndf_c           ! number of dofs per coarse cell
+    integer(kind=i_def) :: undf_f, undf_c  ! unique number of dofs over whole field
+
+    ! Integer Arrays
+    integer(kind=i_def), allocatable, dimension(:,:) :: cell_map
+    integer(kind=i_def), allocatable, dimension(:,:) :: map_f ! Cell and dof valued
+    integer(kind=i_def), allocatable, dimension(:)   :: map_c ! only dof valued
+
+    ! Real Arrays
+    real(kind=r_def), allocatable, dimension(:) :: coarse_dummy
+    real(kind=r_def), allocatable, dimension(:) :: answer, weights
+    real(r_def), parameter :: tol = 1.0e-12_r_def
+
+    ! set the scalars by hand
+    nlayers = 3
+    ncell_f_per_c_x = 2
+    ncell_f_per_c_y = 3
+
+    ncell_f = 1_i_def * ncell_f_per_c_x * ncell_f_per_c_y ! only need one coarse cell
+    ndf_f = 6
+    ndf_c = 6
+    undf_c = 16
+    undf_f = 75
+
+    allocate( cell_map(ncell_f_per_c_x, ncell_f_per_c_y) )
+    allocate( map_f(ndf_f, ncell_f) )
+    allocate( map_c(ndf_c) )
+    allocate( coarse_dummy(undf_c) )
+    allocate( weights(undf_f) )
+    allocate( answer(undf_f) )
+
+    ! set simple values for cell map
+    do lp_y = 1, ncell_f_per_c_y
+      do lp_x = 1, ncell_f_per_c_x
+       cell_map(lp_x, lp_y) = lp_x + (lp_y - 1)*ncell_f_per_c_x
+      end do
+    end do
+
+    ! Make a W2 DoF map for 2*3*3 cells
+    map_f = reshape( (/  1,  4,  7, 10, 13, 14, &
+                         7, 17, 20, 23, 26, 27, &
+                        30, 33, 36,  4, 39, 40, &
+                        36, 43, 46, 17, 49, 50, &
+                        53, 56, 59, 33, 62, 63, &
+                        59, 66, 69, 43, 72, 73  &
+                      /), (/ ndf_f, ncell_f /) )
+
+    ! DoF map for single coarse cell
+    map_c = (/ 1, 4, 7, 10, 13, 14 /)
+
+    weights(:) = 0.0_r_def
+    answer(:) = 0.0_r_def
+    coarse_dummy(:) = 0.0_r_def
+
+    ! Set values of the weights and fine answer field
+    do k = 0, nlayers - 1
+      do lp_x = 1, ncell_f_per_c_x
+        do lp_y = 1, ncell_f_per_c_y
+          ! work out fine cell ID
+          cell_f = lp_x + ncell_f_per_c_x * (lp_y - 1)
+
+          ! West values (dof 1) and east values (dof 3)
+          if ( lp_x == 1 ) then
+
+            ! Edge weight for W2 field is reciprocal of num cells on that edge
+            answer(map_f(1,cell_f)+k) = 1.0_r_def / real(ncell_f_per_c_y, r_def)
+            ! Internal weight for W2 field is relative distance from West edge
+            answer(map_f(3,cell_f)+k) = 0.5_r_def
+
+          else if ( lp_x == ncell_f_per_c_x ) then
+
+            ! Edge weight for W2 field is reciprocal of num cells on that edge
+            answer(map_f(3,cell_f)+k) = 1.0_r_def / real(ncell_f_per_c_y, r_def)
+
+          end if
+
+          ! North values (dof 4) and south values (dof 2)
+          if ( lp_y == 1 ) then
+
+            ! Edge weight for W2 field is reciprocal of num cells on that edge
+            answer(map_f(4,cell_f)+k) = 1.0_r_def / real(ncell_f_per_c_x, r_def)
+
+          else if ( lp_y == ncell_f_per_c_y ) then
+
+            ! Edge weight for W2 field is reciprocal of num cells on that edge
+            answer(map_f(2,cell_f)+k) = 1.0_r_def / real(ncell_f_per_c_x, r_def)
+
+          else
+            ! We are in the central row of cells
+            ! Internal weight for W2 field is contribution from North edge
+            answer(map_f(4,cell_f)+k) = 2.0_r_def / 3.0_r_def
+            answer(map_f(2,cell_f)+k) = 1.0_r_def / 3.0_r_def
+
+          end if
+
+          ! Vertical components
+          answer(map_f(5,cell_f)+k) = 1.0_r_def / real(ncell_f, r_def)
+
+          ! Top layer
+          if ( k == nlayers - 1 ) then
+            answer(map_f(6,cell_f)+k) = 1.0_r_def / real(ncell_f, r_def)
+          end if
+
+        end do
+      end do
+    end do
+
+
+    call weights_prolong_w2_kernel_code( nlayers,         &
+                                         cell_map,        &
+                                         ncell_f_per_c_x, &
+                                         ncell_f_per_c_y, &
+                                         ncell_f,         &
+                                         weights,         &
+                                         coarse_dummy,    &
+                                         ndf_f,           &
+                                         undf_f,          &
+                                         map_f,           &
+                                         undf_c,          &
+                                         map_c )
+
+    ! Check answer for all DoFs
+    do df = 1, undf_f
+      @assertEqual( weights(df), answer(df), tol )
+    end do
+
+    deallocate( cell_map,      &
+                map_f,         &
+                map_c,         &
+                weights,       &
+                answer,        &
+                coarse_dummy   )
+
+  end subroutine test_all
+
+end module weights_prolong_w2_kernel_mod_test

@@ -1,0 +1,40 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2019 Met Office. All rights reserved.
+! For further details please refer to the file LICENCE which you should have
+! received as part of this distribution.
+!-----------------------------------------------------------------------------
+!
+!-------------------------------------------------------------------------------
+module enforce_lower_bound_kernel_mod_test
+
+  use constants_mod, only : r_def, i_def
+  use pFUnit_Mod
+
+  implicit none
+
+contains
+
+  @test
+  subroutine test_of_enforce_lower_bound()
+
+    use enforce_lower_bound_kernel_mod, only : enforce_lower_bound_code
+
+    implicit none
+
+    real(kind=r_def)            :: field(3), limited_field(3), lower_bound
+    real(kind=r_def), parameter :: tol = 1.0e-14_r_def
+    integer(kind=i_def)         :: map(3)
+
+    ! Make up a field, lower bound and expected output field
+    ! The output field should have any values less than lower_bound set to zero.
+    lower_bound = 1.e-6_r_def
+    field(:) = [ 1.e-8_r_def, -2.0_r_def, 1.0e-5_r_def ]
+    limited_field(:) = [ lower_bound, lower_bound, 1.0e-5_r_def ]
+    map(:) = [1, 2, 3]
+
+    call enforce_lower_bound_code(1, field, lower_bound, 3, 3, map)
+    @assertEqual( field, limited_field, tol )
+
+  end subroutine test_of_enforce_lower_bound
+
+end module enforce_lower_bound_kernel_mod_test

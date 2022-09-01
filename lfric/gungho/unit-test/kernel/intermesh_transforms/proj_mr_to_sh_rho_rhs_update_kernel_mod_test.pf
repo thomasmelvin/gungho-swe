@@ -1,0 +1,169 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2020 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> Test the proj_mr_to_sh_rho_rhs_update kernel
+!>
+module proj_mr_to_sh_rho_rhs_update_kernel_mod_test
+  use constants_mod, only : i_def, r_def
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+
+  public :: proj_mr_to_sh_rho_rhs_update_kernel_test_type, test_all
+
+  @TestCase
+  type, extends(TestCase) :: proj_mr_to_sh_rho_rhs_update_kernel_test_type
+    private
+
+  contains
+
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+
+  end type proj_mr_to_sh_rho_rhs_update_kernel_test_type
+
+contains
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(proj_mr_to_sh_rho_rhs_update_kernel_test_type), intent(inout) :: this
+
+  end subroutine setUp
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod,        only: final_configuration
+
+    implicit none
+
+
+    class(proj_mr_to_sh_rho_rhs_update_kernel_test_type), intent(inout) :: this
+
+    call final_configuration()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  @Test
+  subroutine test_all( this )
+
+    use proj_mr_to_sh_rho_rhs_update_kernel_mod, only : proj_mr_to_sh_rho_rhs_update_code
+
+    implicit none
+
+    class(proj_mr_to_sh_rho_rhs_update_kernel_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter :: tol = 1.0e-12_r_def
+
+    integer(kind=i_def) :: nlayers_shifted, nlayers, ncells, cell
+    integer(kind=i_def) :: ndf_w3, undf_w3, ndf_sh_w3, undf_sh_w3
+    integer(kind=i_def) :: k
+    integer(kind=i_def), allocatable :: map_sh_w3(:,:)
+    integer(kind=i_def), allocatable :: map_w3(:,:)
+    real(kind=r_def), allocatable    :: tri_below(:)
+    real(kind=r_def), allocatable    :: tri_diag(:)
+    real(kind=r_def), allocatable    :: tri_above(:)
+    real(kind=r_def), allocatable    :: rho_d(:)
+    real(kind=r_def), allocatable    :: I_lower_i_ip1(:)
+    real(kind=r_def), allocatable    :: I_upper_i_i(:)
+    real(kind=r_def), allocatable    :: I_lower_i_i(:)
+    real(kind=r_def), allocatable    :: I_upper_i_im1(:)
+    real(kind=r_def), allocatable    :: tri_below_answer(:)
+    real(kind=r_def), allocatable    :: tri_diag_answer(:)
+    real(kind=r_def), allocatable    :: tri_above_answer(:)
+
+    ! Set up a single column mesh
+    nlayers = 3
+    nlayers_shifted = nlayers + 1
+    ndf_w3 = 1
+    ndf_sh_w3 = 1
+    undf_w3 = 3
+    undf_sh_w3 = 4
+    ncells = 1
+
+    allocate( tri_below_answer(undf_sh_w3) )
+    allocate( tri_diag_answer(undf_sh_w3) )
+    allocate( tri_above_answer(undf_sh_w3) )
+    allocate( tri_below(undf_sh_w3) )
+    allocate( tri_diag(undf_sh_w3) )
+    allocate( tri_above(undf_sh_w3) )
+    allocate( I_lower_i_ip1(undf_w3) )
+    allocate( I_upper_i_i(undf_w3) )
+    allocate( I_lower_i_i(undf_w3) )
+    allocate( I_upper_i_im1(undf_w3) )
+    allocate( rho_d(undf_w3) )
+    allocate( map_w3(1, ncells) )
+    allocate( map_sh_w3(1, ncells) )
+
+    map_w3(:,:) = 1_i_def
+    map_sh_w3(:,:) = 1_i_def
+
+    rho_d = (/ 2.0_r_def, 3.0_r_def, 5.0_r_def /)
+    I_upper_i_im1 = (/ 1.0_r_def, 2.0_r_def, 3.0_r_def /)
+    I_lower_i_ip1 =  (/ 2.0_r_def, 3.0_r_def, 1.0_r_def /)
+    I_upper_i_i = (/ 2.0_r_def, 6.0_r_def, 4.0_r_def /)
+    I_lower_i_i = (/ 3.0_r_def, 7.0_r_def, 4.0_r_def /)
+
+    do k = 1, nlayers_shifted
+      if (k == 1) then
+        tri_below_answer(k) = 0.0_r_def
+        tri_diag_answer(k) = rho_d(k) * I_lower_i_i(k)
+        tri_above_answer(k) = rho_d(k) * I_lower_i_ip1(k)
+      elseif (k == 4) then
+        tri_above_answer(k) = 0.0_r_def
+        tri_below_answer(k) = rho_d(k-1) * I_upper_i_im1(k-1)
+        tri_diag_answer(k) = rho_d(k-1) * I_upper_i_i(k-1)
+      else
+        tri_below_answer(k) = rho_d(k-1) * I_upper_i_im1(k-1)
+        tri_diag_answer(k) = rho_d(k-1) * I_upper_i_i(k-1) + rho_d(k) * I_lower_i_i(k)
+        tri_above_answer(k) = rho_d(k) * I_lower_i_ip1(k)
+      end if
+
+    end do
+
+    cell = 1
+    call proj_mr_to_sh_rho_rhs_update_code(                         &
+                                            nlayers_shifted,        &
+                                            tri_below,              &
+                                            tri_diag,               &
+                                            tri_above,              &
+                                            rho_d,                  &
+                                            I_lower_i_ip1,          &
+                                            I_lower_i_i,            &
+                                            I_upper_i_i,            &
+                                            I_upper_i_im1,          &
+                                            ndf_sh_w3, undf_sh_w3,  &
+                                            map_sh_w3(:,cell),      &
+                                            ndf_w3, undf_w3,        &
+                                            map_w3(:,cell)          &
+                                          )
+
+    @assertEqual(tri_below_answer, tri_below, tol)
+    @assertEqual(tri_diag_answer, tri_diag, tol)
+    @assertEqual(tri_above_answer, tri_above, tol)
+
+    deallocate(map_sh_w3)
+    deallocate(map_w3)
+    deallocate(rho_d)
+    deallocate(tri_below)
+    deallocate(tri_diag)
+    deallocate(tri_above)
+    deallocate(I_lower_i_ip1)
+    deallocate(I_lower_i_i)
+    deallocate(I_upper_i_i)
+    deallocate(I_upper_i_im1)
+    deallocate(tri_diag_answer)
+    deallocate(tri_below_answer)
+    deallocate(tri_above_answer)
+
+  end subroutine test_all
+
+end module proj_mr_to_sh_rho_rhs_update_kernel_mod_test

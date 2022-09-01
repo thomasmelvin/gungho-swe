@@ -1,0 +1,163 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2019 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> Test the field pointer object: for real and integer field types
+!>
+!-------------------------------------------------------------------------------
+module field_pointer_mod_test
+
+  use constants_mod,                  only : i_def, r_def, str_def
+  use halo_routing_collection_mod,    only : halo_routing_collection_type, &
+                                             halo_routing_collection
+  use function_space_collection_mod,  only : function_space_collection_type, &
+                                             function_space_collection
+  use halo_comms_mod,                 only : initialise_halo_comms, &
+                                             finalise_halo_comms
+  use local_mesh_mod,                 only : local_mesh_type
+  use mesh_collection_mod,            only : mesh_collection_type, &
+                                             mesh_collection
+  use mesh_mod,                       only : mesh_type, PLANE_BI_PERIODIC
+  use function_space_mod,             only : function_space_type
+  use fs_continuity_mod,              only : W2
+  use mpi_mod,                        only : store_comm, clear_comm
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_field_pointer
+
+  @TestCase
+  type, extends(MPITestCase), public :: field_test_type
+    private
+    type(function_space_type), pointer :: w2_fs => null()
+    type(local_mesh_type)              :: unit_test_local_mesh
+    type(mesh_type), pointer           :: mesh => null()
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure get_local_mesh_ptr
+    procedure test_field_pointer
+  end type field_test_type
+
+  integer(i_def), parameter :: element_order = 0
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(field_test_type), intent(inout) :: this
+
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    type(mesh_type) :: unit_test_mesh
+    integer(i_def)  :: mesh_id
+
+    !Store the MPI communicator for later use
+    call store_comm(this%getMpiCommunicator())
+
+    ! Initialise halo functionality
+    call initialise_halo_comms( this%getMpiCommunicator() )
+
+    ! Create top level mesh collection
+    mesh_collection = mesh_collection_type()
+    ! Create top level function space collection
+    function_space_collection = function_space_collection_type()
+    ! Create top level halo_routing collection
+    halo_routing_collection = halo_routing_collection_type()
+
+    call this%unit_test_local_mesh%initialise()
+    unit_test_local_mesh_ptr => this%get_local_mesh_ptr()
+
+    ! Dummy mesh mod has 9 cells, 3 layers and is uniform in vertical
+    unit_test_mesh = mesh_type( PLANE_BI_PERIODIC, unit_test_local_mesh_ptr )
+    mesh_id = mesh_collection%add_new_mesh( unit_test_mesh )
+    this%mesh => mesh_collection%get_mesh( mesh_id )
+
+
+    ! Make a function space to be used to create fields in the tests
+    this%w2_fs => function_space_collection%get_fs( this%mesh, &
+                                                    element_order, W2 )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(field_test_type), intent(inout) :: this
+
+    call function_space_collection%clear()
+    call mesh_collection%clear()
+    call halo_routing_collection%clear()
+
+    ! Finalise halo functionality
+    call finalise_halo_comms()
+    ! Clear the stored MPI communicator
+    call clear_comm()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  function get_local_mesh_ptr(this) result(unit_test_local_mesh_ptr)
+    implicit none
+    class(field_test_type), intent(inout), target :: this
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    unit_test_local_mesh_ptr => this%unit_test_local_mesh
+  end function get_local_mesh_ptr
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  @Test( npes=[1] )
+  subroutine test_field_pointer( this )
+
+    use field_mod,         only: field_type, field_pointer_type
+    use integer_field_mod, only: integer_field_type, integer_field_pointer_type
+
+    implicit none
+
+    class(field_test_type), intent(inout) :: this
+
+    type(field_type), target  :: f1
+    type(field_type), pointer :: f1_ptr
+    type(field_pointer_type)  :: field_pointer
+
+    type(integer_field_type), target  :: f2
+    type(integer_field_type), pointer :: f2_ptr
+    type(integer_field_pointer_type)  :: int_field_pointer
+
+    ! ===== Test real field pointers =====
+
+    ! Create a field and a pointer to it
+    call f1%initialise( vector_space = this%w2_fs, name='f1' )
+    f1_ptr => f1
+
+    ! Make a field pointer object based on the above field
+    call field_pointer%initialise( f1_ptr )
+
+    ! Check that the pointer held in the object is the same as the original
+    @assertEqual ( .true., associated( field_pointer%field_ptr, f1_ptr ) )
+
+
+    ! ===== Test integer field pointers =====
+
+    ! Create a field and a pointer to it
+    call f2%initialise( vector_space = this%w2_fs, name='f2' )
+    f2_ptr => f2
+
+    ! Make a field pointer object based on the above field
+    call int_field_pointer%initialise( f2_ptr )
+
+    ! Check that the pointer held in the object is the same as the original
+    @assertEqual ( .true., associated( int_field_pointer%field_ptr, f2_ptr ) )
+
+  end subroutine test_field_pointer
+
+end module field_pointer_mod_test

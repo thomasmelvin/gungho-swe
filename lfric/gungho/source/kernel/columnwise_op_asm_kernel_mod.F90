@@ -1,0 +1,130 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+!
+!-------------------------------------------------------------------------------
+
+!> @brief Kernel which assembles a locally assembled matrix (LMA) into a
+!!        columnwise assembled matrix (CMA).
+
+module columnwise_op_asm_kernel_mod
+
+use kernel_mod,              only : kernel_type
+use argument_mod,            only : arg_type,                            &
+                                    GH_OPERATOR, GH_COLUMNWISE_OPERATOR, &
+                                    GH_REAL, GH_READ, GH_WRITE,          &
+                                    ANY_SPACE_1, ANY_SPACE_2,            &
+                                    CELL_COLUMN
+
+use constants_mod,           only : r_def, r_solver, i_def
+
+implicit none
+
+private
+
+!-------------------------------------------------------------------------------
+! Public types
+!-------------------------------------------------------------------------------
+
+type, public, extends(kernel_type) :: columnwise_op_asm_kernel_type
+  private
+  type(arg_type) :: meta_args(2) = (/                                                 &
+       arg_type(GH_OPERATOR,            GH_REAL, GH_READ,  ANY_SPACE_1, ANY_SPACE_2), &
+       arg_type(GH_COLUMNWISE_OPERATOR, GH_REAL, GH_WRITE, ANY_SPACE_1, ANY_SPACE_2)  &
+       /)
+  integer :: operates_on = CELL_COLUMN
+contains
+  procedure, nopass :: columnwise_op_asm_kernel_code
+end type
+
+!-------------------------------------------------------------------------------
+! Contained functions/subroutines
+!-------------------------------------------------------------------------------
+public :: columnwise_op_asm_kernel_code
+
+contains
+
+  !> @brief The subroutine which is called directly from the PSy layer and
+  !!        assembles the LMA into a CMA operator.
+  !> @details Given an LMA representation of the operator mapping between
+  !!          two horizontally discontinuous spaces, assemble the columnwise
+  !!          matrix representation of the operator.
+  !>
+  !> @param[in] cell The horizontal cell index
+  !> @param[in] nlayers Number of vertical layers
+  !> @param[in] ncell_2d Number of cells in 2D grid
+  !> @param[in] ncell_3d Total number of cells
+  !> @param[in] local_stencil Locally assembled matrix
+  !> @param[in,out] columnwise_matrix Banded matrix to assemble into
+  !> @param[in] nrow Number of rows in the banded matrix
+  !> @param[in] ncol Number of columns in the banded matrix
+  !> @param[in] bandwidth Bandwidth of the banded matrix
+  !> @param[in] alpha Banded matrix parameter \f$\alpha\f$
+  !> @param[in] beta Banded matrix parameter \f$\beta\f$
+  !> @param[in] gamma_m Banded matrix parameter \f$\gamma_-\f$
+  !> @param[in] gamma_p Banded matrix parameter \f$\gamma_+\f$
+  !> @param[in] ndf_to Number of degrees of freedom per cell for the to-space
+  !> @param[in] column_banded_dofmap_to List of offsets for to-space
+  !> @param[in] ndf_from Number of degrees of freedom per cell for the from-sp
+  !> @param[in] column_banded_dofmap_from List of offsets for from-space
+  subroutine columnwise_op_asm_kernel_code(cell,                     &
+                                           nlayers,                  &
+                                           ncell_2d,                 &
+                                           ncell_3d,                 &
+                                           local_stencil,            &
+                                           columnwise_matrix,        &
+                                           nrow,                     &
+                                           ncol,                     &
+                                           bandwidth,                &
+                                           alpha,                    &
+                                           beta,                     &
+                                           gamma_m,                  &
+                                           gamma_p,                  &
+                                           ndf_to,                   &
+                                           column_banded_dofmap_to,  &
+                                           ndf_from,                 &
+                                           column_banded_dofmap_from)
+
+    implicit none
+
+    ! Arguments
+    integer(kind=i_def), intent(in) :: ndf_to, ndf_from
+    integer(kind=i_def), intent(in) :: cell,  nlayers, ncell_3d, ncell_2d
+    real(kind=r_def), dimension(ndf_to,ndf_from,ncell_3d), intent(in) :: local_stencil
+    integer(kind=i_def), intent(in) :: nrow, ncol, bandwidth
+    real(kind=r_solver), dimension(bandwidth,nrow,ncell_2d), intent(inout) :: columnwise_matrix
+    integer(kind=i_def), intent(in) :: alpha, beta, gamma_m, gamma_p
+    integer(kind=i_def), dimension(ndf_to,nlayers), intent(in) :: column_banded_dofmap_to
+    integer(kind=i_def), dimension(ndf_from,nlayers), intent(in) :: column_banded_dofmap_from
+
+    ! Internal parameters
+    integer(kind=i_def) :: df1, df2 ! Loop indices for dofs
+    integer(kind=i_def) :: i,j ! Row and column index index
+    integer(kind=i_def) :: j_minus ! First column in a row
+    integer(kind=i_def) :: ik ! ncell3d counter
+    integer(kind=i_def) :: k ! nlayers  counter
+
+    k = gamma_m + ncol
+
+    ! Initialise matrix to zero
+    columnwise_matrix( :, :, cell ) = 0.0_r_solver
+    ! Loop over all vertical layers
+    do k = 1, nlayers
+       ik = (cell-1)*nlayers + k ! Cell index in 3D
+       do df1 = 1, ndf_to
+          i = column_banded_dofmap_to( df1, k )
+          j_minus = ceiling((alpha*i-gamma_p)/(1.0_r_solver*beta), i_def)
+          do df2 = 1, ndf_from
+             j = column_banded_dofmap_from( df2, k )
+             columnwise_matrix( j-j_minus+1, i, cell )        &
+                  = columnwise_matrix( j-j_minus+1, i, cell ) &
+                  + real(local_stencil( df1 ,df2, ik ), r_solver)
+         end do
+       end do
+    end do
+
+  end subroutine columnwise_op_asm_kernel_code
+
+end module columnwise_op_asm_kernel_mod

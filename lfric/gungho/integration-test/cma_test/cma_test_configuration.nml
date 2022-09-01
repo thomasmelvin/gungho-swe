@@ -1,0 +1,50 @@
+&base_mesh
+  filename        = 'mesh_C12.nc'
+  geometry        = 'spherical'
+  offline_partitioning = .false.
+  prime_mesh_name = 'unit_test'
+  topology        = 'fully_periodic'
+  fplane          = .false.
+  f_lat_deg       = 45.0
+/
+
+&formulation
+  l_multigrid = .false.
+/
+
+&extrusion
+  method           = 'uniform'
+  domain_top       = 10.0
+  number_of_layers = 10
+/
+
+&finite_element
+  cellshape        = 'quadrilateral'
+  element_order    = 0
+  rehabilitate     = .true.
+  coord_order      = 1
+  coord_system     = 'alphabetaz'
+  vorticity_in_w1  = .false.
+/
+
+&planet
+  gravity        = 9.80665
+  radius         = 10.0
+  omega          = 7.292116E-5
+  rd             = 287.05
+  cp             = 1005.0
+  p_zero         = 100000.0
+  scaling_factor = 125.0
+/
+
+&partitioning
+  partitioner         = 'cubedsphere'
+  panel_decomposition = 'auto'
+/
+
+&domain_size
+  planar_domain_min_x = -1.0
+  planar_domain_max_x =  1.0
+  planar_domain_min_y = -1.0
+  planar_domain_max_y =  1.0
+/

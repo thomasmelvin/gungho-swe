@@ -1,0 +1,15 @@
+' (c) Crown copyright 2021 Met Office. All rights reserved.
+' The file LICENCE, distributed with this code, contains details of the terms
+' under which the code may be used.
+
+package lfric_xios_context_mod {
+  class lfric_xios_context_type {
+    -id: String
+    -handle: xios_context
+    -clock: lfric_xios_clock_type
+
+    +initialise(id: String, communicator: Integer, callback: io_context_initialiser_type, start_time: String, finish_time: String, spinup_period: Float, seconds_per_step: Float)
+    +<<final>>finalise()
+    +get_clock(): clock_type
+  }
+}

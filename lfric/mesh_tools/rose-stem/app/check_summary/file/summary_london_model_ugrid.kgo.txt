@@ -1,0 +1,16 @@
+"gungho":
+  Geometry:            spherical
+  Topology:            non_periodic
+  Co-ordinate system:  ll
+  Periodic X:          F
+  Periodic Y:          F
+  Constructor inputs:  geometry=spherical;topology=non_periodic;coord_sys=ll;edge_cells_x=4;edge_cells_y=4;periodic_x=F;periodic_y=F;domain_x=1.14;domain_y=1.26;rotate_mesh=T;north_pole=[177.50,37.50];null_island=[-2.50,52.50];first_node=[0.85,-1.49]
+  Nodes:               25
+  Edges:               40
+  Faces:               16
+  Nodes per face:      4
+  Edges per face:      4
+  Nodes per edge:      2
+  Max. faces per node: 4
+  North pole [lon,lat]: [    177.50,     37.50]
+  Null Island [lon,lat]: [     -2.50,     52.50]

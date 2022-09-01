@@ -1,0 +1,69 @@
+{#- #########################################################################}
+{#- MACROS                                                                  #}
+{#- #########################################################################}
+
+{%- macro check_compilers( build, precisions=[rdef_default], publish=False ) %}
+[[[R1]]]
+  graph = """
+{%-   for compiler in target[PRIMARY_TARGET['platform']]['setup']['compiler'].keys() %}
+{%-     for precision in precisions %}
+{%-       if precision not in rdef_build_precisions %}
+{%-          do rdef_build_precisions.append(precision) -%}
+{%-       endif %}
+{%-       set label = compiler | lower + '_' + precision + '-bit_'+ build | lower%}
+{{        unit_tests_graph( compiler, precision ) }}
+{{        integration_tests_graph( compiler, precision ) }}
+{%-     endfor %} {# precisions #}
+{%-   endfor %} {# compiler #}
+          """
+{%- endmacro %}
+
+
+
+{#- #########################################################################}
+{%- macro build_system() %}
+[[[R1]]]
+  graph = """
+    export_source => unit_test_build_tools
+          """
+{%- endmacro %}
+
+
+
+{#- #########################################################################}
+{%- macro publish_commit() %}
+[[[R1]]]
+  graph = """
+            export_source => publish_nothing
+          publish_nothing:finish => publish_node
+          """
+
+[[[R1/P1/$]]]
+  # Repeat once in the final cycle
+  graph = """
+          publish_node => publish_index
+            publish_index      => mirror_results_local
+{%-   if MIRROR_UPLOAD_URL %}
+            publish_index      => mirror_results_remote
+{%-   endif %}
+          """
+
+[[[^/P1]]]
+  # Repeat every cycle from the start
+  graph = """
+          publish_node[-P1] => publish_node
+          """
+{%- endmacro %}
+
+
+
+{#- #########################################################################}
+{%- macro schedule() %}
+{%-   for group in groupsToRun %}
+{%-     if group in groups.keys() %}
+{%-       for mission in groups[group] %}
+{{          mission | execute_macro() }}
+{%-       endfor %}
+{%-     endif %}
+{%-   endfor %}
+{%- endmacro %}

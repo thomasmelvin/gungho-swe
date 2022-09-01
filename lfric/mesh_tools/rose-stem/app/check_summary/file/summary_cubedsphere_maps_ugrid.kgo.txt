@@ -1,0 +1,51 @@
+"dynamics":
+  Geometry:            spherical
+  Topology:            periodic
+  Co-ordinate system:  ll
+  Periodic X:          F
+  Periodic Y:          F
+  Constructor inputs:  edge_cells=4;smooth_passes=0;target_mesh_names=['physics','other'];target_edge_cells=[8,24]
+  Nodes:               98
+  Edges:               192
+  Faces:               96
+  Nodes per face:      4
+  Edges per face:      4
+  Nodes per edge:      2
+  Max. faces per node: 4
+  Maps to:             "physics", "other"
+  North pole [lon,lat]: [      0.00,     90.00]
+  Null Island [lon,lat]: [      0.00,      0.00]
+"physics":
+  Geometry:            spherical
+  Topology:            periodic
+  Co-ordinate system:  ll
+  Periodic X:          F
+  Periodic Y:          F
+  Constructor inputs:  edge_cells=8;smooth_passes=0;target_mesh_names=['dynamics'];target_edge_cells=[4]
+  Nodes:               386
+  Edges:               768
+  Faces:               384
+  Nodes per face:      4
+  Edges per face:      4
+  Nodes per edge:      2
+  Max. faces per node: 4
+  Maps to:             "dynamics"
+  North pole [lon,lat]: [      0.00,     90.00]
+  Null Island [lon,lat]: [      0.00,      0.00]
+"other":
+  Geometry:            spherical
+  Topology:            periodic
+  Co-ordinate system:  ll
+  Periodic X:          F
+  Periodic Y:          F
+  Constructor inputs:  edge_cells=24;smooth_passes=0;target_mesh_names=['dynamics'];target_edge_cells=[4]
+  Nodes:               3458
+  Edges:               6912
+  Faces:               3456
+  Nodes per face:      4
+  Edges per face:      4
+  Nodes per edge:      2
+  Max. faces per node: 4
+  Maps to:             "dynamics"
+  North pole [lon,lat]: [      0.00,     90.00]
+  Null Island [lon,lat]: [      0.00,      0.00]

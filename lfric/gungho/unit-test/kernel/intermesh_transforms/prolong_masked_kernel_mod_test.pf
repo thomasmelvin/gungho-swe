@@ -1,0 +1,250 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2022 Met Office. All rights reserved.
+! For further details please refer to the file COPYRIGHT.txt
+! which you should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+!> Test for the masked prolongation kernel
+module prolong_masked_kernel_mod_test
+
+  use pFUnit_mod
+  use constants_mod,             only : i_def, r_def
+  use prolong_masked_kernel_mod, only : prolong_masked_kernel_code
+
+  implicit none
+
+  private
+  public :: prolong_test_type, test_mask_one, test_mask_zero, test_mask_mixed
+
+  @TestCase
+  type, extends(TestCase) :: prolong_test_type
+     private
+     integer(kind=i_def) :: ncell_fine, undf_fine, undf_coarse
+     integer(kind=i_def), allocatable, dimension(:,:) :: cell_map
+     integer(kind=i_def), allocatable, dimension(:,:) :: map_fine
+     integer(kind=i_def), allocatable, dimension(:)   :: map_coarse
+     real(kind=r_def), allocatable, dimension(:) :: field_fine
+     real(kind=r_def), allocatable, dimension(:) :: field_coarse
+     real(kind=r_def), allocatable, dimension(:) :: mask_fine
+   contains
+     procedure setUp
+     procedure tearDown
+     procedure test_mask_one
+     procedure test_mask_zero
+     procedure test_mask_mixed
+  end type prolong_test_type
+
+     integer(kind=i_def), parameter :: nlayers = 3
+
+     ! Number of fine cells per coarse cell in x-direction (for quad elements)
+     integer(kind=i_def), parameter :: ncell_fine_per_coarse_x = 2
+
+     ! Number of fine cells per coarse cell in y-direction (for quad elements)
+     integer(kind=i_def), parameter :: ncell_fine_per_coarse_y = 2
+
+     ! Number of dofs per cell (W3)
+     integer(kind=i_def), parameter :: ndf = 1
+
+     real(kind=r_def),    parameter :: tol = 1.0e-12_r_def
+
+     ! The prolong_masked_kernel is an incremental operator, so the output value
+     ! is output_fine = input_fine + mask_fine * input_coarse.
+     ! The input coarse field is specified as a field of 1s.
+     ! The input fine field is specified as a field of 10s.
+     ! If mask=1 this gives an output field of 10 + 1 * 1 = 11
+     ! If mask=0 this gives an output field of 10 + 0 * 1 = 10
+     real(kind=r_def), parameter :: input_fine = 10.0_r_def
+     real(kind=r_def), parameter :: input_coarse = 1.0_r_def
+     real(kind=r_def), parameter :: answer_one = 11.0_r_def
+     real(kind=r_def), parameter :: answer_zero = 10.0_r_def
+
+contains
+
+  subroutine setUp( this )
+
+    implicit none
+
+    class(prolong_test_type), intent(inout) :: this
+
+    integer(kind=i_def) :: lp_x, lp_y
+    integer(kind=i_def) :: ncell_fine
+    integer(kind=i_def) :: undf_fine, undf_coarse
+
+    ! Configure test as a single coarse column on W3 function space
+    ! mapped to 4 fine columns in a 2x2 arrangement
+    this%ncell_fine = ncell_fine_per_coarse_x * ncell_fine_per_coarse_y
+
+    this%undf_fine = nlayers * this%ncell_fine * ndf
+
+    this%undf_coarse = this%undf_fine / &
+                       (ncell_fine_per_coarse_x * ncell_fine_per_coarse_y)
+
+    allocate( this%cell_map(ncell_fine_per_coarse_x,  &
+                            ncell_fine_per_coarse_y), &
+              this%map_fine(ndf,this%ncell_fine),     &
+              this%map_coarse(ndf) )
+    allocate( this%field_coarse(this%undf_coarse),    &
+              this%field_fine(this%undf_fine),        &
+              this%mask_fine(this%undf_fine) )
+
+    ! Construct coarse to fine cell id mappings based on x/y array index
+    do lp_y = 1, ncell_fine_per_coarse_y
+      do lp_x = 1, ncell_fine_per_coarse_x
+        this%cell_map(lp_x, lp_y) = lp_x + (lp_y - 1)*ncell_fine_per_coarse_x
+      end do
+    end do
+    do lp_x = 1, this%ncell_fine
+      this%map_fine(1,lp_x) = 1 + (lp_x-1)*nlayers
+    end do
+    this%map_coarse(1) = 1
+
+  end subroutine setUp
+
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(prolong_test_type), intent(inout) :: this
+
+    deallocate( this%cell_map,     &
+                this%map_fine,     &
+                this%map_coarse,   &
+                this%mask_fine,    &
+                this%field_coarse, &
+                this%field_fine )
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_mask_one( this )
+    ! Test using fine mask values all set to 1.
+    !
+    ! The field_coarse values are all set to 1, and when mapped to the
+    ! fine_field with mask values of 1, the expected values returned are also
+    ! 1. This uses the fact that the prolong_masked_kernel assumes that
+    ! the input field is intensive.
+
+    implicit none
+
+    class(prolong_test_type), intent(inout) :: this
+
+    integer(kind=i_def) :: df
+
+    this%field_fine(:) = input_fine
+    this%field_coarse(:) = input_coarse
+    this%mask_fine(:) = 1.0_r_def
+
+    call prolong_masked_kernel_code( nlayers,                 &
+                                     this%cell_map,           &
+                                     ncell_fine_per_coarse_x, &
+                                     ncell_fine_per_coarse_y, &
+                                     this%ncell_fine,         &
+                                     this%field_fine,         &
+                                     this%field_coarse,       &
+                                     this%mask_fine,          &
+                                     ndf,                     &
+                                     this%undf_fine,          &
+                                     this%map_fine,           &
+                                     this%undf_coarse,        &
+                                     this%map_coarse )
+
+    do df=1,this%undf_fine
+      @assertEqual( answer_one, this%field_fine(df), tol)
+    end do
+
+  end subroutine test_mask_one
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_mask_zero( this )
+    ! Test using fine mask values all set to 0.
+    !
+    ! The field_coarse values are all set to 1, and when mapped to the
+    ! fine_field with mask values of 0, the expected values returned are
+    ! 0.
+
+    implicit none
+
+    class(prolong_test_type), intent(inout) :: this
+
+    integer(kind=i_def) :: df
+
+    this%field_fine(:) = input_fine
+    this%field_coarse(:) = input_coarse
+    this%mask_fine(:) = 0.0_r_def
+
+    call prolong_masked_kernel_code( nlayers,                 &
+                                     this%cell_map,           &
+                                     ncell_fine_per_coarse_x, &
+                                     ncell_fine_per_coarse_y, &
+                                     this%ncell_fine,         &
+                                     this%field_fine,         &
+                                     this%field_coarse,       &
+                                     this%mask_fine,          &
+                                     ndf,                     &
+                                     this%undf_fine,          &
+                                     this%map_fine,           &
+                                     this%undf_coarse,        &
+                                     this%map_coarse )
+
+
+    do df=1,this%undf_fine
+      @assertEqual( answer_zero, this%field_fine(df), tol)
+    end do
+
+  end subroutine test_mask_zero
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_mask_mixed( this )
+    ! Test using half the fine mask values set to 0, and half set to 1.
+    !
+    ! The field_coarse values are all set to 1, and when mapped to the
+    ! fine_field with mask values of 0, the expected values returned are
+    ! 0, and when mapped to the fine_field with mask values of 1, the expected
+    ! values resturned are 1.
+
+    implicit none
+
+    class(prolong_test_type), intent(inout) :: this
+
+    integer(kind=i_def) :: k, df, on, off
+
+    this%field_fine(:) = input_fine
+    this%field_coarse(:) = input_coarse
+
+    do k = 0, nlayers-1
+      do df = 1, ncell_fine_per_coarse_x
+        off = this%map_fine( 1, df )
+        on = this%map_fine( 1, df + ncell_fine_per_coarse_x )
+        this%mask_fine( off + k ) = 0.0_r_def
+        this%mask_fine( on + k ) = 1.0_r_def
+      end do
+    end do
+
+    call prolong_masked_kernel_code( nlayers,                 &
+                                     this%cell_map,           &
+                                     ncell_fine_per_coarse_x, &
+                                     ncell_fine_per_coarse_y, &
+                                     this%ncell_fine,         &
+                                     this%field_fine,         &
+                                     this%field_coarse,       &
+                                     this%mask_fine,          &
+                                     ndf,                     &
+                                     this%undf_fine,          &
+                                     this%map_fine,           &
+                                     this%undf_coarse,        &
+                                     this%map_coarse )
+
+    do k = 0, nlayers-1
+      do df = 1, ncell_fine_per_coarse_x
+        off = this%map_fine( 1, df )
+        on = this%map_fine( 1, df + ncell_fine_per_coarse_x )
+        @assertEqual( answer_one, this%field_fine( on + k), tol)
+        @assertEqual( answer_zero, this%field_fine( off + k ), tol)
+      end do
+    end do
+
+  end subroutine test_mask_mixed
+
+end module prolong_masked_kernel_mod_test

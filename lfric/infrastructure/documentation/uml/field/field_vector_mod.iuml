@@ -1,0 +1,30 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class field_vector_mod::field_vector_type{
+ +vector:field_type[:]<<allocatable>>
+ -vector_set:logical
+
+ +import_field(<<inout>>self:field_vector_type, <<in>>field:field_vector_type, <<in>>position:integer)
+ +export_field(<<inout>>self:field_vector_type, <<in>>field:field_vector_type, <<in>>position:integer)
+
+ 
+  ~<<renamed>>set_field_vector_scalar() 
+   ~<<renamed>>axpy_field_vector() 
+   ~<<renamed>>aypx_field_vector() 
+   ~<<renamed>>norm_field_vetor() 
+   ~<<renamed>>field_norm_field_vetor() 
+   ~<<renamed>>dot_field() 
+   ~<<renamed>>scale_field_vector() 
+   ~<<renamed>>duplicate_field_vetor() 
+   ~<<renamed>>field_vector_type_assign() 
+   ~<<renamed>>get_size_field_vector()
+  <<assignment(=)>>+field_vector_type_assign()
+  <<create>>+field_vector_constructor(<<in>>nfields:integer):field_vector_type
+  <<destroy>>+field_vector_destroy(<<inout>>self:field_vector_type)
+
+  
+}
+
+vector_mod::abstract_vector_type --|> field_vector_mod::field_vector_type

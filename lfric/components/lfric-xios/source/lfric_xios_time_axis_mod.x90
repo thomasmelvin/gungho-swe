@@ -1,0 +1,641 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2020 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> @brief A module containing a time axis object.
+!> @details Fields need to be updated at different times and frequencies. The
+!>          time axis object can be linked to a field to provide information
+!>          of how the field should be updated with time.
+module lfric_xios_time_axis_mod
+
+  use constants_mod,        only: i_def, str_def, r_def, l_def
+  use field_mod,            only: field_type, field_proxy_type
+  use field_parent_mod,     only: field_parent_type
+  use field_collection_iterator_mod, &
+                            only: field_collection_iterator_type
+  use field_collection_mod, only: field_collection_type
+  use log_mod,              only: log_event, log_scratch_space, &
+                                  LOG_LEVEL_ERROR, LOG_LEVEL_INFO
+  use linked_list_data_mod, only: linked_list_data_type
+  use xios,                 only: xios_get_field_attr, xios_get_axis_attr,     &
+                                  xios_get_file_attr,                          &
+                                  xios_recv_field, xios_date, xios_duration,   &
+                                  xios_get_current_date, xios_get_time_origin, &
+                                  xios_get_year_length_in_seconds,             &
+                                  xios_date_convert_to_seconds, operator(-),   &
+                                  operator(+), operator(<), operator(<=)
+
+  implicit none
+
+  private
+
+  !> Time axis object type
+  type, extends(linked_list_data_type), public :: time_axis_type
+
+    private
+
+    !> Name of the time_axis
+    character(str_def) :: name = 'unset'
+    !> The data values of the time axis
+    type(xios_date), allocatable :: time_data( : )
+    !> The indices of the data points of the time axis
+    integer(kind=i_def), allocatable :: index_data( : )
+    !> The width of the time window
+    integer(kind=i_def) :: window_size = 3
+    !> The current placement in the time window
+    integer(kind=i_def) :: current_window = 1
+    !> The XIOS ID of the time axis
+    character(str_def) :: xios_id
+    !> The collection of fields associated with the time axis
+    type(field_collection_type) :: fields
+    !> Flag determining if the time axis cycles over a year
+    logical(l_def) :: yearly = .true.
+    !> Flag for interpolation
+    logical(l_def) :: does_interpolation = .false.
+    !> Data population frequency
+    type(xios_duration) :: population_frequency
+    !> XIOS date for next population
+    type(xios_date) :: next_population
+    !> Update frequency
+    type(xios_duration) :: update_frequency
+    !> XIOS date for next update
+    type(xios_date) :: next_update
+
+    procedure(update_interface), nopass, pointer :: update_behaviour => null()
+
+  contains
+    !> Initialiser for the time axis object
+    procedure, public :: initialise
+    !> Set the routine that updates the time axis field data
+    procedure, public :: set_update_behaviour
+    !> Reads time data with XIOS
+    procedure, private :: read_time_data
+    !> Getter for time axis name
+    procedure, public :: get_name
+    !> Procedure for cycling through time data to find the correct entry
+    procedure, private :: shift_forward
+    !> Steps forward time axis with model timestep
+    procedure, public :: step
+    !> Returns the window size of the time axis object
+    procedure, public :: get_window_size
+    !> Returns whether the model fields in the time axis need repopulating
+    procedure, public :: populate_fields
+    !> Aligns the active time window with the current model time
+    procedure, public :: align
+    !> Adds a field to the associated time axis object
+    procedure, public :: add_field
+    !> Reads the fields associated with the time axis
+    procedure, public :: update_fields
+    !> Populates the model fields linked with the time axis data
+    procedure, public :: populate_model_fields
+  end type time_axis_type
+
+  abstract interface
+
+  !> @brief Interface for updating the field data associated with the time axis.
+  !> @param[in]     field_name  Name of the field to be updated
+  !> @param[in,out] field_proxy Field proxy to be updated
+  !> @param[in]     times       The time data corresponding to the new field data
+  !>
+  subroutine update_interface(field_name, field_proxy, times, xios_id)
+    import i_def, field_proxy_type
+    character(len=*),        intent(in) :: field_name
+    type(field_proxy_type),  intent(inout) :: field_proxy
+    integer(i_def),          intent(in) :: times(:)
+    character(len=*),        intent(in) :: xios_id
+  end subroutine update_interface
+
+end interface
+
+public :: update_interface
+
+contains
+
+  !> @brief Initialise a <code>time_axis_type</code> object.
+  !>
+  !> @param[in] input_data   The input time data array
+  !> @param[in] name         The time axis name
+  !> @param[in] file_id      The XIOS ID of the file the time axis controls
+  !> @param[in] xios_id      The XIOS ID of the time field represented by the time axis
+  !> @param[in] yearly       Flag determining if axis is yearly
+  !> @param[in] interp_flag  Flag determining if time_axis fields are linearly
+  !>                         interpolated before being passed to the model data
+  !> @param[in] pop_freq     The data population frequency of the time axis
+  subroutine initialise( self, name, file_id, xios_id, yearly, interp_flag, pop_freq )
+
+    implicit none
+
+    class(time_axis_type),        intent(inout) :: self
+    character(*),                 intent(in)    :: name
+    character(*),                 intent(in)    :: file_id
+    character(*),   optional,     intent(in)    :: xios_id
+    logical(l_def), optional,     intent(in)    :: yearly
+    logical(l_def), optional,     intent(in)    :: interp_flag
+    character(*),   optional,     intent(in)    :: pop_freq
+
+    type(xios_date)             :: start_date, time_origin
+
+    ! Name the object
+    self%name = name
+    if ( present(xios_id) ) then
+      self%xios_id = xios_id
+    else
+      self%xios_id = name
+    end if
+
+    call xios_get_file_attr(trim(file_id), output_freq=self%update_frequency)
+    call xios_get_current_date(start_date)
+    self%next_update = start_date + self%update_frequency
+
+    ! Create object field collection
+    call self%fields%initialise(name=trim(name)//'_fields', table_len=1)
+
+    ! Set optional attributes
+    if ( present(yearly) ) self%yearly = yearly
+    if ( present(interp_flag) ) self%does_interpolation = interp_flag
+    if ( present(pop_freq) .and. .not. trim(pop_freq) == "always" ) then
+      ! Set the population frequency as defined by the string input
+      if (trim(pop_freq) == "daily") then
+        self%population_frequency = xios_duration(0,0,1,0,0,0)
+      else if (trim(pop_freq) == "five_days") then
+        self%population_frequency = xios_duration(0,0,5,0,0,0)
+      else if (trim(pop_freq) == "ten_days") then
+        self%population_frequency = xios_duration(0,0,10,0,0,0)
+      else if (trim(pop_freq) == "monthly") then
+        self%population_frequency = xios_duration(0,1,0,0,0,0)
+      else
+        write( log_scratch_space,'(A,A)' ) "Invalid update freq for "//trim(self%name)// &
+                                           " time axis: "// trim(pop_freq)
+        call log_event( log_scratch_space, LOG_LEVEL_ERROR )
+      end if
+    else
+      ! Default to smallest update frequency xios can handle
+      self%population_frequency = xios_duration(0,0,0,0,0,1)
+    end if
+
+    ! Find the next population date after the start of this (c)run
+    call xios_get_time_origin(time_origin)
+    self%next_population = time_origin + self%population_frequency
+    do
+      if (start_date < self%next_population) then
+        exit
+      else
+        self%next_population = self%next_population + self%population_frequency
+      end if
+    end do
+
+    ! Read time data
+    call self%read_time_data()
+
+  end subroutine initialise
+
+  !> @brief Sets routine that updates field data for time axis.
+  !> @param[in] update_behaviour Pointer to update routine
+  subroutine set_update_behaviour(self, update_behaviour)
+
+    implicit none
+
+    class(time_axis_type), intent(inout) :: self
+    procedure(update_interface), pointer, intent(in) :: update_behaviour
+
+    self%update_behaviour => update_behaviour
+
+  end subroutine set_update_behaviour
+
+  !>  @brief  Read time data into time axis using XIOS
+  subroutine read_time_data(self)
+
+    implicit none
+
+    class(time_axis_type), intent(inout) :: self
+
+    ! Local variables for XIOS interface
+    integer(i_def)                :: time_axis_size, i, t
+    real(r_def), allocatable      :: input_data(:)
+    character(str_def)            :: axis_id, time_units
+    character(str_def), parameter :: valid_units(4) = &
+                                  (/'seconds', 'days   ', 'hours  ', 'months '/)
+    type(xios_duration)           :: ref_time, mean_time, month_duration
+    type(xios_date)               :: ref_date
+
+    ! Set up axis size and units from XIOS configuration
+    call xios_get_field_attr( self%xios_id, unit=time_units, axis_ref=axis_id )
+    call xios_get_axis_attr( axis_id, n_glo=time_axis_size )
+    allocate( input_data( time_axis_size ) )
+    allocate( self%time_data( time_axis_size ) )
+
+    ! Read the time data from the ancil file
+    call xios_recv_field( self%xios_id, input_data )
+
+    ! Set up time date and index array
+    ! Set reference date to match ancils for yearly time axis - this will
+    ! eventually be read in from the ancil files directly
+    if ( self%yearly ) then
+      ref_date = xios_date(1970, 01, 01, 00, 00, 00)
+    else
+      call xios_get_time_origin(ref_date)
+    end if
+
+    ! Convert input time data to xios_date type
+    do t = 1, time_axis_size
+      ref_time = xios_duration(0, 0, 0, 0, 0, 0)
+      if ( time_units == "seconds" ) then
+        ref_time%second = input_data(t)
+      else if ( time_units == "hours" ) then
+        ref_time%hour = input_data(t)
+      else if ( time_units == "days" ) then
+        ref_time%day = input_data(t)
+      else if ( time_units == "months" ) then
+        ! Offset months backwards to account for monthly mean
+        ref_time%month = input_data(t) - 1
+      end if
+      self%time_data(t) = ref_date + ref_time
+    end do
+
+    ! Correct "months" data to be monthly mean - centred on middle of month.
+    ! This can't be done above as the conversion to seconds can only be done
+    ! with xios_date objects, not xios_durations
+    if ( time_units == "months" ) then
+      mean_time = xios_duration(0, 0, 0, 0, 0, 0)
+      month_duration = xios_duration(0, 1, 0, 0, 0, 0)
+      do t = 1, time_axis_size
+        mean_time%second = ( &
+          seconds_from_date(self%time_data(t)+month_duration) - &
+          seconds_from_date(self%time_data(t)) ) / 2
+        self%time_data(t) = self%time_data(t) + mean_time
+      end do
+    end if
+
+    ! Create data indices
+    self%index_data = (/ (i, i=1, size(input_data)) /)
+
+    ! Set time units to seconds across a single year - the calendar type needs to
+    ! be integrated into this eventually
+    if ( .not. any( valid_units == trim(adjustl(time_units)) ) ) then
+      write( log_scratch_space,'(A,A)' ) "Invalid units for "//trim(self%name)// &
+                                         " time axis: "// trim(time_units)
+      call log_event( log_scratch_space, LOG_LEVEL_ERROR )
+    end if
+
+  end subroutine read_time_data
+
+  !> @brief Wrapper around xios_date_convert_to_seconds to nullify XIOS bug
+  !> @param[in] date            The input xios_date object
+  !> @result    date_in_seconds The resulting seconds converted from "date"
+  function seconds_from_date(date) result(date_in_seconds)
+
+    implicit none
+
+    type(xios_date), intent(in) :: date
+
+    type(xios_date)        :: time_origin
+    integer(i_def)         :: year_diff
+    real(r_def)            :: date_in_seconds
+
+    integer(i_def), parameter :: length360d = 31104000
+
+    call xios_get_time_origin(time_origin)
+
+    ! Get time in seconds from XIOS dates - due to a bug in XIOS, non-360day
+    ! calendars do not return the correct values around the time origin so a
+    ! workaround is implemented below. Also due to a bug in XIOS calendar types
+    ! cannot be identified except by the number of seconds per year
+    if ( date < time_origin .and. &
+         xios_get_year_length_in_seconds(date%year) /= length360d ) &
+      then
+      year_diff = date%year - time_origin%year
+      date_in_seconds = real(xios_date_convert_to_seconds(date), r_def) + &
+        ( real(xios_get_year_length_in_seconds(date%year), r_def) * &
+          real(year_diff, r_def) )
+    else
+      date_in_seconds = real(xios_date_convert_to_seconds(date), r_def)
+    end if
+
+  end function seconds_from_date
+
+  !> @brief Returns the time_axis name.
+  !> @return output_name The time axis name
+  function get_name(self) result(output_name)
+
+    implicit none
+
+    class(time_axis_type), intent(inout) :: self
+
+    character(str_def) :: output_name
+
+    output_name = self%name
+
+  end function get_name
+
+   !> @brief Performs a cshift on the data and index data arrays.
+  subroutine shift_forward(self)
+
+    implicit none
+
+    class(time_axis_type), intent(inout) :: self
+
+    if ( self%yearly ) then
+      self%time_data(1)%year = self%time_data(1)%year + 1
+    end if
+
+    self%time_data = cshift(self%time_data, 1)
+    self%index_data = cshift(self%index_data, 1)
+
+    ! If there are more then 2 time entries present then we log the movement
+    ! into the next time window
+    if ( self%window_size > 2 ) then
+      self%current_window = self%current_window + 1
+    end if
+
+  end subroutine shift_forward
+
+  !> @brief Steps the time axis forward with the model timestep
+  subroutine step(self)
+
+    implicit none
+
+    class(time_axis_type), intent(inout) :: self
+
+    type(xios_date) :: model_date
+
+    ! Get current date from XIOS calendar
+    call xios_get_current_date(model_date)
+
+    ! Find the next population date after the current time
+    do
+      if (model_date <= self%next_population) then
+        exit
+      else
+        self%next_population = self%next_population + self%population_frequency
+      end if
+    end do
+
+    if ( self%next_update <= model_date ) then
+      call self%update_fields()
+      self%next_update = model_date + self%update_frequency
+    end if
+
+    if ( self%time_data(1) <= model_date .and. model_date < self%time_data(2) ) then
+      return
+    else
+      call self%shift_forward()
+    end if
+
+  end subroutine step
+
+  !> @brief Returns time axis window size.
+  !> @return  n_window  The window size of the time axis
+  function get_window_size(self) result(n_window)
+
+    implicit none
+
+    class(time_axis_type), intent(inout) :: self
+
+    integer(i_def) :: n_window
+
+    n_window = self%window_size
+
+  end function get_window_size
+
+  !> @brief Returns whether or not repopulate the model data fields.
+  !> @return pop_fields Logical returning true if fields should be populated
+  function populate_fields(self) result(pop_fields)
+
+    implicit none
+
+    class(time_axis_type), intent(inout) :: self
+
+    type(xios_date) :: model_date
+
+    logical(l_def) ::  pop_fields
+
+    ! Get current date from XIOS calendar
+    call xios_get_current_date(model_date)
+
+    if ( self%next_population <= model_date ) then
+      pop_fields = .true.
+    else
+      pop_fields = .false.
+    end if
+
+  end function populate_fields
+
+  !> @brief Takes model time and shifts forward through time axis so active
+  !>        time window is aligned with model time.
+  subroutine align(self)
+
+    implicit none
+
+    class(time_axis_type), intent(inout) :: self
+
+    type(xios_date) :: model_date
+    integer(i_def) :: i
+
+    call xios_get_current_date(model_date)
+
+    ! If axis is yearly, fast forward to the year before the model date before
+    ! cycling through to find the correct time window
+    if ( self%yearly ) then
+      ! Loop through data to update year
+      do i = 1, size(self%time_data)
+        self%time_data%year = &
+              self%time_data%year + ( model_date%year - self%time_data(1)%year - 1 )
+      end do
+
+      ! Cycle through data to find correct time window (two years worth)
+      do i = 1, size(self%time_data)*2
+        if ( self%time_data(1) <= model_date .and. &
+              model_date < self%time_data(2) ) then
+          return
+        else
+          call self%shift_forward()
+        end if
+      end do
+
+      ! If we're still going something's gone wrong
+      call log_event("Cannot align yearly time axis "//self%name, &
+                      LOG_LEVEL_ERROR)
+
+    else
+      ! Cycle through data to find correct time window
+      do i = 1, size(self%time_data)
+        if ( self%time_data(1) <= model_date .and. &
+              model_date < self%time_data(2) ) then
+          return
+        else
+          call self%shift_forward()
+        end if
+      end do
+
+      ! If we're still going something's gone wrong
+      call log_event("Model start date out of bounds for time axis "// &
+                      self%name, LOG_LEVEL_ERROR)
+
+    end if
+
+  end subroutine align
+
+  !> @brief Adds a field to the time axis field collection.
+  !> @param[in] field Field to be added to the time axis
+  subroutine add_field(self, field)
+
+    implicit none
+
+    class(time_axis_type), intent(inout) :: self
+    type(field_type), intent(in) :: field
+
+    call self%fields%add_field(field)
+
+  end subroutine add_field
+
+  !> @brief Updates associated data fields using update routine.
+  subroutine update_fields(self)
+
+    implicit none
+
+    class(time_axis_type), intent(inout) :: self
+
+    type( field_collection_iterator_type) :: read_iter
+    class( field_parent_type ), pointer   :: updated_field => null()
+
+    type(field_proxy_type) :: tmp_proxy
+
+    ! Create the read_iter iterator on the self%fields collection
+    call read_iter%initialise(self%fields)
+    do
+      if ( .not.read_iter%has_next() ) exit
+      updated_field => read_iter%next()
+      select type(updated_field)
+        type is (field_type)
+          tmp_proxy = updated_field%get_proxy()
+          call log_event( &
+            'Reading '//trim(adjustl(updated_field%get_name())), &
+            LOG_LEVEL_INFO)
+          call self%update_behaviour(updated_field%get_name(), tmp_proxy, &
+                                      self%index_data(1:self%window_size), self%xios_id)
+      end select
+    end do
+
+    ! Set current window back to 1
+    self%current_window = 1
+
+    nullify(updated_field)
+
+  end subroutine update_fields
+
+  !> @brief Populates model fields using time axis data fields.
+  !> @param[in] model_fields Field collection to populate from data fields
+  subroutine populate_model_fields(self, model_fields)
+
+    implicit none
+
+    class(time_axis_type),       intent(inout) :: self
+    type(field_collection_type), intent(in)    :: model_fields
+
+    class(field_parent_type), pointer :: field_next => null()
+    type(field_type),         pointer :: model_field => null()
+    type(field_type),         pointer :: data_field => null()
+
+    type(field_collection_iterator_type) :: pop_iter
+    type(field_proxy_type)               :: data_proxy, model_proxy
+
+    ! Loop over time axis fields
+
+    ! Create the pop_iter iterator on the self%fields collection
+    call pop_iter%initialise(self%fields)
+    do
+      if ( .not. pop_iter%has_next() ) exit
+
+      field_next => pop_iter%next()
+
+      ! If time axis field has a counterpart in model data field collection
+      if ( model_fields%field_exists(trim(field_next%get_name())) ) then
+        model_field => model_fields%get_field(trim(field_next%get_name()))
+        model_proxy = model_field%get_proxy()
+        data_field => self%fields%get_field(trim(field_next%get_name()))
+        data_proxy = data_field%get_proxy()
+
+         call log_event( &
+            'Updating '//trim(adjustl(model_field%get_name())), &
+            LOG_LEVEL_INFO)
+
+        ! Populate model fields based on interpolation flag
+        if ( self%does_interpolation ) then
+          call interp_field_1d( model_field, model_proxy, data_proxy, &
+                                self%time_data(1:self%window_size), self%window_size, self%current_window )
+        else
+          model_proxy%data(:) = data_proxy%data(1::self%window_size)
+        end if
+
+        ! Set halos dirty
+        call model_proxy%set_dirty()
+
+        nullify(model_field)
+        nullify(data_field)
+
+      end if
+
+    end do
+
+    nullify(field_next)
+
+  end subroutine populate_model_fields
+
+  !> @brief Populates a model field by interpolating between the data entries of
+  !>        the current time window.
+  !> @param[in] model_field Pointer to field to be populated from data fields
+  !> @param[in] model_proxy Field proxy object for model field
+  !> @param[in] data_proxy  Field proxy object for input data field
+  !> @param[in] time_window The current time window
+  subroutine interp_field_1d( model_field, model_proxy, data_proxy, time_window, window_size, window_start )
+
+    implicit none
+
+    type(field_type),       intent(inout), pointer :: model_field
+    type(field_proxy_type), intent(in)             :: model_proxy
+    type(field_proxy_type), intent(in)             :: data_proxy
+    type(xios_date),        intent(in)             :: time_window(2)
+    integer(i_def),         intent(in)             :: window_size
+    integer(i_def),         intent(in)             :: window_start
+
+    type(field_type)       :: field_time_entries(2)
+    type(field_type)       :: interp_gradient
+    type(field_type)       :: dData
+    type(field_proxy_type) :: time_entry_proxy
+    type(xios_date)        :: model_date
+    real(r_def)            :: window_dt_sec, window_time_sec, dt_recip
+    integer(i_def)         :: t
+
+    ! Get current time information
+    call xios_get_current_date(model_date)
+
+    ! Split multi-data field into two fields for start and end time entry
+    do t = 1, 2
+      call field_time_entries(t)%initialise( model_proxy%vspace )
+      time_entry_proxy = field_time_entries(t)%get_proxy()
+      time_entry_proxy%data(:) = data_proxy%data(window_start+t-1::window_size)
+    end do
+
+    ! Initialise interpolation variables
+    call dData%initialise( model_proxy%vspace )
+    call interp_gradient%initialise( model_proxy%vspace )
+
+    ! Get time in seconds from XIOS dates
+    window_dt_sec = seconds_from_date(time_window(2)) - &
+                    seconds_from_date(time_window(1))
+    window_time_sec = seconds_from_date(model_date) - &
+                      seconds_from_date(time_window(1))
+
+    dt_recip = 1.0_r_def/window_dt_sec
+
+    ! Perform linear interpolation and populate model field with interpolated data
+    call invoke( X_minus_Y( dData, field_time_entries(2), field_time_entries(1) ), &
+                 a_times_X( interp_gradient, dt_recip, dData ),                    &
+                 inc_a_times_X( window_time_sec, interp_gradient ),                &
+                 X_plus_Y( model_field, field_time_entries(1), interp_gradient ) )
+
+  end subroutine interp_field_1d
+
+end module lfric_xios_time_axis_mod

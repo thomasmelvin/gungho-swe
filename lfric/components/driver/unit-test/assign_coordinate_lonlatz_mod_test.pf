@@ -1,0 +1,151 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!
+!-------------------------------------------------------------------------------
+module assign_coordinate_lonlatz_mod_test
+
+  use constants_mod, only : r_def, i_def, PI
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: assign_coordinate_lonlatz_test_type, test_all
+
+  @TestCase
+  type, extends(TestCase) :: assign_coordinate_lonlatz_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type assign_coordinate_lonlatz_test_type
+
+  real(kind=r_def), parameter :: radius   = 19.0_r_def
+  real(kind=r_def), parameter :: scaling  = 1.0_r_def
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use feign_config_mod, only : feign_planet_config
+
+    implicit none
+
+    class(assign_coordinate_lonlatz_test_type), intent(inout) :: this
+
+    call feign_planet_config( radius=radius, scaling_factor=scaling )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod, only : final_configuration
+
+    implicit none
+
+    class(assign_coordinate_lonlatz_test_type), intent(inout) :: this
+
+    call final_configuration()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use, intrinsic :: iso_fortran_env, only: real64
+    use driver_coordinates_mod,        only: assign_coordinate_lonlatz
+
+    implicit none
+
+    class(assign_coordinate_lonlatz_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter :: dh = 2.4_r_def
+    real(kind=r_def), parameter :: tol = 1.0e-10_r_def  ! for r_def 64-bit
+    real(kind=r_def)            :: use_tol
+
+    integer(kind=i_def) :: nlayers, ndf_chi, undf_chi, ndf_pid, undf_pid
+    integer(kind=i_def) :: map_chi(1), map_pid(1), nverts, i
+    real(kind=r_def) :: longitude(1), latitude(1), height(1), panel_id(1)
+    real(kind=r_def) :: verts_XYZ(3,8,1), verts_ref(8,3), nodal_coord(3,1)
+    real(kind=r_def) :: r_bot, r_top
+
+    nlayers    = 1
+    ndf_chi    = 1
+    nverts     = 8
+    map_chi(1) = 1
+    undf_chi   = 1
+
+    ! Define panel_id field
+    panel_id = (/ 1.0_r_def /)
+    ndf_pid = 1
+    undf_pid = 1
+    map_pid = (/ 1 /)
+
+    ! Coordinates of vertices of reference_element
+    verts_ref(:,1) = (/ 0.0_r_def, 1.0_r_def, 1.0_r_def, 0.0_r_def, &
+                        0.0_r_def, 1.0_r_def, 1.0_r_def, 0.0_r_def /)
+    verts_ref(:,2) = (/ 0.0_r_def, 0.0_r_def, 1.0_r_def, 1.0_r_def, &
+                        0.0_r_def, 0.0_r_def, 1.0_r_def, 1.0_r_def /)
+    verts_ref(:,3) = (/ 0.0_r_def, 0.0_r_def, 0.0_r_def, 0.0_r_def, &
+                        1.0_r_def, 1.0_r_def, 1.0_r_def, 1.0_r_def /)
+
+    ! We consider a cell whose vertices are at
+    ! longitude = (pi/3, pi/2), latitude = (pi/6, pi/4), height = (0, dh)
+    ! Now we give the values of the corresponding (X,Y,Z) coordinates
+    r_bot = radius
+    r_top = radius + dh
+    verts_XYZ(1,:,1) = (/ r_bot*sqrt(3.0_r_def)/4.0_r_def, r_bot*sqrt(2.0_r_def)/4.0_r_def, &
+                          0.0_r_def,                       0.0_r_def,                       &
+                          r_top*sqrt(3.0_r_def)/4.0_r_def, r_top*sqrt(2.0_r_def)/4.0_r_def, &
+                          0.0_r_def,                       0.0_r_def                       /)
+    verts_XYZ(2,:,1) = (/ r_bot*3.0_r_def/4.0_r_def,       r_bot*sqrt(6.0_r_def)/4.0_r_def, &
+                          r_bot*sqrt(3.0_r_def)/2.0_r_def, r_bot*sqrt(2.0_r_def)/2.0_r_def, &
+                          r_top*3.0_r_def/4.0_r_def,       r_top*sqrt(6.0_r_def)/4.0_r_def, &
+                          r_top*sqrt(3.0_r_def)/2.0_r_def, r_top*sqrt(2.0_r_def)/2.0_r_def /)
+    verts_XYZ(3,:,1) = (/ r_bot/2.0_r_def,                 r_bot*sqrt(2.0_r_def)/2.0_r_def, &
+                          r_bot/2.0_r_def,                 r_bot*sqrt(2.0_r_def)/2.0_r_def, &
+                          r_top/2.0_r_def,                 r_top*sqrt(2.0_r_def)/2.0_r_def, &
+                          r_top/2.0_r_def,                 r_top*sqrt(2.0_r_def)/2.0_r_def /)
+
+    ! The coordinate at which to determine chi at in the reference element
+    nodal_coord(:,1) = (/ 0.5_r_def, 0.5_r_def, 0.5_r_def /)
+
+    call assign_coordinate_lonlatz(nlayers, ndf_chi, nverts, undf_chi, map_chi, &
+                                   longitude, latitude, height,                 &
+                                   verts_XYZ, nodal_coord, verts_ref,           &
+                                   panel_id, ndf_pid, undf_pid, map_pid         )
+
+    ! The answer should be the central point of the box
+    ! lon = 5*pi/12, lat = 5*pi/24, h = dh / 2
+
+    if ( r_def == real64 ) then
+      use_tol = tol
+    else
+      use_tol = max( tol, 10.0_r_def*spacing( longitude(1) ))
+    end if
+    @assertEqual( PI*5.0_r_def/12.0_r_def, longitude(1), use_tol )
+
+    if ( r_def == real64 ) then
+      use_tol = tol
+    else
+      use_tol = max( tol, 10.0_r_def*spacing( latitude(1) ))
+    end if
+    @assertEqual( PI*5.0_r_def/24.0_r_def, latitude(1), use_tol )
+
+    if ( r_def == real64 ) then
+      use_tol = tol
+    else
+      use_tol = max( tol, 10.0_r_def*spacing( height(1) ))
+    end if
+    @assertEqual( dh/2.0_r_def, height(1), use_tol )
+
+  end subroutine test_all
+
+end module assign_coordinate_lonlatz_mod_test

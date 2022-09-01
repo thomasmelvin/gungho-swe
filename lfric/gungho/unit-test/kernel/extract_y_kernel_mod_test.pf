@@ -1,0 +1,215 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2017 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> Test the extraction of the y component of a W2 field.
+!>
+module extract_y_kernel_mod_test
+
+  use constants_mod,      only : i_def, r_def
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: extract_y_test_type, &
+            test_orientation_one, test_orientation_two, &
+            test_orientation_three, test_orientation_four
+
+  @TestCase
+  type, extends(TestCase) :: extract_y_test_type
+    private
+    real(kind=r_def), allocatable :: w2_field_in(:), orientation(:), y_field(:)
+
+    integer(i_def) :: map_w3(1)
+    integer(i_def) :: map_w2(1:6)
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_orientation_one
+    procedure test_orientation_two
+    procedure test_orientation_three
+    procedure test_orientation_four
+  end type extract_y_test_type
+
+    integer(i_def), parameter :: nlayers = 1
+    integer(i_def), parameter :: ndf_w2  = 6
+    integer(i_def), parameter :: undf_w2 = 6
+    integer(i_def), parameter :: ndf_w3  = 1
+    integer(i_def), parameter :: undf_w3 = 1
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(extract_y_test_type), intent(inout) :: this
+
+    this%map_w3 = 1
+    this%map_w2 = (/ 1,2,3,4,5,6 /)
+
+    allocate( this%orientation(1) )
+    allocate( this%w2_field_in(1:6) )
+    allocate( this%y_field(1:6) )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(extract_y_test_type), intent(inout) :: this
+
+    deallocate( this%orientation )
+    deallocate( this%w2_field_in )
+    deallocate( this%y_field )
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_orientation_one( this )
+
+    use extract_y_kernel_mod, only : extract_y_code
+
+    implicit none
+
+    class(extract_y_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: tol    = 1.0e-6_r_def
+
+    this%orientation(1) = 1.0_r_def
+    this%w2_field_in(1:4) = (/  101.0_r_def,102.0_r_def,103.0_r_def,104.0_r_def /)
+
+    call extract_y_code( nlayers,                      &
+                         this%orientation,             &
+                         this%w2_field_in,             &
+                         this%y_field,                 &
+                         undf_w3,                      &
+                         ndf_w3,                       &
+                         this%map_w3,                  &
+                         undf_w2,                      &
+                         ndf_w2,                       &
+                         this%map_w2 )
+
+    @assertEqual(-9999.0_r_def, this%y_field(1), tol)
+    @assertEqual(102.0_r_def, this%y_field(2), tol)
+    @assertEqual(-9999.0_r_def, this%y_field(3), tol)
+    @assertEqual(104.0_r_def, this%y_field(4), tol)
+
+  end subroutine test_orientation_one
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_orientation_two( this )
+
+    use extract_y_kernel_mod, only : extract_y_code
+
+    implicit none
+
+    class(extract_y_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: tol    = 1.0e-6_r_def
+
+    integer(i_def) :: map_w3(1)
+    map_w3(1) = 1
+
+    this%orientation(1) = 2.0_r_def
+    this%w2_field_in(1:4) = (/  101.0_r_def,102.0_r_def,103.0_r_def,104.0_r_def /)
+
+    call extract_y_code( nlayers,                      &
+                         this%orientation,             &
+                         this%w2_field_in,             &
+                         this%y_field,                 &
+                         undf_w3,                      &
+                         ndf_w3,                       &
+                         this%map_w3,                  &
+                         undf_w2,                      &
+                         ndf_w2,                       &
+                         this%map_w2 )
+
+    @assertEqual(-9999.0_r_def, this%y_field(2), tol)
+    @assertEqual(101.0_r_def, this%y_field(1), tol)
+    @assertEqual(-9999.0_r_def, this%y_field(4), tol)
+    @assertEqual(103.0_r_def, this%y_field(3), tol)
+
+  end subroutine test_orientation_two
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_orientation_three( this )
+
+    use extract_y_kernel_mod, only : extract_y_code
+
+    implicit none
+
+    class(extract_y_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: tol    = 1.0e-6_r_def
+
+    integer(i_def) :: map_w3(1)
+    map_w3(1) = 1
+
+    this%orientation(1) = 3.0_r_def
+    this%w2_field_in(1:4) = (/  101.0_r_def,102.0_r_def,103.0_r_def,104.0_r_def /)
+
+    call extract_y_code( nlayers,                      &
+                         this%orientation,             &
+                         this%w2_field_in,             &
+                         this%y_field,                 &
+                         undf_w3,                      &
+                         ndf_w3,                       &
+                         this%map_w3,                  &
+                         undf_w2,                      &
+                         ndf_w2,                       &
+                         this%map_w2 )
+
+    @assertEqual(-9999.0_r_def, this%y_field(1), tol)
+    @assertEqual(102.0_r_def, this%y_field(2), tol)
+    @assertEqual(-9999.0_r_def, this%y_field(3), tol)
+    @assertEqual(104.0_r_def, this%y_field(4), tol)
+
+  end subroutine test_orientation_three
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_orientation_four( this )
+
+    use extract_y_kernel_mod, only : extract_y_code
+
+    implicit none
+
+    class(extract_y_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: tol    = 1.0e-6_r_def
+
+    integer(i_def) :: map_w3(1)
+    map_w3(1) = 1
+
+    this%orientation(1) = 4.0_r_def
+    this%w2_field_in(1:4) = (/  101.0_r_def,102.0_r_def,103.0_r_def,104.0_r_def /)
+
+    call extract_y_code( nlayers,                      &
+                         this%orientation,             &
+                         this%w2_field_in,             &
+                         this%y_field,                 &
+                         undf_w3,                      &
+                         ndf_w3,                       &
+                         this%map_w3,                  &
+                         undf_w2,                      &
+                         ndf_w2,                       &
+                         this%map_w2 )
+
+    @assertEqual(101.0_r_def, this%y_field(1), tol)
+    @assertEqual(-9999.0_r_def, this%y_field(2), tol)
+    @assertEqual(103.0_r_def, this%y_field(3), tol)
+    @assertEqual(-9999.0_r_def, this%y_field(4), tol)
+
+  end subroutine test_orientation_four
+
+end module extract_y_kernel_mod_test

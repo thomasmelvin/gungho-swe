@@ -1,0 +1,16 @@
+"dynamics":
+  Geometry:            spherical
+  Topology:            periodic
+  Co-ordinate system:  ll
+  Periodic X:          F
+  Periodic Y:          F
+  Constructor inputs:  edge_cells=1;smooth_passes=0
+  Nodes:               8
+  Edges:               12
+  Faces:               6
+  Nodes per face:      4
+  Edges per face:      4
+  Nodes per edge:      2
+  Max. faces per node: 4
+  North pole [lon,lat]: [      0.00,     90.00]
+  Null Island [lon,lat]: [      0.00,      0.00]

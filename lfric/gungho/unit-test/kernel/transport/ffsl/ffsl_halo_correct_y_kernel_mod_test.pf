@@ -1,0 +1,117 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2017 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+module ffsl_halo_correct_y_kernel_mod_test
+
+  use pFUnit_Mod
+  use constants_mod,                 only : i_def, r_def
+  use field_mod,                     only : field_type,      &
+                                            field_proxy_type
+  use function_space_mod,            only : function_space_type
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: ffsl_halo_correct_y_test_type
+    private
+    real(r_def), allocatable           :: cell_orientation(:)
+    real(r_def), allocatable           :: rho_x_in(:)
+    real(r_def), allocatable           :: rho_y_in(:)
+    real(r_def), allocatable           :: rho_out(:)
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type ffsl_halo_correct_y_test_type
+
+  integer(i_def), parameter :: ndf_w3 = 1
+  integer(i_def), parameter :: undf_w3 = 1
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(ffsl_halo_correct_y_test_type), intent(inout) :: this
+
+    allocate(this%cell_orientation(1:undf_w3))
+    allocate(this%rho_out(1:undf_w3))
+    allocate(this%rho_x_in(1:undf_w3))
+    allocate(this%rho_y_in(1:undf_w3))
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(ffsl_halo_correct_y_test_type), intent(inout) :: this
+
+    deallocate(this%cell_orientation)
+    deallocate(this%rho_out)
+    deallocate(this%rho_x_in)
+    deallocate(this%rho_y_in)
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  @test
+  subroutine test_all(this)
+
+    use ffsl_halo_correct_y_kernel_mod, only : ffsl_halo_correct_y_code
+
+    implicit none
+
+    class(ffsl_halo_correct_y_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: tol    = 1.0e-6_r_def
+
+    integer              :: nlayers
+    integer, allocatable :: map_w3(:)
+
+    allocate(map_w3(1:ndf_w3))
+
+    map_w3(:) = 1
+    nlayers = 1
+
+    this%rho_x_in = 1.0_r_def
+    this%rho_y_in = 2.0_r_def
+    this%cell_orientation = 3
+
+    call ffsl_halo_correct_y_code( nlayers,                   &
+                                   this%rho_out,              &
+                                   this%rho_x_in,             &
+                                   this%rho_y_in,             &
+                                   this%cell_orientation,     &
+                                   ndf_w3,                    &
+                                   undf_w3,                   &
+                                   map_w3 )
+
+    @assertEqual(2.0_r_def, this%rho_out(1), tol)
+
+    this%cell_orientation = 4
+
+    call ffsl_halo_correct_y_code( nlayers,                   &
+                                   this%rho_out,              &
+                                   this%rho_x_in,             &
+                                   this%rho_y_in,             &
+                                   this%cell_orientation,     &
+                                   ndf_w3,                    &
+                                   undf_w3,                   &
+                                   map_w3 )
+
+    @assertEqual(1.0_r_def, this%rho_out(1), tol)
+
+  end subroutine test_all
+
+end module ffsl_halo_correct_y_kernel_mod_test

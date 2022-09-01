@@ -1,0 +1,221 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2019 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> Test the trace operator computation
+!>
+module compute_trace_operator_kernel_mod_test
+
+  use constants_mod,                     only : i_def, r_def
+
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: compute_trace_operator_test_type
+     private
+
+   contains
+     procedure setUp
+     procedure tearDown
+     procedure test_all
+  end type compute_trace_operator_test_type
+
+  integer(kind=i_def), parameter :: element_order = 0
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(compute_trace_operator_test_type), intent(inout) :: this
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod,        only: final_configuration
+
+    implicit none
+
+    class(compute_trace_operator_test_type), intent(inout) :: this
+
+    call final_configuration()
+
+  end subroutine tearDown
+
+  ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use compute_trace_operator_kernel_mod, only : compute_trace_operator_code
+
+    use get_unit_test_planar_mesh_mod, only: get_outward_normals_to_faces
+
+    use get_unit_test_qfaces_mod, only: get_number_quadrature_points_per_face, &
+                                        get_w2trace_qfaces_cube_hv_basis,      &
+                                        get_w2broken_qfaces_cube_hv_basis,     &
+                                        get_quadrature_faces_hv_weights
+
+    use get_unit_test_m3x3_q3x3x3_sizes_mod, only: get_w2broken_m3x3_q3x3x3_size, &
+                                                   get_w2trace_m3x3_q3x3x3_size
+
+    use get_unit_test_entity_map_mod, only: get_w2broken_o0_entity_map
+    use get_unit_test_m3x3_q3x3x3_sizes_mod, only: get_w2broken_m3x3_q3x3x3_size, &
+                                                   get_w2trace_m3x3_q3x3x3_size
+
+    implicit none
+
+    class(compute_trace_operator_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter   :: tol = 1.0e-6_r_def
+    real(kind=r_def)              :: answer(6, 6)
+
+    integer(kind=i_def)           :: cell
+    integer(kind=i_def)           :: nlayers, nfaces_re
+    integer(kind=i_def)           :: ndf_w2b, ndf_w2t
+    ! Quadrature points per face
+    integer(kind=i_def)           :: nqp
+    integer(kind=i_def)           :: ncell_3d
+    ! Cells in the 2D mesh
+    integer(kind=i_def)           :: ncells
+    ! Dummy variable for passing into multi-getter routines where item is not needed
+    integer(kind=i_def)           :: unused
+
+    ! Maps dofs to entities - for function space in this test all dofs are on faces
+    integer(kind=i_def), allocatable  :: face_entity_map(:)
+
+    real(r_def), allocatable :: outward_normals_to_faces(:,:)
+
+    ! Quadrature weights
+    real(kind=r_def), allocatable     :: wqp(:, :)
+
+    ! Basis functions evaluated at face quadrature points
+    real (r_def),allocatable :: basis_w2trace_face(:,:,:,:)
+    real (r_def),allocatable :: basis_w2broken_face(:,:,:,:)
+    ! Operator matrix result from kernel
+    real (r_def),allocatable :: local_stencil(:,:,:)
+
+    ! NOTE: Since these integrands are all defined on faces only, we
+    ! use the methods built into the face quadrature rule to evaluate
+    ! basis functions. This data has been precomputed and stored
+    ! (canned) for tests on the planar cube mesh
+    call get_w2trace_qfaces_cube_hv_basis(basis_w2trace_face)
+    call get_w2broken_qfaces_cube_hv_basis(basis_w2broken_face)
+
+    ! Get canned information for the reference cube
+    call get_outward_normals_to_faces(outward_normals_to_faces)
+    ! Get number of reference cube faces from the outward normals array
+    nfaces_re = size( outward_normals_to_faces, 2 )
+
+    ! Compute cell 1 only
+    cell = 1
+
+    ! Get canned data for a 3-layer mesh
+    nlayers=3
+
+    call get_w2broken_m3x3_q3x3x3_size( ndf_w2b, unused, ncells, &
+                                        unused, unused,          &
+                                        unused, unused,          &
+                                        nlayers )
+    call get_w2trace_m3x3_q3x3x3_size( ndf_w2t, unused, unused,  &
+                                       unused, unused,           &
+                                       unused, unused,           &
+                                       nlayers )
+    ! Get number of points and weights for quadrature points on
+    ! horizontal and vertical faces
+    call get_number_quadrature_points_per_face(nqp)
+    call get_quadrature_faces_hv_weights(wqp)
+
+    ! Get map of dofs to cell entities
+    call get_w2broken_o0_entity_map(face_entity_map)
+
+    ncell_3d = ncells*nlayers
+    ! Array for storing the computed operator
+    allocate(local_stencil(ndf_w2t, ndf_w2b, ncell_3d))
+    local_stencil(:, :, :) = 0.0_r_def
+
+    call compute_trace_operator_code( cell,                     &
+                                      nlayers,                  &
+                                      ncell_3d,                 &
+                                      local_stencil,            &
+                                      ndf_w2b,                  &
+                                      ndf_w2t,                  &
+                                      nqp,                      &
+                                      wqp,                      &
+                                      basis_w2broken_face,      &
+                                      basis_w2trace_face,       &
+                                      face_entity_map,          &
+                                      nfaces_re,                &
+                                      outward_normals_to_faces )
+
+    call trace_ans( answer )
+    @assertEqual(answer, local_stencil(:, :, 1), tol)
+
+    deallocate(basis_w2trace_face)
+    deallocate(basis_w2broken_face)
+    deallocate(face_entity_map)
+    deallocate(local_stencil)
+    deallocate(wqp)
+    deallocate(outward_normals_to_faces)
+
+  end subroutine test_all
+
+  subroutine trace_ans( tr_op )
+
+    implicit none
+
+    real(kind=r_def), dimension(6, 6), intent(inout) :: tr_op
+
+    tr_op = reshape( [              &
+       -1.00000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       1.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       1.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       -1.00000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       -1.00000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       0.000000000000000E+00_r_def, &
+       1.000000000000000E+00_r_def  &
+       ], shape(tr_op) )
+
+    return
+
+  end subroutine trace_ans
+
+end module compute_trace_operator_kernel_mod_test

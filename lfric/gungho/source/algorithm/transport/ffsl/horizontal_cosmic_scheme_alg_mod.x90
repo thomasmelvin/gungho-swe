@@ -1,0 +1,88 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief An algorithm for the horizontal COSMIC conservative transport scheme.
+
+module horizontal_cosmic_scheme_alg_mod
+
+  use constants_mod,                     only: r_def
+  use field_mod,                         only: field_type
+  use function_space_mod,                only: function_space_type
+  use horizontal_cosmic_fluxes_alg_mod,  only: horizontal_cosmic_fluxes_alg
+  use ffsl_1d_cons_inc_alg_mod,          only: ffsl_1d_cons_inc_alg
+  use flux_direction_mod,                only: x_direction, y_direction
+
+  implicit none
+
+  private
+
+  public :: horizontal_cosmic_scheme
+
+contains
+
+  !> @brief Horizontal conservative transport using the COSMIC scheme.
+  !> @details The algorithm iterates forwards in time and transports the density
+  !!          field using the COSMIC (i.e. flux-form semi-Lagrangian with COSMIC
+  !!          splitting) advection scheme. This conservative transport routine advects
+  !!          in the horizontal direction only. The wind profile is defined analytically.
+  !> @param[in,out] increment         Density increment
+  !> @param[in]     rho               Density field
+  !> @param[in]     dep_pts_x         Departure points in the x direction
+  !> @param[in]     dep_pts_y         Departure points in the y direction
+  !> @param[in]     detj_at_w2        Det(J) at W2 dofs
+  !> @param[in]     cell_orientation  Orientation of halo cells
+  !> @param[in]     dt                The model timestep length
+  subroutine horizontal_cosmic_scheme( increment,        &
+                                       rho,              &
+                                       dep_pts_x,        &
+                                       dep_pts_y,        &
+                                       detj_at_w2,       &
+                                       cell_orientation, &
+                                       dt )
+
+    implicit none
+
+    type(field_type),    intent(inout) :: increment
+    type(field_type),    intent(in)    :: rho
+    type(field_type),    intent(in)    :: dep_pts_x
+    type(field_type),    intent(in)    :: dep_pts_y
+    type(field_type),    intent(in)    :: detj_at_w2
+    type(field_type),    intent(in)    :: cell_orientation
+    real(kind=r_def),    intent(in)    :: dt
+
+    type(function_space_type), pointer :: w2_fs     => null()
+    type(function_space_type), pointer :: w3_fs     => null()
+
+    type(field_type) :: increment_x, increment_y
+    type(field_type) :: mass_flux_x, mass_flux_y
+
+    w2_fs => dep_pts_x%get_function_space()
+    w3_fs => rho%get_function_space()
+
+    call mass_flux_x%initialise( vector_space = w2_fs )
+    call mass_flux_y%initialise( vector_space = w2_fs )
+    call increment_x%initialise( vector_space = w3_fs )
+    call increment_y%initialise( vector_space = w3_fs )
+
+    ! Call algorithm to calculate mass fluxes in x and y direction using COSMIC scheme
+    call horizontal_cosmic_fluxes_alg( rho, cell_orientation,               &
+                                       mass_flux_x, mass_flux_y, dep_pts_x, &
+                                       dep_pts_y, dt )
+
+    ! Calculate divergence (increment) in the x direction
+    call ffsl_1d_cons_inc_alg( increment_x, mass_flux_x, mass_flux_y,     &
+                               cell_orientation, x_direction, detj_at_w2)
+
+    ! Calculate divergence (increment) in the y direction
+    call ffsl_1d_cons_inc_alg( increment_y, mass_flux_x, mass_flux_y,     &
+                               cell_orientation, y_direction, detj_at_w2)
+
+    call invoke( X_plus_Y( increment, increment_x, increment_y ) )
+
+    nullify(w2_fs, w3_fs)
+
+  end subroutine horizontal_cosmic_scheme
+
+end module horizontal_cosmic_scheme_alg_mod

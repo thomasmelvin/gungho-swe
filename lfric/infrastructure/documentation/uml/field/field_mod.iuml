@@ -1,0 +1,71 @@
+' Copyright (c) 2021,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class field_mod::field_type {
+  -data : real[] <<allocatable>>
+  -override_data : real[] <<pointer>>
+  -write_method : procedure <<pointer>>
+  -read_method : procedure <<pointer>>
+  -checkpoint_write_method : procedure <<pointer>>
+  -checkpoint_read_method : procedure <<pointer>>
+
+  +intialise( <<in>>vector_space : function_space_type, <<in optional>> name : string, <<in optional>> ndata_first : logical,<<in optional>>)
+  +get_proxy() : field_proxy_type
+  +copy_field(<<out>> dest: field_type, <<in optional>> name: string)
+  +copy_field_properties(<<out>> dest: field_type, <<in optional>> name: )
+  +log_dofs( <<in>>log_level: integer, <<in>>label: string )
+  +log_field( <<in>>dump_level: integer, <<in>>checksum_level: integer, <<in>>label: string )
+  +log_minmax( <<in>>log_level: integer, <<in>>label: string )
+  +log_absmax( <<in>>log_level: integer, <<in>>label: string )
+  +field_minmax( <<out>>fmin: real, <<out>>fmax: real )
+  +set_write_behaviour(<<in>> procedure <<pointer>> : write_behaviour)
+  +get_write_behaviour() :  procedure <<pointer>> : write_behaviour
+  +can_write() : logical
+  +write_field(<in character : field_name>
+  +set_read_behaviour(<<in>> procedure <<pointer>> : read_behaviour)
+  +get_read_behaviour() :  procedure <<pointer>> : read_behaviour
+  +can_read()  : logical
+  +read_field(<in character : field_name>
+  +set_checkpoint_read_behaviour(<<in>> procedure <<pointer>> : checkpoint_read_behaviour)
+  +set_checkpoint_write_behaviour(<<in>> procedure <<pointer>> : checkpoint_write_behaviour)
+  +can_checkpoint() : logical
+  +read_checkpoint( <<in>> character: file_name )
+  +write_checkpoint( <<in>> character: file_name )
+  +field_final()
+  <<destroy>>+field_destructor_scalar()
+  <<destroy>>+field_destructor_array1d()
+  <<destroy>>+field_destructor_array2d()
+
+}
+note right
+ For clarity, this diagram
+ shows only the standard,
+ 64-bit floating-point
+ field_type object. To see
+ how other varieties of field
+ objects (such as 32-bit or
+ integer fields) are 
+ implemented, see the
+ field_varieties diagram.
+end note
+
+class field_mod::field_proxy_type {
+  +data: real[] <<pointer>>
+  +halo_request : xt_request
+
+  +halo_exchange( <<in>>depth: integer )
+  +halo_exchange_start( <<in>>depth: integer )
+  +halo_exchange_finish( <<in>>depth: integer )
+  +get_sum() : real
+  +get_min() : real
+  +get_max() : real
+  +reduction_finish()
+}
+
+class field_mod::field_pointer_type {
+  +field_ptr: field_type <<pointer>>
+
+}
+
+field_mod::field_type <- field_mod::field_proxy_type

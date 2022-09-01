@@ -1,0 +1,98 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> Test the local_mesh_map module
+!>
+module local_mesh_map_mod_test
+
+  use pFUnit_Mod
+  use constants_mod,      only: i_def
+  use local_mesh_map_mod, only: local_mesh_map_type
+
+  implicit none
+
+  private
+  public test_local_mesh_map
+
+  @testCase
+  type, public, extends( TestCase ) :: local_mesh_map_test_type
+
+  contains
+    procedure :: test_local_mesh_map
+  end type local_mesh_map_test_type
+
+  integer(i_def), parameter :: source_id  = 1
+  integer(i_def), parameter :: target_id  = 2
+
+  integer(i_def), parameter :: SourceToTarget_map( 2, 2, 4 ) =  &
+                                      reshape([  1,  2,  5,  6, &
+                                                 3,  4,  7,  8, &
+                                                 9, 10, 13, 14, &
+                                                11, 12, 15, 16 ],  [ 2, 2, 4 ] )
+  integer(i_def), parameter :: TargetToSource_map( 1, 1, 16 ) = &
+                                      reshape([  1,  1,  2,  2, &
+                                                 1,  1,  2,  2, &
+                                                 3,  3,  4,  4, &
+                                                 3,  3,  4,  4 ],  [ 1, 1,16 ] )
+contains
+
+  !> Test local_mesh_map module functionality
+  !>
+  @test
+  subroutine test_local_mesh_map( this )
+
+    implicit none
+
+    class( local_mesh_map_test_type ), intent( inout ) :: this
+
+    type(local_mesh_map_type) :: CoarseToFine_mesh_map
+    type(local_mesh_map_type) :: FineToCoarse_mesh_map
+
+    integer(i_def), allocatable :: cell_list(:), cell_map(:,:,:)
+    integer(i_def) :: i
+
+    ! Check creation of maps in both directions
+    CoarseToFine_mesh_map = local_mesh_map_type( source_id, target_id, &
+                                                 SourceToTarget_map )
+    FineToCoarse_mesh_map = local_mesh_map_type( target_id, source_id, &
+                                                 TargetToSource_map )
+    @assertEqual(1002, CoarseToFine_mesh_map%get_id() )
+    @assertEqual(2001, FineToCoarse_mesh_map%get_id() )
+
+    ! Check components of CoarseToFine map
+    @assertEqual(  1, CoarseToFine_mesh_map%get_source_id() )
+    @assertEqual(  2, CoarseToFine_mesh_map%get_target_id() )
+    @assertEqual(  4, CoarseToFine_mesh_map%get_nsource_cells())
+    @assertEqual(  2, CoarseToFine_mesh_map%get_ntarget_cells_per_source_cell_x() )
+    @assertEqual(  2, CoarseToFine_mesh_map%get_ntarget_cells_per_source_cell_y() )
+
+    ! Check components of FineToCoarse map
+    @assertEqual(  2, FineToCoarse_mesh_map%get_source_id() )
+    @assertEqual(  1, FineToCoarse_mesh_map%get_target_id() )
+    @assertEqual( 16, FineToCoarse_mesh_map%get_nsource_cells())
+    @assertEqual(  1, FineToCoarse_mesh_map%get_ntarget_cells_per_source_cell_x() )
+    @assertEqual(  1, FineToCoarse_mesh_map%get_ntarget_cells_per_source_cell_y() )
+
+    ! Check CoarseToFine cell_map (selected map)
+    allocate(cell_list(2))
+    allocate(cell_map(2,2,2))
+    cell_list = [1,4]
+    call CoarseToFine_mesh_map%get_cell_map(cell_list, cell_map)
+    do i=1, 2
+      @assertEqual( cell_map(:,:,i), SourceToTarget_map(:,:,cell_list(i) ) )
+    end do
+    deallocate (cell_list)
+    deallocate (cell_map)
+
+    ! Check FineToCoarse_mesh_map cell_map (whole map)
+    allocate(cell_map(1,1,16))
+    call FineToCoarse_mesh_map%get_cell_map(cell_map)
+    @assertEqual( cell_map, TargetToSource_map )
+    deallocate (cell_map)
+
+  end subroutine test_local_mesh_map
+
+end module local_mesh_map_mod_test

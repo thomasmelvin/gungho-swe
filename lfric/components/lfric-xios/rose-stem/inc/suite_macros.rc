@@ -1,0 +1,7 @@
+{%- macro check_unit_tests() %}
+{%-     for compiler in UNIT_TEST_WITH %}
+{%-         if compiler != 'none' %}
+{{              unit_tests_graph( compiler, "64") }}
+{%-         endif %}
+{%-     endfor %}
+{%- endmacro %}

@@ -1,0 +1,493 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+!
+! pFunit tests for the function space chain module
+!
+module function_space_chain_mod_test
+
+use constants_mod,           only: r_def, i_def, str_def, str_max_filename
+use global_mesh_mod,         only: global_mesh_type
+use function_space_mod,      only: function_space_type
+use fs_continuity_mod,       only: W0
+use halo_comms_mod,          only: initialise_halo_comms, &
+                                   finalise_halo_comms
+use mesh_mod,                only: mesh_type
+use mesh_map_mod,            only: mesh_map_type, generate_mesh_map_id
+use mesh_collection_mod,     only: mesh_collection, mesh_collection_type
+use partition_mod,           only: partition_type, partitioner_interface, &
+                                   partitioner_cubedsphere_serial
+use function_space_chain_mod,      only: function_space_chain_type
+
+use function_space_collection_mod, only: function_space_collection, &
+                                         function_space_collection_type
+use global_mesh_collection_mod,    only: global_mesh_collection_type, &
+                                         global_mesh_collection
+use local_mesh_mod,                only: local_mesh_type
+use local_mesh_collection_mod,     only: local_mesh_collection_type, &
+                                         local_mesh_collection
+use mpi_mod,                       only: store_comm, clear_comm
+use ugrid_mesh_data_mod,           only: ugrid_mesh_data_type
+use pFUnit_Mod
+
+implicit none
+
+private
+public :: function_space_chain_test_type, &
+          test_function_space_chain_api,  &
+          test_mesh_map_creation,   &
+          test_mesh_map_contents
+
+@testCase
+type, extends( MPITestCase ) :: function_space_chain_test_type
+  private
+  type(function_space_type), pointer :: function_space1 => null()
+  type(function_space_type), pointer :: function_space2 => null()
+  type(function_space_type), pointer :: function_space3 => null()
+  type(function_space_type), pointer :: function_space4 => null()
+
+  integer, allocatable :: dummy_for_gcc
+
+contains
+  procedure :: setUp
+  procedure :: tearDown
+  procedure :: test_function_space_chain_api
+  procedure :: test_mesh_map_creation
+  procedure :: test_mesh_map_contents
+end type function_space_chain_test_type
+
+character(str_def), parameter :: mesh_names(4) = &
+                           [ 'C4 ', &! 4x4   panel
+                             'C8 ', &! 8x8   panel
+                             'C16', &! 16x16 panel
+                             'C32']  ! 32x32 panel
+
+character(str_max_filename), parameter :: &
+                       filename = 'data/mesh_C32_MG.nc'
+
+integer(i_def), parameter :: npanels           = 6_i_def
+integer(i_def), parameter :: local_rank        = 0_i_def
+integer(i_def), parameter :: total_ranks       = 1_i_def
+integer(i_def), parameter :: max_stencil_depth = 0_i_def
+integer(i_def), parameter :: xproc             = 1_i_def
+integer(i_def), parameter :: yproc             = 1_i_def
+integer(i_def), parameter :: nlayers           = 5_i_def
+integer(i_def), parameter :: element_order     = 0_i_def
+real(r_def),    parameter :: domain_top        = 10000.0_r_def
+
+real(r_def), parameter :: gravity  = 10.0_r_def
+real(r_def), parameter :: radius   = 6371229.0_r_def
+real(r_def), parameter :: omega    = 8.0E-5_r_def
+real(r_def), parameter :: p_zero   = 100000.0_r_def
+real(r_def), parameter :: rd       = 300.0_r_def
+real(r_def), parameter :: cp       = 1000.0_r_def
+real(r_def), parameter :: scaling  = 125.0_r_def
+
+contains
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+subroutine setUp( this )
+
+use extrusion_mod, only: uniform_extrusion_type, PRIME_EXTRUSION
+use ncdf_quad_mod, only: ncdf_quad_type
+
+implicit none
+
+class( function_space_chain_test_type ), intent( inout ) :: this
+
+type(ugrid_mesh_data_type)      :: ugrid_mesh_data
+type(global_mesh_type), pointer :: target_global_mesh_ptr => null()
+type(global_mesh_type), pointer :: global_mesh_ptr    => null()
+type(global_mesh_type)          :: global_mesh
+type(mesh_type)                 :: mesh
+type(mesh_type), pointer        :: mesh_ptr => null()
+type(mesh_type), pointer        :: source_mesh_ptr => null()
+type(mesh_type), pointer        :: target_mesh_ptr => null()
+type(local_mesh_type)           :: local_mesh
+type(local_mesh_type), pointer  :: source_local_mesh_ptr => null()
+type(local_mesh_type), pointer  :: target_local_mesh_ptr => null()
+
+type(partition_type)               :: partition
+type(uniform_extrusion_type)       :: extrusion
+
+type(ncdf_quad_type) :: file_handler
+
+character(str_def), allocatable :: target_mesh_names(:)
+
+integer(i_def), allocatable :: gid_mesh_map(:,:,:)
+integer(i_def), allocatable :: lid_mesh_map(:,:,:)
+integer(i_def) :: ntarget_per_source_cell_x, ntarget_per_source_cell_y
+integer(i_def) :: ncells
+integer(i_def) :: target_local_mesh_id
+integer(i_def) :: mesh_id(4)
+integer(i_def) :: local_mesh_id
+integer(i_def) :: i, j, n, x, y
+integer(i_def) :: npanels = 6
+
+procedure (partitioner_interface), pointer :: partitioner_ptr => null()
+
+!Store the MPI communicator for later use
+call store_comm(this%getMpiCommunicator())
+! Initialise halo functionality
+call initialise_halo_comms( this%getMpiCommunicator() )
+
+partitioner_ptr => partitioner_cubedsphere_serial
+
+global_mesh_collection    = global_mesh_collection_type()
+mesh_collection           = mesh_collection_type()
+local_mesh_collection     = local_mesh_collection_type()
+function_space_collection = function_space_collection_type()
+
+! Create all the meshes: global and local
+do i=1, size(mesh_names)
+  call ugrid_mesh_data%read_from_file(trim(filename), mesh_names(i))
+  global_mesh = global_mesh_type( ugrid_mesh_data, npanels )
+  call ugrid_mesh_data%clear()
+  call global_mesh_collection%add_new_global_mesh( global_mesh )
+  global_mesh_ptr => global_mesh_collection % get_global_mesh( mesh_names(i) )
+
+  partition =  partition_type( global_mesh_ptr, partitioner_ptr, &
+                               xproc, yproc, max_stencil_depth,  &
+                               local_rank, total_ranks )
+  call local_mesh%initialise( global_mesh_ptr, partition )
+  call local_mesh%init_cell_owner()
+  local_mesh_id = local_mesh_collection%add_new_local_mesh( local_mesh )
+  call global_mesh%clear()
+  call local_mesh%clear()
+enddo
+
+! Now all the meshes exist, read in global mesh maps, convert them to local ids
+! and associate them with the approprate source local mesh
+call file_handler%file_open(trim(filename))
+do i=1, size(mesh_names)
+  global_mesh_ptr => global_mesh_collection % get_global_mesh (mesh_names(i))
+  source_local_mesh_ptr => local_mesh_collection % get_local_mesh (mesh_names(i))
+  call global_mesh_ptr%get_target_mesh_names(target_mesh_names)
+  do j=1, size(target_mesh_names)
+    target_local_mesh_ptr => local_mesh_collection % get_local_mesh (target_mesh_names(j))
+    if ( associated(target_local_mesh_ptr) ) then
+      call file_handler%read_map( mesh_names(i),        &
+                                  target_mesh_names(j), &
+                                  gid_mesh_map )
+      ntarget_per_source_cell_x = size(gid_mesh_map, 1)
+      ntarget_per_source_cell_y = size(gid_mesh_map, 2)
+      ncells = source_local_mesh_ptr%get_num_cells_in_layer()
+      allocate( lid_mesh_map( ntarget_per_source_cell_x, &
+                              ntarget_per_source_cell_y, &
+                              ncells ) )
+      do x=1, ntarget_per_source_cell_x
+        do y=1, ntarget_per_source_cell_y
+          do n=1, ncells
+            lid_mesh_map(x,y, source_local_mesh_ptr%get_lid_from_gid(n)) = &
+                  target_local_mesh_ptr%get_lid_from_gid(gid_mesh_map(x,y, n))
+          end do
+        end do
+      end do
+
+      target_local_mesh_id = target_local_mesh_ptr%get_id()
+      call source_local_mesh_ptr%add_local_mesh_map( target_local_mesh_id, &
+                                                     lid_mesh_map )
+
+      if(allocated( gid_mesh_map )) deallocate( gid_mesh_map )
+      if(allocated( lid_mesh_map )) deallocate( lid_mesh_map )
+    end if
+  end do
+  if(allocated( target_mesh_names )) deallocate( target_mesh_names )
+end do
+call file_handler%file_close()
+
+! Create the 3d partitioned meshes
+extrusion = uniform_extrusion_type( radius, domain_top, nlayers, &
+                                    PRIME_EXTRUSION )
+do i=1, size(mesh_names)
+  global_mesh_ptr => global_mesh_collection % get_global_mesh (mesh_names(i))
+  source_local_mesh_ptr => local_mesh_collection % get_local_mesh (mesh_names(i))
+  partition =  partition_type( global_mesh_ptr, partitioner_ptr, &
+                               xproc, yproc, max_stencil_depth,  &
+                               local_rank, total_ranks )
+  mesh = mesh_type( source_local_mesh_ptr, extrusion )
+  mesh_id(i) =  mesh_collection % add_new_mesh( mesh )
+  call mesh%clear()
+end do
+
+! Associate the local maps with their 3d mesh
+do i=1, size(mesh_names)-1
+  source_mesh_ptr => mesh_collection%get_mesh(mesh_names(i))
+  target_mesh_ptr => mesh_collection%get_mesh(mesh_names(i+1))
+  call source_mesh_ptr%add_mesh_map( target_mesh_ptr )
+  call target_mesh_ptr%add_mesh_map( source_mesh_ptr )
+end do
+
+mesh_ptr => mesh_collection % get_mesh( mesh_id(1) )
+this%function_space1 => function_space_collection%get_fs( mesh_ptr, &
+                                                          element_order, W0 )
+
+mesh_ptr => mesh_collection % get_mesh( mesh_id(2) )
+this%function_space2 => function_space_collection%get_fs( mesh_ptr, &
+                                                          element_order, W0 )
+mesh_ptr => mesh_collection % get_mesh( mesh_id(3) )
+this%function_space3 => function_space_collection%get_fs( mesh_ptr, &
+                                                          element_order, W0 )
+mesh_ptr => mesh_collection % get_mesh( mesh_id(4) )
+this%function_space4 => function_space_collection%get_fs( mesh_ptr, &
+                                                          element_order, W0 )
+
+nullify(mesh_ptr)
+
+return
+end subroutine setUp
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+subroutine tearDown( this )
+
+use configuration_mod, only: final_configuration
+
+implicit none
+
+class( function_space_chain_test_type ), intent( inout ) :: this
+
+call global_mesh_collection%clear()
+call mesh_collection%clear()
+call local_mesh_collection%clear()
+call function_space_collection%clear()
+call final_configuration()
+
+! Finalise halo functionality
+call finalise_halo_comms()
+! Clear the stored MPI communicator
+call clear_comm()
+
+end subroutine tearDown
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+@Test( npes=[1] )
+subroutine test_function_space_chain_api( this )
+
+implicit none
+
+class (function_space_chain_test_type), intent( inout ) :: this
+type  (function_space_chain_type)    :: function_space_chain
+type  (function_space_type), pointer :: test_function_space => null()
+
+type  (mesh_type), pointer :: test_mesh => null()
+
+! Instantiate function space chain
+function_space_chain = function_space_chain_type()
+
+test_mesh => this%function_space1%get_mesh()
+test_mesh => this%function_space2%get_mesh()
+test_mesh => this%function_space3%get_mesh()
+test_mesh => this%function_space4%get_mesh()
+
+call function_space_chain%add( this%function_space1 )
+call function_space_chain%add( this%function_space2 )
+call function_space_chain%add( this%function_space3 )
+call function_space_chain%add( this%function_space4 )
+
+
+! Get start of chain
+test_function_space => function_space_chain%get_start()
+@assertEqual ( this%function_space1%get_id(), test_function_space%get_id() )
+
+! Get next function space
+test_function_space => function_space_chain%get_next()
+@assertEqual ( this%function_space2%get_id(), test_function_space%get_id() )
+
+! Get prevous function space
+test_function_space => function_space_chain%get_previous()
+@assertEqual ( this%function_space1%get_id(), test_function_space%get_id() )
+
+! Get next function space
+test_function_space => function_space_chain%get_next()
+@assertEqual ( this%function_space2%get_id(), test_function_space%get_id() )
+
+! Get last function space
+test_function_space => function_space_chain%get_next()
+test_function_space => function_space_chain%get_next()
+@assertEqual ( this%function_space4%get_id(), test_function_space%get_id() )
+
+! Check a null() is return when looking for function
+! space after the end of the chain
+test_function_space => function_space_chain%get_next()
+@assertTrue ( .not. associated(test_function_space) )
+
+! Check a null() is return when looking for function
+! space before the start of chain
+test_function_space => function_space_chain%get_start()
+test_function_space => function_space_chain%get_previous()
+@assertNotAssociated ( test_function_space )
+
+return
+end subroutine test_function_space_chain_api
+
+
+!==============================================================================
+@Test( npes=[1] )
+subroutine test_mesh_map_creation ( this )
+
+implicit none
+
+class( function_space_chain_test_type ), intent( inout ) :: this
+
+type (function_space_chain_type) :: function_space_chain
+
+type(function_space_type), pointer :: function_space1 => null()
+type(function_space_type), pointer :: function_space2 => null()
+type(function_space_type), pointer :: function_space3 => null()
+type(function_space_type), pointer :: function_space4 => null()
+
+type(mesh_type), pointer :: mesh1 => null()
+type(mesh_type), pointer :: mesh2 => null()
+type(mesh_type), pointer :: mesh3 => null()
+type(mesh_type), pointer :: mesh4 => null()
+
+integer(i_def) :: mesh1_id, mesh2_id, mesh3_id, mesh4_id
+integer(i_def) :: mesh_map_id
+
+type(mesh_map_type), pointer :: mesh_map1to2 => null(), &
+                                mesh_map3to2 => null(), &
+                                mesh_map3to4 => null()
+
+
+! Instantiate function space chain
+function_space_chain = function_space_chain_type()
+
+call function_space_chain%add( this%function_space1 )
+call function_space_chain%add( this%function_space2 )
+call function_space_chain%add( this%function_space3 )
+call function_space_chain%add( this%function_space4 )
+
+! Check mesh1 has a map to mesh2 in it's mesh map collection
+function_space1 => function_space_chain%get_start()
+mesh1           => function_space1%get_mesh()
+mesh1_id        =  mesh1%get_id()
+
+
+function_space2 => function_space_chain%get_next()
+mesh2           => function_space2%get_mesh()
+mesh2_id        =  mesh2%get_id()
+
+
+mesh_map_id     =  generate_mesh_map_id(mesh1_id, mesh2_id)
+mesh_map1to2    => mesh1%get_mesh_map(mesh2)
+@assertAssociated ( mesh_map1to2 )
+@assertEqual ( mesh_map_id, mesh_map1to2%get_id() )
+
+
+! Check mesh3 has a map to mesh2 and mesh4
+! in it's mesh map collection
+function_space3 => function_space_chain%get_next()
+mesh3           => function_space3%get_mesh()
+mesh3_id        =  mesh3%get_id()
+
+function_space4 => function_space_chain%get_next()
+mesh4           => function_space4%get_mesh()
+mesh4_id        =  mesh4%get_id()
+
+mesh_map_id     =  generate_mesh_map_id(mesh3_id, mesh2_id)
+mesh_map3to2    => mesh3%get_mesh_map(mesh2)
+@assertAssociated ( mesh_map3to2 )
+@assertEqual ( mesh_map_id, mesh_map3to2%get_id() )
+
+mesh_map_id     =  generate_mesh_map_id(mesh3_id, mesh4_id)
+mesh_map3to4    => mesh3%get_mesh_map(mesh4)
+@assertAssociated ( mesh_map3to4 )
+@assertEqual ( mesh_map_id, mesh_map3to4%get_id() )
+
+return
+end subroutine test_mesh_map_creation
+
+
+!==============================================================================
+@Test( npes=[1] )
+subroutine test_mesh_map_contents ( this )
+
+implicit none
+
+class( function_space_chain_test_type ), intent( inout ) :: this
+
+type (function_space_chain_type) :: function_space_chain
+
+type(function_space_type), pointer :: function_space1 => null()
+type(function_space_type), pointer :: function_space2 => null()
+
+type(mesh_type), pointer :: mesh1 => null()
+type(mesh_type), pointer :: mesh2 => null()
+
+integer(i_def) :: mesh1_id, mesh2_id
+integer(i_def) :: mesh_map_id
+
+type(mesh_map_type), pointer :: mesh_map1to2 => null(), &
+                                mesh_map2to1 => null()
+
+integer(i_def), allocatable :: test_source_cells(:)
+integer(i_def), allocatable :: target_data(:,:,:)
+
+integer(i_def), pointer :: target_test(:,:) => null()
+
+integer(i_def) :: i
+
+! Instantiate function space chain
+function_space_chain = function_space_chain_type()
+
+call function_space_chain%add( this%function_space1 )
+call function_space_chain%add( this%function_space2 )
+call function_space_chain%add( this%function_space3 )
+call function_space_chain%add( this%function_space4 )
+
+! Get mesh map for mesh1 --> mesh2
+function_space1 => function_space_chain%get_start()
+mesh1           => function_space1%get_mesh()
+mesh1_id        =  mesh1%get_id()
+
+function_space2 => function_space_chain%get_next()
+mesh2           => function_space2%get_mesh()
+mesh2_id        =  mesh2%get_id()
+
+mesh_map_id     =  generate_mesh_map_id(mesh1_id, mesh2_id)
+mesh_map1to2    => mesh1%get_mesh_map(mesh2)
+
+mesh_map_id     =  generate_mesh_map_id(mesh2_id, mesh1_id)
+mesh_map2to1    => mesh2%get_mesh_map(mesh1)
+
+
+! Now to check it's contents (mesh1-->mesh2)
+allocate(test_source_cells(5))
+allocate(target_data(2,2,5))
+test_source_cells = [1, 30, 45, 78, 90]
+target_data = reshape( [ 1,    2,    9,    10   &
+                       , 115,  116,  123,  124  &
+                       , 185,  177,  186,  178  &
+                       , 308,  316,  307,  315  &
+                       , 355,  356,  363,  364  ], (/2,2,5/))
+
+do i=1, 5
+  target_test => mesh_map1to2%get_cell_map( test_source_cells(i) )
+  @assertEqual ( target_data(:,:,i), target_test(:,:) )
+  nullify(target_test)
+end do
+deallocate( test_source_cells, target_data )
+
+
+! Now to check it's contents (mesh2-->mesh1)
+allocate(test_source_cells(5))
+allocate(target_data(1,1,5))
+test_source_cells = [1, 3, 8, 9, 15]
+target_data = reshape( [1, 2, 4, 1, 4], (/1,1,5/) )
+
+do i=1, 5
+  target_test => mesh_map2to1%get_cell_map( test_source_cells(i) )
+  @assertEqual ( target_data(:,:,i), target_test(:,:) )
+  nullify(target_test)
+end do
+deallocate( test_source_cells, target_data )
+
+return
+end subroutine test_mesh_map_contents
+
+!==============================================================================
+end module function_space_chain_mod_test

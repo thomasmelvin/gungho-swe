@@ -1,0 +1,598 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+module gencube_ps_mod_test
+
+  use constants_mod,                  only: i_def, r_def, str_def, str_longlong
+  use gencube_ps_mod,                 only: gencube_ps_type
+  use global_mesh_map_collection_mod, only: global_mesh_map_collection_type
+  use global_mesh_map_mod,            only: global_mesh_map_type
+  use mesh_config_mod,                only: coord_sys_ll
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+
+  public :: test_C1, &
+            test_C2, &
+            test_C3, &
+            test_stretched_grid
+
+  @TestCase
+  type, extends(TestCase), public :: gencube_ps_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_C1
+    procedure test_C2
+    procedure test_C3
+    procedure test_stretched_grid
+
+  end type gencube_ps_test_type
+
+  character(str_def), parameter :: mesh_name = 'unit_test'
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(gencube_ps_test_type), intent(inout) :: this
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(gencube_ps_test_type), intent(inout) :: this
+
+  end subroutine tearDown
+
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_C1( this )
+
+    implicit none
+
+    class(gencube_ps_test_type), intent(inout) :: this
+
+    type(gencube_ps_type)  :: csgen
+    integer(i_def)         :: nodes, edges, faces
+    integer(i_def)         :: nodes_per_face, edges_per_face
+    integer(i_def)         :: nodes_per_edge
+    integer(i_def)         :: max_faces_per_node
+
+    character(str_def)      :: test_str(5)
+    character(str_longlong) :: big_test_str
+
+    character(str_def)  :: test_coord_units_x
+    character(str_def)  :: test_coord_units_y
+
+    integer(i_def)      :: test_npanels
+    integer(i_def)      :: test_edge_cells_x
+    integer(i_def)      :: test_edge_cells_y
+    integer(i_def)      :: test_nmaps
+
+    character(str_def), allocatable :: test_target_mesh_names(:)
+    integer(i_def),     allocatable :: test_maps_edge_cells_x(:)
+    integer(i_def),     allocatable :: test_maps_edge_cells_y(:)
+
+    type(global_mesh_map_collection_type), pointer :: global_mesh_maps => null()
+    type(global_mesh_map_type),            pointer :: global_mesh_map  => null()
+
+    real(r_def), parameter :: eps = 1E-09_r_def
+
+    integer(i_def), parameter :: edge_cells = 1
+    integer(i_def), parameter :: nsmooth = 0
+    integer(i_def), parameter :: npanels = 6
+    integer(i_def), parameter :: nmaps = 0
+    integer(i_def), parameter :: ncells = 6
+
+    integer(i_def) :: faces_on_face(4, 6*edge_cells*edge_cells)
+    integer(i_def) :: nodes_on_face(4, 6*edge_cells*edge_cells)
+    integer(i_def) :: edges_on_face(4, 6*edge_cells*edge_cells)
+    integer(i_def) :: nodes_on_edge(2, 2*6*edge_cells*edge_cells)
+    real(r_def) :: coords(2, 6*edge_cells*edge_cells+2)
+    real(r_def) :: face_coords(2, 6*edge_cells*edge_cells)
+
+    csgen = gencube_ps_type( mesh_name, edge_cells, nsmooth, coord_sys=coord_sys_ll )
+
+    ! Test metadata retrieval
+    call csgen%get_metadata( mesh_name          = test_str(1),       &
+                             geometry           = test_str(2),       &
+                             topology           = test_str(3),       &
+                             coord_sys          = test_str(4),       &
+                             constructor_inputs = big_test_str,      &
+                             npanels            = test_npanels,      &
+                             edge_cells_x       = test_edge_cells_x, &
+                             edge_cells_y       = test_edge_cells_y, &
+                             nmaps              = test_nmaps )
+
+
+    @assertEqual( mesh_name,   trim(test_str(1)) )
+    @assertEqual( 'spherical', trim(test_str(2)) )
+    @assertEqual( 'periodic',  trim(test_str(3)) )
+    @assertEqual( 'll',        trim(test_str(4)) )
+
+    @assertEqual( "edge_cells=1;smooth_passes=0", trim(big_test_str) )
+    @assertEqual( npanels, test_npanels )
+    @assertEqual( edge_cells, test_edge_cells_x )
+    @assertEqual( edge_cells, test_edge_cells_y )
+    @assertEqual( nmaps, test_nmaps )
+
+    ! Generate the mesh and connectivity
+    call csgen%generate()
+    ! Retrieve calculated dimensions
+    call csgen%get_dimensions(nodes, edges, faces, nodes_per_face, &
+                              edges_per_face, nodes_per_edge,      &
+                              max_faces_per_node )
+
+    ! Mesh has correct dimensions for arguments
+    @assertEqual(nodes, 6*edge_cells*edge_cells+2, "Incorrect number of vertices for mesh dimensions")
+    @assertEqual(edges, 2*6*edge_cells*edge_cells, "Incorrect number of edges for mesh dimensions")
+    @assertEqual(faces, 6*edge_cells*edge_cells, "Incorrect number of faces for mesh dimensions")
+
+    ! Mesh has correct element dimensions
+    @assertEqual(edges_per_face, 4, "Number of edges per face does not correspond to quad mesh")
+    @assertEqual(nodes_per_edge, 2, "Number of vertices per edge does not correspond to quad mesh")
+    @assertEqual(max_faces_per_node, 4, "Max number of faces around a node does not correspond to quad mesh")
+
+
+    ! Retrieve mesh connectivity
+    call csgen%get_connectivity(nodes_on_face, nodes_on_edge, &
+                                edges_on_face, faces_on_face)
+
+    ! Mesh has expected vertex values on certain faces
+    @assertEqual( [  6, 5, 2, 1 ], nodes_on_face(:,1), "Incorrect vertex sequence on faces.")
+    @assertEqual( [  5, 7, 3, 2 ], nodes_on_face(:,2), "Incorrect vertex sequence on faces.")
+    @assertEqual( [  8, 4, 3, 7 ], nodes_on_face(:,3), "Incorrect vertex sequence on faces.")
+    @assertEqual( [  6, 1, 4, 8 ], nodes_on_face(:,4), "Incorrect vertex sequence on faces.")
+    @assertEqual( [  1, 2, 3, 4 ], nodes_on_face(:,5), "Incorrect vertex sequence on faces.")
+    @assertEqual( [  6, 8, 7, 5 ], nodes_on_face(:,6), "Incorrect vertex sequence on faces.")
+
+    ! Mesh connectivity is complete
+    @assertTrue(minval(faces_on_face, 2) /= 0, "Incomplete faces_on_face connectivity.")
+    @assertTrue(minval(nodes_on_face, 2) /= 0, "Incomplete nodes_on_face connectivity.")
+    @assertTrue(minval(edges_on_face, 2) /= 0, "Incomplete edges_on_face connectivity.")
+    @assertTrue(minval(nodes_on_edge, 2) /= 0, "Incomplete nodes_on_edge connectivity.")
+
+    ! Mesh connectivity has expected values at certain points
+    @assertEqual( [ 4, 6, 2, 5 ], faces_on_face(:,1), "Incorrect faces_on_face connectivity.")
+    @assertEqual( [ 1, 6, 3, 5 ], faces_on_face(:,2), "Incorrect faces_on_face connectivity.")
+    @assertEqual( [ 6, 4, 5, 2 ], faces_on_face(:,3), "Incorrect faces_on_face connectivity.")
+    @assertEqual( [ 6, 1, 5, 3 ], faces_on_face(:,4), "Incorrect faces_on_face connectivity.")
+    @assertEqual( [ 4, 1, 2, 3 ], faces_on_face(:,5), "Incorrect faces_on_face connectivity.")
+    @assertEqual( [ 1, 4, 3, 2 ], faces_on_face(:,6), "Incorrect faces_on_face connectivity.")
+
+    @assertEqual( [  2,  3,  5,  1 ], edges_on_face(:,1), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [  5,  6,  8,  4 ], edges_on_face(:,2), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [  9, 11,  7,  8 ], edges_on_face(:,3), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [ 12,  2, 10, 11 ], edges_on_face(:,4), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [ 10,  1,  4,  7 ], edges_on_face(:,5), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [ 3,  12,  9,  6 ], edges_on_face(:,6), "Incorrect edges_on_face connectivity.")
+
+    @assertEqual( [  1, 2 ], nodes_on_edge(:,1),  "Incorrect nodes_on_edge connectivity.")
+    @assertEqual( [  6, 8 ], nodes_on_edge(:,12), "Incorrect nodes_on_edge connectivity.")
+
+    ! Retrieve mesh coordinates
+    call csgen%get_coordinates( coords,             &
+                                face_coords,        &
+                                test_coord_units_x, &
+                                test_coord_units_y )
+
+
+
+    ! Node coordinates have expected values at specified points
+    @assertTrue(abs(coords(1,1) + 45.0_r_def) < eps,            "Incorrect longitude, node 1.")
+    @assertTrue(abs(coords(2,1) - 35.264389682755_r_def) < eps, "Incorrect latitude, node 1.")
+
+    @assertTrue(abs(coords(1,8) + 135.0_r_def) < eps,           "Incorrect longitude, node 8.")
+    @assertTrue(abs(coords(2,8) + 35.264389682755_r_def) < eps, "Incorrect latitude, node 8.")
+
+    ! Check face co-ordinates for cells 1 and 6
+    @assertTrue(abs(face_coords(1,1)) < eps, "Incorrect longitude, face 1.")
+    @assertTrue(abs(face_coords(2,1)) < eps, "Incorrect latitude,  face 1.")
+
+    @assertTrue(abs(face_coords(1,6)) < eps, "Incorrect longitude, face 6.")
+    @assertTrue(abs(face_coords(2,6) +  90.0_r_def) < eps, "Incorrect latitude, face 6.")
+
+    call csgen%clear()
+
+    if ( allocated(test_target_mesh_names) ) deallocate(test_target_mesh_names)
+    if ( allocated(test_maps_edge_cells_x) ) deallocate(test_maps_edge_cells_x)
+    if ( allocated(test_maps_edge_cells_y) ) deallocate(test_maps_edge_cells_y)
+    nullify(global_mesh_maps)
+    nullify(global_mesh_map)
+
+  end subroutine test_C1
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_C2( this )
+
+    implicit none
+
+    class(gencube_ps_test_type), intent(inout) :: this
+
+    type(gencube_ps_type)  :: csgen
+    integer(i_def)         :: nodes, edges, faces
+    integer(i_def)         :: nodes_per_face, edges_per_face
+    integer(i_def)         :: nodes_per_edge
+    integer(i_def)         :: max_faces_per_node
+
+    character(str_def)      :: test_str(5)
+    character(str_longlong) :: big_test_str
+
+    character(str_def)  :: test_coord_units_x
+    character(str_def)  :: test_coord_units_y
+
+    integer(i_def)      :: test_npanels
+    integer(i_def)      :: test_edge_cells_x
+    integer(i_def)      :: test_edge_cells_y
+    integer(i_def)      :: test_nmaps
+
+    character(str_def), allocatable :: test_target_mesh_names(:)
+    integer(i_def),     allocatable :: test_maps_edge_cells_x(:)
+    integer(i_def),     allocatable :: test_maps_edge_cells_y(:)
+
+    type(global_mesh_map_collection_type), pointer :: global_mesh_maps => null()
+    type(global_mesh_map_type),            pointer :: global_mesh_map  => null()
+
+    real(r_def), parameter :: eps = 1E-09_r_def
+
+    integer(i_def), parameter :: edge_cells = 2
+    integer(i_def), parameter :: nsmooth = 0
+    integer(i_def), parameter :: npanels = 6
+    integer(i_def), parameter :: nmaps = 0
+    integer(i_def), parameter :: ncells = 24
+
+    integer(i_def) :: faces_on_face(4, 6*edge_cells*edge_cells)
+    integer(i_def) :: nodes_on_face(4, 6*edge_cells*edge_cells)
+    integer(i_def) :: edges_on_face(4, 6*edge_cells*edge_cells)
+    integer(i_def) :: nodes_on_edge(2, 2*6*edge_cells*edge_cells)
+    real(r_def) :: coords(2, 6*edge_cells*edge_cells+2)
+    real(r_def) :: face_coords(2, 6*edge_cells*edge_cells)
+
+    csgen = gencube_ps_type( mesh_name, edge_cells, nsmooth, coord_sys=coord_sys_ll )
+
+    ! Test metadata retrieval
+    call csgen%get_metadata( mesh_name          = test_str(1),  &
+                             geometry           = test_str(2),  &
+                             topology           = test_str(3),  &
+                             coord_sys          = test_str(4),  &
+                             constructor_inputs = big_test_str, &
+                             npanels            = test_npanels,      &
+                             edge_cells_x       = test_edge_cells_x, &
+                             edge_cells_y       = test_edge_cells_y, &
+                             nmaps              = test_nmaps )
+
+
+    @assertEqual( mesh_name,   trim(test_str(1)) )
+    @assertEqual( 'spherical', trim(test_str(2)) )
+    @assertEqual( 'periodic',  trim(test_str(3)) )
+    @assertEqual( 'll',        trim(test_str(4)) )
+    @assertEqual( "edge_cells=2;smooth_passes=0", trim(big_test_str) )
+    @assertEqual( npanels, test_npanels )
+    @assertEqual( edge_cells, test_edge_cells_x )
+    @assertEqual( edge_cells, test_edge_cells_y )
+    @assertEqual( nmaps, test_nmaps )
+
+    ! Generate the mesh and connectivity
+    call csgen%generate()
+    ! Retrieve calculated dimensions
+    call csgen%get_dimensions( nodes, edges, faces, nodes_per_face, &
+                               edges_per_face, nodes_per_edge,      &
+                               max_faces_per_node )
+
+    ! Mesh has correct dimensions for arguments
+    @assertEqual(nodes, 6*edge_cells*edge_cells+2, "Incorrect number of vertices for mesh dimensions")
+    @assertEqual(edges, 2*6*edge_cells*edge_cells, "Incorrect number of edges for mesh dimensions")
+    @assertEqual(faces, 6*edge_cells*edge_cells, "Incorrect number of faces for mesh dimensions")
+
+    ! Mesh has correct element dimensions
+    @assertEqual(edges_per_face, 4, "Number of edges per face does not correspond to quad mesh")
+    @assertEqual(nodes_per_edge, 2, "Number of vertices per edge does not correspond to quad mesh")
+    @assertEqual(max_faces_per_node, 4, "Max number of faces around a node does not correspond to quad mesh")
+
+
+    ! Retrieve mesh connectivity
+    call csgen%get_connectivity(nodes_on_face, nodes_on_edge, &
+                                edges_on_face, faces_on_face)
+
+    ! Mesh has expected vertex values on certain faces
+    @assertEqual( [  3,   4, 2, 1 ], nodes_on_face(:,1), "Incorrect vertex sequence on faces.")
+    @assertEqual( [  4,   7, 5, 2 ], nodes_on_face(:,2), "Incorrect vertex sequence on faces.")
+    @assertEqual( [  22, 20, 4, 3 ], nodes_on_face(:,3), "Incorrect vertex sequence on faces.")
+    @assertEqual( [  20, 18, 7, 4 ], nodes_on_face(:,4), "Incorrect vertex sequence on faces.")
+    @assertEqual( [  7,   8, 6, 5 ], nodes_on_face(:,5), "Incorrect vertex sequence on faces.")
+    @assertEqual( [  8,  11, 9, 6 ], nodes_on_face(:,6), "Incorrect vertex sequence on faces.")
+
+    ! Mesh connectivity is complete
+    @assertTrue(minval(faces_on_face, 2) /= 0, "Incomplete faces_on_face connectivity.")
+    @assertTrue(minval(nodes_on_face, 2) /= 0, "Incomplete nodes_on_face connectivity.")
+    @assertTrue(minval(edges_on_face, 2) /= 0, "Incomplete edges_on_face connectivity.")
+    @assertTrue(minval(nodes_on_edge, 2) /= 0, "Incomplete nodes_on_edge connectivity.")
+
+    ! Mesh connectivity has expected values at certain points
+    @assertEqual( [ 14,  3, 2, 17 ], faces_on_face(:,1), "Incorrect faces_on_face connectivity.")
+    @assertEqual( [  1,  4, 5, 19 ], faces_on_face(:,2), "Incorrect faces_on_face connectivity.")
+    @assertEqual( [ 16, 23, 4,  1 ], faces_on_face(:,3), "Incorrect faces_on_face connectivity.")
+    @assertEqual( [ 3,  21, 7,  2 ], faces_on_face(:,4), "Incorrect faces_on_face connectivity.")
+    @assertEqual( [ 2,   7, 6, 19 ], faces_on_face(:,5), "Incorrect faces_on_face connectivity.")
+    @assertEqual( [ 5,   8, 9, 20 ], faces_on_face(:,6), "Incorrect faces_on_face connectivity.")
+
+    @assertEqual( [  2,  3,  5,  1 ], edges_on_face(:,1), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [  5,  6, 12,  4 ], edges_on_face(:,2), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [  7,  8,  9,  3 ], edges_on_face(:,3), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [  9, 10, 17,  6 ], edges_on_face(:,4), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [ 12, 13, 15, 11 ], edges_on_face(:,5), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [ 15, 16, 22, 14 ], edges_on_face(:,6), "Incorrect edges_on_face connectivity.")
+
+    ! Panel 3 is rotated right by 90 degrees (cicrcular shift of 1)
+    @assertEqual( [ 23, 25, 21, 22 ], edges_on_face(:,9), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [ 30, 37, 26, 29 ], edges_on_face(:,12), "Incorrect edges_on_face connectivity.")
+
+    ! Panel 4 is rotated right by 90 degrees (cicrcular shift of 1)
+    @assertEqual( [ 36, 2, 34, 35 ], edges_on_face(:,14), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [ 40, 7, 36, 39 ], edges_on_face(:,16), "Incorrect edges_on_face connectivity.")
+
+    ! Panel 5 is rotated left by 90 degrees (cicrcular shift of 1)
+    @assertEqual( [ 34, 1,  41, 43 ], edges_on_face(:,17), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [ 42, 44, 14, 21 ], edges_on_face(:,20), "Incorrect edges_on_face connectivity.")
+
+    ! Panel 6
+    @assertEqual( [ 10, 45, 47, 18 ], edges_on_face(:,21), "Incorrect edges_on_face connectivity.")
+    @assertEqual( [ 48, 38, 30, 46 ], edges_on_face(:,24), "Incorrect edges_on_face connectivity.")
+
+    @assertEqual( [  1, 2 ], nodes_on_edge(:,1),  "Incorrect nodes_on_edge connectivity.")
+    @assertEqual( [  7, 5 ], nodes_on_edge(:,12), "Incorrect nodes_on_edge connectivity.")
+
+    ! Retrieve mesh coordinates
+    call csgen%get_coordinates( coords,             &
+                                face_coords,        &
+                                test_coord_units_x, &
+                                test_coord_units_y )
+
+    ! Node coordinates have expected values at specified points
+    @assertTrue(abs(coords(1,1) + 45.0_r_def) < eps, "Incorrect longitude, node 1.")
+    @assertTrue(abs(coords(1,8) - 90.0_r_def) < eps, "Incorrect latitude,  node 8.")
+    @assertTrue(abs(coords(2,1) - 35.264389682755_r_def) < eps, "Incorrect latitude, node 1.")
+    @assertTrue(abs(coords(2,8) + 0.0_r_def)  < eps, "Incorrect latitude, node 8.")
+
+    ! Check face co-ordinates for cells 1 and 6
+    @assertTrue(abs(face_coords(1,1) + 23.236737578_r_def )    < eps, "Incorrect longitude, cell 1.")
+    @assertTrue(abs(face_coords(1,6) - 113.236737578244_r_def) < eps, "Incorrect longitude, cell 6.")
+
+    @assertTrue(abs(face_coords(2,1) - 21.5307797199715_r_def) < eps, "Incorrect latitude, cell 1.")
+    @assertTrue(abs(face_coords(2,6) - 21.5307797199715_r_def) < eps, "Incorrect latitude, cell 6.")
+
+    call csgen%clear()
+
+    if ( allocated(test_target_mesh_names) ) deallocate(test_target_mesh_names)
+    if ( allocated(test_maps_edge_cells_x) ) deallocate(test_maps_edge_cells_x)
+    if ( allocated(test_maps_edge_cells_y) ) deallocate(test_maps_edge_cells_y)
+    nullify(global_mesh_maps)
+    nullify(global_mesh_map)
+
+  end subroutine test_C2
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_C3( this )
+
+    implicit none
+
+    class(gencube_ps_test_type), intent(inout) :: this
+
+    type(gencube_ps_type)  :: csgen_rot
+
+    character(str_def)  :: test_coord_units_x
+    character(str_def)  :: test_coord_units_y
+
+    real(r_def), parameter :: eps = 1E-09_r_def
+
+    integer(i_def), parameter :: edge_cells = 3
+    integer(i_def), parameter :: nsmooth = 1
+    integer(i_def), parameter :: npanels = 6
+    integer(i_def), parameter :: nmaps = 1
+
+    ! Initial locations for points used:
+    ! (1,1)  = -45,  (2,1)  =   acos(1/sqrt(2/3) =  35
+    ! (1,10) =  45,  (2,10) =   acos(1/sqrt(2/3) =  35
+    ! (1,53) = 135,  (2,53) = - acos(1/sqrt(2/3) = -35
+
+    character(str_def), parameter :: target_mesh_names(nmaps) = ['unit_test_target']
+    integer(i_def),     parameter :: target_edge_cells(nmaps) = [6]
+
+    real(r_def) :: coords_rot(2, 6*edge_cells*edge_cells+2)
+    real(r_def) :: face_coords(2, 6*edge_cells*edge_cells)
+
+    ! Testing mesh when pole is rotated
+
+    real(r_def) :: lon_north = 0.0_r_def
+    real(r_def) :: lat_north = 45.0_r_def
+    real(r_def) :: lon_null
+    real(r_def) :: lat_null
+
+    ! Calculate the null island
+    lon_null = lon_north - 180.0_r_def
+    lat_null = 90.0_r_def - lat_north
+
+    ! Further test of the rotation of the mesh
+    ! Create a new mesh as above, but with rotation of North to (0,45)
+    csgen_rot = gencube_ps_type(                             &
+                    mesh_name, edge_cells, nsmooth,          &
+                    coord_sys=coord_sys_ll,                  &
+                    rotate_mesh=.true.,                      &
+                    target_north_pole=[lon_north,lat_north], &
+                    target_null_island=[lon_null,lat_null],  &
+                    target_mesh_names=target_mesh_names,     &
+                    target_edge_cells=target_edge_cells )
+
+    ! Generate the mesh and connectivity
+    call csgen_rot%generate()
+
+    ! Retrieve rotated mesh coordinates
+    call csgen_rot%get_coordinates(coords_rot,         &
+                                   face_coords,        &
+                                   test_coord_units_x, &
+                                   test_coord_units_y)
+
+    ! Mesh coordinates have expected values at specified points
+    ! (1,1) should go from  lon = -45              -> 0 - acos(sqrt(2/3))
+    ! (2,1) should go from  lat =  acos(sqrt(2/3)) -> 0
+    ! (1,10) should go from lon =  45              -> acos(sqrt(2/3))
+    ! (2,10) should go from lat =  acos(sqrt(2/3)  -> 0
+    ! (1,53) should go from lon =  135             -> 180 - acos(sqrt(2/3))
+    ! (2,53) should go from lat = -acos(sqrt(2/3)  -> 0
+    @assertTrue(abs(coords_rot(1,1)  + 35.264389683_r_def) < eps, "Incorrect rotated mesh coordinates.")
+    @assertTrue(abs(coords_rot(2,1)  - 0_r_def) < eps, "Incorrect rotated mesh coordinates.")
+    @assertTrue(abs(coords_rot(1,10) - 35.2643896827546_r_def) < eps, "Incorrect rotated mesh coordinates.")
+    @assertTrue(abs(coords_rot(2,10) - 0_r_def) < eps, "Incorrect rotated mesh coordinates.")
+    @assertTrue(abs(coords_rot(1,53) - 144.7356103172453_r_def) < eps, "Incorrect rotated mesh coordinates.")
+    @assertTrue(abs(coords_rot(2,53) - 0_r_def) < eps, "Incorrect rotated mesh coordinates.")
+
+    ! Changing to a rotation about the north pole
+    lon_north = -135.0_r_def
+    lat_north = 90.0_r_def
+
+    lon_null = lon_north - 180.0_r_def
+    lat_null = 90.0_r_def - lat_north
+
+    ! Further test of the rotation of the mesh
+    ! Create a new mesh as above, but with rotation about pole of 45 degrees
+    csgen_rot = gencube_ps_type(                             &
+                    mesh_name, edge_cells, nsmooth,          &
+                    coord_sys=coord_sys_ll,                  &
+                    rotate_mesh=.true.,                      &
+                    target_north_pole=[lon_north,lat_north], &
+                    target_null_island=[lon_null,lat_null],  &
+                    target_mesh_names=target_mesh_names,     &
+                    target_edge_cells=target_edge_cells )
+
+    ! Generate the mesh and connectivity
+    call csgen_rot%generate()
+
+    ! Retrieve rotated mesh coordinates
+    call csgen_rot%get_coordinates(coords_rot,         &
+                                   face_coords,        &
+                                   test_coord_units_x, &
+                                   test_coord_units_y)
+
+    ! Mesh coordinates have expected values at specified points
+    ! (1,1) should go from  lon =-45             -> 0
+    ! (2,1) should go from  lat =acos(sqrt(2/3)) -> acos(sqrt(2/3))
+    ! (1,10) should go from lon =45              -> 90
+    ! (2,10) should go from lat =acos(sqrt(2/3)) -> acos(sqrt(2/3))
+    ! (1,53) should go from lon =135             -> 180
+    ! (2,53) should go from lat =-acos(sqrt(2/3))-> -acos(sqrt(2/3))
+    @assertTrue(abs(coords_rot(1,1) -  0.0_r_def) < eps, "Incorrect rotated mesh coordinates.")
+    @assertTrue(abs(coords_rot(2,1) -  35.2643896827546_r_def) < eps, "Incorrect rotated mesh coordinates.")
+    @assertTrue(abs(coords_rot(1,10) - 90.0_r_def) < eps, "Incorrect rotated mesh coordinates.")
+    @assertTrue(abs(coords_rot(2,10) - 35.2643896827546_r_def) < eps, "Incorrect rotated mesh coordinates.")
+    @assertTrue(abs(coords_rot(1,53) - 180.0_r_def) < eps, "Incorrect rotated mesh coordinates.")
+    @assertTrue(abs(coords_rot(2,53) + 35.2643896827546_r_def) < eps, "Incorrect rotated mesh coordinates.")
+
+  end subroutine test_C3
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_stretched_grid( this )
+
+    implicit none
+
+    class(gencube_ps_test_type), intent(inout) :: this
+    type(gencube_ps_type)  :: csgen_stretch
+
+    character(str_def)     :: test_coord_units_x
+    character(str_def)     :: test_coord_units_y
+
+    ! tol used as relaxed tolerance for stretched mesh values
+    ! at higher resolutions this is expected to tend towards the true value
+    real(r_def), parameter :: eps = 1E-09_r_def
+    real(r_def), parameter :: tol = 0.1
+
+    ! Higher cells used for this test to minimise deformation from a sphere
+    integer(i_def), parameter :: edge_cells = 9
+    integer(i_def), parameter :: nsmooth = 1
+    integer(i_def), parameter :: npanels = 6
+    integer(i_def), parameter :: nmaps = 1
+
+    real(r_def) :: coords(2, 6*edge_cells*edge_cells+2)
+    real(r_def) :: face_coords(2, 6*edge_cells*edge_cells)
+    real(r_def) :: stretch_factor
+
+    ! Testing a stretched mesh with 0.5 stretch factor.
+    stretch_factor = 0.5_r_def
+
+    csgen_stretch = gencube_ps_type( mesh_name, edge_cells, nsmooth, &
+                    coord_sys=coord_sys_ll,                          &
+                    stretch_factor=stretch_factor )
+
+    ! Generate the mesh and connectivity
+    call csgen_stretch%generate()
+
+    ! Retrieve mesh coordinates
+    call csgen_stretch%get_coordinates( coords,             &
+                                        face_coords,        &
+                                        test_coord_units_x, &
+                                        test_coord_units_y )
+
+    ! Mesh coordinates have expected values at specified points
+    ! (1,1)   should not change from lon =-45
+    ! (2,1)   should go from         lat =acos(sqrt(2/3)) -> 60.9778
+    ! (1,479) should not change from lon =135
+    ! (2,479) should go from         lat =-acos(sqrt(2/3))-> 1.9930
+    ! (1,361) should not change from lon =135
+    ! (2,361) should go from         lat =82.9448         -> 86.4693
+
+    @assertTrue(abs(coords(1,1)   + 45.000000000_r_def) < eps, "Incorrect x-coord, node 1.")
+    @assertTrue(abs(coords(2,1)   - 60.978362602_r_def) < tol, "Incorrect y-coord, node 1.")
+    @assertTrue(abs(coords(1,479) - 135.00000000_r_def) < eps, "Incorrect x-coord, node 479.")
+    @assertTrue(abs(coords(2,479) - 1.9859456090_r_def) < tol, "Incorrect y-coord, node 479.")
+    @assertTrue(abs(coords(1,361) - 135.00000000_r_def) < eps, "Incorrect x-coord, node 361.")
+    @assertTrue(abs(coords(2,361) - 86.471059549_r_def) < tol, "Incorrect y-coord, node 361.")
+
+    ! Testing mesh with 2.0 stretch factor. Same as 0.5 stretch factor.
+    stretch_factor = 2.0_r_def
+
+    csgen_stretch = gencube_ps_type( mesh_name, edge_cells, nsmooth, &
+                                     coord_sys=coord_sys_ll,         &
+                                     stretch_factor=stretch_factor )
+
+    ! Generate the mesh and connectivity
+    call csgen_stretch%generate()
+
+    ! Retrieve mesh coordinates
+    call csgen_stretch%get_coordinates( coords,             &
+                                        face_coords,        &
+                                        test_coord_units_x, &
+                                        test_coord_units_y )
+
+    ! Mesh coordinates have expected values at specified points
+    ! (1,1)   should not change from lon =-45
+    ! (2,1)   should go from         lat =acos(sqrt(2/3)) -> -1.9930
+    ! (1,479) should not change from lon =135
+    ! (2,479) should go from         lat =-acos(sqrt(2/3))-> -60.9778
+    ! (1,361) should not change from lon =135
+    ! (2,361) should go from         lat =82.9448         -> 75.9344
+
+    @assertTrue(abs(coords(1,1)   + 45.000000000_r_def) < eps, "Incorrect x-coord, node 1.")
+    @assertTrue(abs(coords(2,1)   + 1.9859456090_r_def) < tol, "Incorrect y-coord, node 1.")
+    @assertTrue(abs(coords(1,479) - 135.00000000_r_def) < eps, "Incorrect x-coord, node 479.")
+    @assertTrue(abs(coords(2,479) + 60.978362602_r_def) < tol, "Incorrect y-coord, node 479.")
+    @assertTrue(abs(coords(1,361) - 135.00000000_r_def) < eps, "Incorrect x-coord, node 361.")
+    @assertTrue(abs(coords(2,361) - 75.950595861_r_def) < tol, "Incorrect y-coord, node 361.")
+
+  end subroutine test_stretched_grid
+
+end module gencube_ps_mod_test

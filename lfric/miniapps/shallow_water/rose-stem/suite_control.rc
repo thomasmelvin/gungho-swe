@@ -1,0 +1,163 @@
+#!jinja2
+{%- set row    = "'row'" %}
+{%- set column = "'column'" %}
+{%- set auto   = "'auto'" %}
+{%- set custom = "'custom'" %}
+
+{%- set projectName = 'shallow_water' %}
+{%- set projectDir  = 'shallow_water' %}
+{%- set miniappFlag = True %}
+
+{%- set projectApps = ['shallow_water','mesh'] %}
+
+{# Default setting to enable xios for all tasks in this suite. Is overrided if #}
+{# 'use_xios' ["True"|"False"] is specified in the specific task directives    #}
+{%- set default_use_xios = "False" %}
+
+{# Default number of mpi ranks to be used by the xios server if unspecified    #}
+{# directly in suite.rc task. Although it is set, it should only have any      #}
+{# impact if xios is being used, i.e. if xios_nodes > 0. These aren't the most #}
+{# intuitive variable names as they're using the existing naming convention    #}
+{# They should be changed at a later date to be something more intuitive.      #}
+{%- set default_mpi_parts_xios = 0 %}
+
+{# Set the compiler debug profile for runs in this suite #}
+{# Options are ['fast-debug'|'full-debug'|'production'], #}
+{# omission defaults to 'fast-debug'                     #}
+{%- set run_application_profile = '' %}
+
+{%- set appDiagStemName = 'diagShallowWater' %}
+{%- set plotStemName = 'diagShallowWater' %}
+{%- set rdef_default    = "64" %}
+{%- set mesh_rdef       = "64" %}
+{%- set rdef_precision = "64" %}
+{%- set mesh_rdef_precision = "64" %}
+{%- set mesh_build      = "fast-debug" %}
+
+
+{%- set application_configurations = { 'shallow_water' : ['gaussian', 'gaussian_vi',
+                                                          'gaussian_ex',
+                                                          'vortex_plane', 'vortex_plane_vi',
+                                                          'thermal', 'thermal_vi',
+                                                          'vortex_sphere', 'vortex_sphere_vi',
+                                                          'williamson2', 'williamson2_vi',
+                                                          'williamson5', 'williamson5_vi',
+                                                          'galewsky', 'galewsky_vi',
+                                                          'galewsky_hr','galewsky_hr_vi'
+                                                          ] } %}
+
+{%- set canned_configurations  = ['shallow_water'] %}
+
+{%- set groups = {
+'developer': [
+    'validate_rose_meta_graph("shallow_water", appName="shallow_water")',
+    'check_config_dump_graph()',
+    'check_style_graph()',
+    'run_application("shallow_water", "gaussian_vi",
+                     resolutions=[("BiP32x32-1x1",0.001)],
+                     env={"crun":1,"nrun":200,
+                          "directives":{"default":{"mpi_parts":1,"threads":1,
+                                                   "wallclock":"00:40:00",
+                                                   "use_xios":"False"} } },
+                     plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR P:32:1 geopot 50:200 $PLOT_DIR")',
+    'run_application("shallow_water", "gaussian",
+                     resolutions=[("BiP32x32-1x1",0.001)],
+                     env={"crun":1,"nrun":200,
+                          "directives":{"default":{"mpi_parts":1,"threads":1,
+                                                   "wallclock":"00:40:00",
+                                                   "use_xios":"False"} } },
+                     plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR P:32:1 geopot 50:200 $PLOT_DIR")',
+    'run_application("shallow_water", "gaussian_ex",
+                     resolutions=[("BiP32x32-1x1",0.001)],
+                     env={"crun":1,"nrun":200,
+                          "directives":{"default":{"mpi_parts":1,"threads":1,
+                                                   "wallclock":"00:40:00",
+                                                   "use_xios":"False"} } },
+                     plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR P:32:1 geopot 50:200 $PLOT_DIR")',
+    'run_application("shallow_water", "thermal_vi",
+                     resolutions=[("BiP32x32-1x1",0.001)],
+                     env={"crun":1,"nrun":200,
+                          "directives":{"default":{"mpi_parts":1,"threads":1,
+                                                   "wallclock":"00:40:00",
+                                                   "use_xios":"False"} } },
+                     plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR P:32:1 buoyancy:geopot 50:200 $PLOT_DIR")',
+    'run_application("shallow_water", "williamson2_vi",
+                     resolutions=[("C24",1800.0)],
+                     env={"crun":1,"nrun":720,
+                          "directives":{"default":{"mpi_parts":6,"threads":3,
+                                                   "wallclock":"01:00:00",
+                                                   "use_xios":"False"} } },
+                     plotstr="plot_error.py ' + plotStemName + ' $NODAL_DATA_DIR C geopot 360:720 $PLOT_DIR")',
+    'run_application("shallow_water", "williamson5_vi",
+                     resolutions=[("C24",1800.0)],
+                     env={"crun":1,"nrun":720,
+                          "directives":{"default":{"mpi_parts":6,"threads":3,
+                                                   "wallclock":"01:00:00",
+                                                   "use_xios":"False"} } },
+                     plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR C geopot 180:720 $PLOT_DIR")',
+    'run_application("shallow_water", "galewsky_vi",
+                     resolutions=[("C24",1800.0)],
+                     env={"crun":1,"nrun":288,
+                          "directives":{"default":{"mpi_parts":6,"threads":1,
+                                                   "wallclock":"00:40:00",
+                                                   "use_xios":"False"} } },
+                     plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR C q 72:288 $PLOT_DIR")',
+    'run_application("shallow_water", "galewsky",
+                     resolutions=[("C24",1800.0)],
+                     env={"crun":1,"nrun":288,
+                          "directives":{"default":{"mpi_parts":6,"threads":3,
+                                                   "wallclock":"00:40:00",
+                                                   "use_xios":"False"} } },
+                     plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR C q 72:288 $PLOT_DIR")',
+    'check_compilers("shallow_water", "williamson2_vi", "fast-debug",
+                     resolution=("C24",1800.0))',
+    'canned_test("shallow_water")',
+],
+'nightly': [
+    'run_application("shallow_water", "vortex_plane_vi",
+                     resolutions=[("BiP64x64-1x1",0.002)],
+                     env={"crun":1,"nrun":2000,
+                          "directives":{"default":{"mpi_parts":6,"threads":1,
+                                                   "wallclock":"01:00:00",
+                                                   "use_xios":"False"} } },
+                     plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR P:64:1 wind:q 500:2000 $PLOT_DIR",
+                     checkkgo=False)',
+    'run_application("shallow_water", "galewsky_vi",
+                     resolutions=[("C96",450.0)],
+                     env={"crun":1,"nrun":1152,
+                          "directives":{"default":{"mpi_parts":6,"threads":3,
+                                                   "wallclock":"01:00:00",
+                                                   "use_xios":"False"} } },
+                     plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR C q 288:1152 $PLOT_DIR",
+                     checkkgo=False)',
+    'run_application("shallow_water", "thermal",
+                     resolutions=[("BiP32x32-1x1",0.001)],
+                     env={"crun":1,"nrun":200,
+                          "directives":{"default":{"mpi_parts":1,"threads":1,
+                                                   "wallclock":"00:40:00",
+                                                   "use_xios":"False"} } },
+                     plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR P:32:1 buoyancy:geopot 50:200 $PLOT_DIR",
+                     checkkgo=False)',
+    'run_application("shallow_water", "vortex_plane",
+                     resolutions=[("BiP64x64-1x1",0.002)],
+                     env={"crun":1,"nrun":2000,
+                          "directives":{"default":{"mpi_parts":6,"threads":1,
+                                                   "wallclock":"01:00:00",
+                                                   "use_xios":"False"} } },
+                     plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR P:64:1 q 500:2000 $PLOT_DIR",
+                     checkkgo=False)',
+    'run_application("shallow_water", "williamson5",
+                     resolutions=[("C24",1800.0)],
+                     env={"crun":1,"nrun":720,
+                          "directives":{"default":{"mpi_parts":6,"threads":3,
+                                                   "wallclock":"01:00:00",
+                                                   "use_xios":"False"} } },
+                     plotstr="plot_swe.py ' + plotStemName + ' $NODAL_DATA_DIR C geopot 180:720 $PLOT_DIR",
+                     checkkgo=False)',
+],
+} %}
+
+%include inc/swe_paper.rc
+{%- do groups.update(swe_paper_groups) %}
+
+#########################################################################################

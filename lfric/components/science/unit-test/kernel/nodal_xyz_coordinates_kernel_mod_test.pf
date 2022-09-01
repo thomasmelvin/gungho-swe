@@ -1,0 +1,205 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+module nodal_xyz_coordinates_kernel_mod_test
+
+  use constants_mod,                 only : i_def, r_def
+
+  use get_unit_test_m3x3_q3x3x3_sizes_mod, only : get_w0_m3x3_q3x3x3_size, &
+                                                  get_w2_m3x3_q3x3x3_size, &
+                                                  get_w3_m3x3_q3x3x3_size
+
+  use get_unit_test_m3x3_dofmap_mod,       only : get_w0_m3x3_dofmap, &
+                                                  get_w2_m3x3_dofmap, &
+                                                  get_w3_m3x3_dofmap
+
+  use get_unit_test_w2nodal_basis_mod,     only : get_w0_w2nodal_basis
+
+  use get_unit_test_3x3x3_chi_mod,         only : get_w0_3x3x3_field
+
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: nodal_xyz_coordinates_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type nodal_xyz_coordinates_test_type
+
+  integer(i_def), parameter :: element_order = 0
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use chi_transform_mod,          only : init_chi_transforms
+    use feign_config_mod,           only : feign_finite_element_config
+    use finite_element_config_mod,  only : cellshape_quadrilateral, &
+                                           coord_system_xyz
+
+    implicit none
+
+    class(nodal_xyz_coordinates_test_type), intent(inout) :: this
+
+    call feign_finite_element_config(      &
+        cellshape=cellshape_quadrilateral, &
+        coord_order=0_i_def,               &
+        coord_system=coord_system_xyz,     &
+        element_order=0_i_def,             &
+        rehabilitate=.true. )
+
+    call init_chi_transforms()
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use chi_transform_mod, only: final_chi_transforms
+    use configuration_mod, only: final_configuration
+
+    implicit none
+
+    class(nodal_xyz_coordinates_test_type), intent(inout) :: this
+
+    ! Finalise namelists
+    call final_configuration()
+    call final_chi_transforms()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use nodal_xyz_coordinates_kernel_mod, only: nodal_xyz_coordinates_code
+
+    implicit none
+
+    class(nodal_xyz_coordinates_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: dx = 6000.0_r_def
+    real(r_def), parameter :: dy = 1000.0_r_def
+    real(r_def), parameter :: dz = 2000.0_r_def
+    real(r_def), parameter :: tol = 1.0e-6_r_def
+
+    ! Fields
+    real(r_def), allocatable :: nodal1(:), nodal2(:), nodal3(:)
+    real(r_def), allocatable :: chi1(:), chi2(:), chi3(:), panel_id(:)
+
+    ! Dofmaps
+    integer(i_def), allocatable :: map_w0(:,:)
+    integer(i_def), allocatable :: map_w2(:,:)
+    integer(i_def), allocatable :: map_w3(:,:)
+
+    ! Basis functions
+    real(r_def),    allocatable :: basis_w0(:,:,:)
+
+    real(r_def) :: answer
+
+    integer(kind=i_def) :: i, j, k, cell
+
+    ! Sizes
+    integer(kind=i_def) :: nlayers, ncells
+    integer(kind=i_def) :: ndf_w0, ndf_w2, ndf_w3
+    integer(kind=i_def) :: df_w0, df_w2
+    integer(kind=i_def) :: undf_w0, undf_w2, undf_w3
+    integer(kind=i_def) :: dim_space, dim_space_diff
+    integer(kind=i_def) :: nqp_h, nqp_v
+
+    nlayers = 3
+    call get_w0_m3x3_q3x3x3_size( ndf_w0, undf_w0, ncells,   &
+                                  dim_space, dim_space_diff, &
+                                  nqp_h, nqp_v,              &
+                                  nlayers )
+    call get_w2_m3x3_q3x3x3_size( ndf_w2, undf_w2, ncells,   &
+                                  dim_space, dim_space_diff, &
+                                  nqp_h, nqp_v,              &
+                                  nlayers )
+    call get_w3_m3x3_q3x3x3_size( ndf_w3, undf_w3, ncells,   &
+                                  dim_space, dim_space_diff, &
+                                  nqp_h, nqp_v,              &
+                                  nlayers )
+
+    call get_w0_m3x3_dofmap(map_w0)
+    call get_w2_m3x3_dofmap(map_w2)
+    call get_w3_m3x3_dofmap(map_w3)
+
+    call get_w0_w2nodal_basis(basis_w0)
+
+    allocate(nodal1(undf_w2))
+    allocate(nodal2(undf_w2))
+    allocate(nodal3(undf_w2))
+
+    ! Compute coordinates
+    allocate(chi1(undf_w0))
+    allocate(chi2(undf_w0))
+    allocate(chi3(undf_w0))
+    allocate(panel_id(undf_w3))
+
+    call get_w0_3x3x3_field(chi1, chi2, chi3, dx, dy, dz, &
+                            map_w0,nlayers)
+
+    panel_id(:) = 1.0_r_def
+
+    ! Create the data
+    nodal1(:) = 0.0_r_def
+    nodal2(:) = 0.0_r_def
+    nodal3(:) = 0.0_r_def
+
+    ! Call the kernel
+    cell = 3
+
+    call nodal_xyz_coordinates_code(nlayers,         &
+                                    nodal1,          &
+                                    nodal2,          &
+                                    nodal3,          &
+                                    chi1,            &
+                                    chi2,            &
+                                    chi3,            &
+                                    panel_id,        &
+                                    ndf_w2, undf_w2, &
+                                    map_w2(:,cell),  &
+                                    ndf_w0, undf_w0, &
+                                    map_w0(:,cell),  &
+                                    basis_w0,        &
+                                    ndf_w3, undf_w3, &
+                                    map_w3(:,cell)   &
+                                   )
+
+    ! Test the answer
+    answer = chi1(map_w0(1, cell))
+    @assertEqual(answer, nodal1(map_w2(1, cell)), tol)
+
+    answer = 0.5_r_def*(chi2(map_w0(1, cell))+chi2(map_w0(4, cell)))
+    @assertEqual(answer, nodal2(map_w2(1, cell)), tol)
+
+    answer = chi3(map_w0(5, cell))
+    @assertEqual(answer, nodal3(map_w2(6, cell)), tol)
+
+    deallocate(nodal1)
+    deallocate(nodal2)
+    deallocate(nodal3)
+    deallocate(chi1)
+    deallocate(chi2)
+    deallocate(chi3)
+    deallocate(panel_id)
+    deallocate(map_w0)
+    deallocate(map_w2)
+    deallocate(map_w3)
+    deallocate(basis_w0)
+
+  end subroutine test_all
+
+end module nodal_xyz_coordinates_kernel_mod_test

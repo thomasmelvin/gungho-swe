@@ -1,0 +1,32 @@
+' (c) Crown copyright 2018 Met Office. All rights reserved.
+' The file LICENCE, distributed with this code, contains details of the terms
+' under which the code may be used.
+
+class quadrature_face_mod::quadrature_face_type {
+  -weights_xyz : real[:]  <<allocatable>>
+  -points_xyz : real[::] <<allocatable>>
+  -np_xyz : integer
+  -nfaces : integer
+  -nfaces_horizontal : integer
+  -nfaces_vertical : integer
+
+  +<<create>>init_quadrature_variable( <<in>>np_1: integer, <<in>>np_2: integer, <<in>>horizontal_faces: logical, <<in>>vertical_faces: logical, <<in>>reference_element: reference_element_type, <<in>>rule: quadrature_rule_type ) : quadrature_face_type
+  +<<create>>init_quadrature_symmetrical( <<in>>np: integer, <<in>>horizontal_faces: logical, <<in>>vertical_faces: logical, <<in>>reference_element: reference_element_type, <<in>>rule: quadrature_rule_type ) : quadrature_face_type
+  +<<destroy>>quadrature_destructor()
+  +quadrature_final()
+
+  +compute_function( <<in>>function_to_call: integer, <<in>> function_space: function_space_type, <<in>>fspace_dim: integer, <<in>>ndf: integer, <<out>>basis: real[::::] )
+  +get_quadrature_proxy() : quadrature_face_proxy_type
+}
+
+class quadrature_face_mod::quadrature_face_proxy_type {
+  +weights_xyz: real[:]  <<pointer>>
+  +points_xyz : real[::] <<pointer>>
+  +np_xyz : integer
+  +nfaces : integer
+  +nfaces_horizontal : integer
+  +nfaces_vertical : integer
+}
+
+quadrature_mod::quadrature_type <|-- quadrature_face_mod::quadrature_face_type
+quadrature_face_mod::quadrature_face_proxy_type -> quadrature_face_mod::quadrature_face_type

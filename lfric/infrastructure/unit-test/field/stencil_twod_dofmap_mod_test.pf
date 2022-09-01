@@ -1,0 +1,400 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2020 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+! Test the 2D stencil_dofmap representation
+module stencil_twod_dofmap_mod_test
+
+  use constants_mod,            only : i_def, i_native
+  use pFUnit_Mod
+  use stencil_2D_dofmap_mod,    only: stencil_2D_dofmap_type, STENCIL_2D_CROSS
+  use local_mesh_mod,           only: local_mesh_type
+  use master_dofmap_mod,        only: master_dofmap_type
+  use mesh_collection_mod,      only: mesh_collection_type, mesh_collection
+  use mesh_mod,                 only: mesh_type, PLANE, PLANE_BI_PERIODIC
+
+  implicit none
+
+  private
+  public :: test_planar, test_biperiodic
+
+  @TestCase
+  type, extends(TestCase), public :: stencil_2D_dofmap_test_type
+    private
+    integer(i_def) :: planar_mesh_id
+    integer(i_def) :: biperiodic_mesh_id
+    type(local_mesh_type) :: unit_test_local_mesh
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure get_local_mesh_ptr
+    procedure test_planar
+    procedure test_biperiodic
+  end type stencil_2D_dofmap_test_type
+
+contains
+
+  subroutine setUp(this)
+
+    implicit none
+
+    class(stencil_2D_dofmap_test_type), intent(inout) :: this
+
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    type(mesh_type) :: planar_mesh
+    type(mesh_type) :: biperiodic_mesh
+
+    ! Create top level mesh collection
+    mesh_collection = mesh_collection_type()
+
+    call this%unit_test_local_mesh%initialise()
+    unit_test_local_mesh_ptr => this%get_local_mesh_ptr()
+
+    ! Add canned meshes to the mesh collection
+    planar_mesh = mesh_type( PLANE, unit_test_local_mesh_ptr )
+    this%planar_mesh_id = mesh_collection%add_new_mesh( planar_mesh )
+    biperiodic_mesh = mesh_type( PLANE_BI_PERIODIC, unit_test_local_mesh_ptr )
+    this%biperiodic_mesh_id = mesh_collection%add_new_mesh( biperiodic_mesh )
+
+  end subroutine setUp
+
+
+  subroutine tearDown(this)
+
+    implicit none
+
+    class(stencil_2D_dofmap_test_type), intent(inout) :: this
+
+    ! Clear top level mesh collection
+    call mesh_collection%clear()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  function get_local_mesh_ptr(this) result(unit_test_local_mesh_ptr)
+    implicit none
+    class(stencil_2D_dofmap_test_type), intent(inout), target :: this
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    unit_test_local_mesh_ptr => this%unit_test_local_mesh
+  end function get_local_mesh_ptr
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+@test
+  subroutine test_planar(this)
+    use stencil_2D_dofmap_mod,  only: stencil_2D_dofmap_type, STENCIL_2D_CROSS
+    use master_dofmap_mod,      only: master_dofmap_type
+    use reference_element_mod,  only: W, E, N, S
+
+    implicit none
+
+    class(stencil_2D_dofmap_test_type), intent(inout) :: this
+    type(stencil_2D_dofmap_type)                      :: stencil_dofmap
+    type(master_dofmap_type)                          :: master_dofmap
+    type(mesh_type), pointer                          :: mesh => null()
+
+    integer(i_def), pointer :: master_map_copy(:,:)  => null()
+    integer(i_def), pointer :: stencil_map(:,:,:) => null()
+    integer(i_def), pointer :: whole_map(:,:,:,:) => null()
+    integer(i_def), pointer :: stencil_sizes(:,:)  => null()
+    integer(i_def)          :: mesh_dimension_x, mesh_dimension_y
+    integer(i_def)          :: ncells, next_stencil_cell, cell, df, extent, &
+                               branch, ndf
+
+    integer(i_def), allocatable, dimension(:,:) :: master_map_init
+
+    mesh => mesh_collection%get_mesh( this%planar_mesh_id )
+    mesh_dimension_x = 3
+    mesh_dimension_y = 3
+    ndf = 3 ! Number of dofs per cell
+    extent = 2 ! The extent to which the stencil reaches
+    ncells = mesh_dimension_x * mesh_dimension_y
+    allocate( master_map_init(ndf,0:ncells))
+
+    ! Number all the dofs. Numbers are arbitrary. But aligning with cell number
+    ! makes error messages easier to understand
+    do cell = 1,ncells
+      do df = 1,ndf
+        master_map_init(df,cell) = cell + (df - 1) * 10
+      end do
+    end do
+    master_dofmap = master_dofmap_type(master_map_init)
+    deallocate( master_map_init )
+
+    ! Check mesh size is as assumed in the subsequent stencil tests
+    @assertEqual(ncells,mesh%get_ncells_2d())
+
+    ! Obtain a copy of the whole dofmap
+    master_map_copy => master_dofmap%get_whole_master_dofmap()
+
+    ! Create stencil of required type and extent
+    stencil_dofmap = stencil_2D_dofmap_type( STENCIL_2D_CROSS,    &
+                                             extent,              &
+                                             ndf,                 &
+                                             mesh,                &
+                                             master_dofmap )
+
+    ! Get the whole dofmap which will be tested alongside the cell stencil dofmaps
+    whole_map => stencil_dofmap%get_whole_dofmap()
+
+    ! Test 1: Get pointer to stencil_sizes array
+    stencil_sizes => stencil_dofmap%get_stencil_sizes()
+
+
+    ! Test 2: Check first stencil point of all stencils is same as dofmap
+    do cell = 1,ncells
+      stencil_map => stencil_dofmap%get_dofmap(cell)
+      ! Check each branch of stencil
+      do branch = 1, 4
+        do df = 1,ndf
+          ! Check map for cell
+          @assertEqual( master_map_copy(df,cell), stencil_map(df,1,branch) )
+          ! Check map in whole map array
+          @assertEqual( master_map_copy(df,cell), whole_map(df,1,branch,cell) )
+        end do
+      end do
+    end do
+
+    ! Test 3: Check the rest of the stencil
+    do df=1,ndf
+      stencil_map => stencil_dofmap%get_dofmap(1)
+      @assertEqual(1, stencil_sizes(W, 1))
+      @assertEqual(1, stencil_sizes(S, 1))
+      @assertEqual(3, stencil_sizes(E, 1))
+      @assertEqual(3, stencil_sizes(N, 1))
+
+      @assertEqual(master_map_copy(df, 2), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 3), stencil_map(df,3,E))
+      @assertEqual(master_map_copy(df, 4), stencil_map(df,2,N))
+      @assertEqual(master_map_copy(df, 7), stencil_map(df,3,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(2)
+      @assertEqual(2, stencil_sizes(W, 2))
+      @assertEqual(1, stencil_sizes(S, 2))
+      @assertEqual(2, stencil_sizes(E, 2))
+      @assertEqual(3, stencil_sizes(N, 2))
+
+      @assertEqual(master_map_copy(df, 1), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 3), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 5), stencil_map(df,2,N))
+      @assertEqual(master_map_copy(df, 8), stencil_map(df,3,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(3)
+      @assertEqual(3, stencil_sizes(W, 3))
+      @assertEqual(1, stencil_sizes(S, 3))
+      @assertEqual(1, stencil_sizes(E, 3))
+      @assertEqual(3, stencil_sizes(N, 3))
+
+      @assertEqual(master_map_copy(df, 2), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 1), stencil_map(df,3,W))
+      @assertEqual(master_map_copy(df, 6), stencil_map(df,2,N))
+      @assertEqual(master_map_copy(df, 9), stencil_map(df,3,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(4)
+      @assertEqual(1, stencil_sizes(W, 4))
+      @assertEqual(2, stencil_sizes(S, 4))
+      @assertEqual(3, stencil_sizes(E, 4))
+      @assertEqual(2, stencil_sizes(N, 4))
+
+      @assertEqual(master_map_copy(df, 1), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 5), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 6), stencil_map(df,3,E))
+      @assertEqual(master_map_copy(df, 7), stencil_map(df,2,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(5)
+      @assertEqual(2, stencil_sizes(W, 5))
+      @assertEqual(2, stencil_sizes(S, 5))
+      @assertEqual(2, stencil_sizes(E, 5))
+      @assertEqual(2, stencil_sizes(N, 5))
+
+      @assertEqual(master_map_copy(df, 4), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 2), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 6), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 8), stencil_map(df,2,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(6)
+      @assertEqual(3, stencil_sizes(W, 6))
+      @assertEqual(2, stencil_sizes(S, 6))
+      @assertEqual(1, stencil_sizes(E, 6))
+      @assertEqual(2, stencil_sizes(N, 6))
+
+      @assertEqual(master_map_copy(df, 5), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 4), stencil_map(df,3,W))
+      @assertEqual(master_map_copy(df, 3), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 9), stencil_map(df,2,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(7)
+      @assertEqual(1, stencil_sizes(W, 7))
+      @assertEqual(3, stencil_sizes(S, 7))
+      @assertEqual(3, stencil_sizes(E, 7))
+      @assertEqual(1, stencil_sizes(N, 7))
+
+      @assertEqual(master_map_copy(df, 4), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 1), stencil_map(df,3,S))
+      @assertEqual(master_map_copy(df, 8), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 9), stencil_map(df,3,E))
+
+      stencil_map => stencil_dofmap%get_dofmap(8)
+      @assertEqual(2, stencil_sizes(W, 8))
+      @assertEqual(3, stencil_sizes(S, 8))
+      @assertEqual(2, stencil_sizes(E, 8))
+      @assertEqual(1, stencil_sizes(N, 8))
+
+      @assertEqual(master_map_copy(df, 7), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 5), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 2), stencil_map(df,3,S))
+      @assertEqual(master_map_copy(df, 9), stencil_map(df,2,E))
+
+      stencil_map => stencil_dofmap%get_dofmap(9)
+      @assertEqual(3, stencil_sizes(W, 9))
+      @assertEqual(3, stencil_sizes(S, 9))
+      @assertEqual(1, stencil_sizes(E, 9))
+      @assertEqual(1, stencil_sizes(N, 9))
+
+      @assertEqual(master_map_copy(df, 8), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 7), stencil_map(df,3,W))
+      @assertEqual(master_map_copy(df, 6), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 3), stencil_map(df,3,S))
+    end do
+
+  end subroutine test_planar
+
+  @test
+  subroutine test_biperiodic(this)
+    use stencil_2D_dofmap_mod,  only: stencil_2D_dofmap_type, STENCIL_2D_CROSS
+    use master_dofmap_mod,      only: master_dofmap_type
+    use reference_element_mod,  only: W, E, N, S
+
+    implicit none
+
+    class(stencil_2D_dofmap_test_type), intent(inout) :: this
+    type(stencil_2D_dofmap_type)                   :: stencil_dofmap
+    type(master_dofmap_type)                       :: master_dofmap
+    type(mesh_type), pointer                       :: mesh => null()
+
+    integer(i_def), pointer :: master_map_copy(:,:)  => null()
+    integer(i_def), pointer :: stencil_map(:,:,:) => null()
+    integer(i_def), pointer :: whole_map(:,:,:,:) => null()
+    integer(i_def), pointer :: stencil_sizes(:,:)  => null()
+    integer(i_def)                              :: mesh_dimension_x, &
+                                             mesh_dimension_y
+    integer(i_def)                              :: ncells, next_stencil_cell, &
+                                             cell, df, extent, branch, ndf
+    integer(i_def), allocatable, dimension(:,:) :: master_map_init
+
+
+    mesh => mesh_collection%get_mesh( this%biperiodic_mesh_id )
+    mesh_dimension_x = 3
+    mesh_dimension_y = 3
+    ndf = 3 ! Number of dofs per cell
+    extent = 1 ! The extent to which the stencil reaches (1 due to mesh size)
+    ncells = mesh_dimension_x * mesh_dimension_y
+    allocate( master_map_init(ndf,0:ncells))
+
+    ! Number all the dofs. Numbers are arbitrary. But aligning with cell number
+    ! makes error messages easier to understand
+    do cell = 1,ncells
+      do df = 1,ndf
+        master_map_init(df,cell) = cell + (df - 1) * 10
+      end do
+    end do
+    master_dofmap = master_dofmap_type(master_map_init)
+    deallocate( master_map_init )
+
+    ! Check mesh size is as assumed in the subsequent stencil tests
+    @assertEqual(ncells,mesh%get_ncells_2d())
+
+    ! Obtain a copy of the whole dofmap
+    master_map_copy => master_dofmap%get_whole_master_dofmap()
+
+    ! Create stencil of required type and extent
+    stencil_dofmap = stencil_2D_dofmap_type( STENCIL_2D_CROSS,    &
+                                             extent,              &
+                                             ndf,                 &
+                                             mesh,                &
+                                             master_dofmap )
+
+    ! Get the whole dofmap which will be tested alongside the cell stencil dofmaps
+    whole_map => stencil_dofmap%get_whole_dofmap()
+
+    ! Test 1: Get pointer to stencil_sizes array
+    stencil_sizes => stencil_dofmap%get_stencil_sizes()
+
+    ! Test 2: Check first stencil point of all stencils is same as dofmap
+    do cell = 1,ncells
+      stencil_map => stencil_dofmap%get_dofmap(cell)
+      ! Check each branch of stencil
+      do branch = 1, 4
+        ! Check all the branches of the stencil are the same length
+        @assertEqual(2, stencil_sizes(branch, cell))
+        do df = 1,ndf
+          ! Check map for cell
+          @assertEqual( master_map_copy(df,cell), stencil_map(df,1,branch) )
+          ! Check map in whole map array
+          @assertEqual( master_map_copy(df,cell), whole_map(df,1,branch,cell) )
+        end do
+      end do
+    end do
+
+    ! Test 3: Check the rest of the stencil
+    do df=1,ndf
+      stencil_map => stencil_dofmap%get_dofmap(1)
+      @assertEqual(master_map_copy(df, 3), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 7), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 2), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 4), stencil_map(df,2,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(2)
+      @assertEqual(master_map_copy(df, 1), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 8), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 3), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 5), stencil_map(df,2,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(3)
+      @assertEqual(master_map_copy(df, 2), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 9), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 1), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 6), stencil_map(df,2,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(4)
+      @assertEqual(master_map_copy(df, 6), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 1), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 5), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 7), stencil_map(df,2,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(5)
+      @assertEqual(master_map_copy(df, 4), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 2), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 6), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 8), stencil_map(df,2,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(6)
+      @assertEqual(master_map_copy(df, 5), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 3), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 4), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 9), stencil_map(df,2,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(7)
+      @assertEqual(master_map_copy(df, 9), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 4), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 8), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 1), stencil_map(df,2,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(8)
+      @assertEqual(master_map_copy(df, 7), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 5), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 9), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 2), stencil_map(df,2,N))
+
+      stencil_map => stencil_dofmap%get_dofmap(9)
+      @assertEqual(master_map_copy(df, 8), stencil_map(df,2,W))
+      @assertEqual(master_map_copy(df, 6), stencil_map(df,2,S))
+      @assertEqual(master_map_copy(df, 7), stencil_map(df,2,E))
+      @assertEqual(master_map_copy(df, 3), stencil_map(df,2,N))
+    end do
+  end subroutine test_biperiodic
+
+end module stencil_twod_dofmap_mod_test

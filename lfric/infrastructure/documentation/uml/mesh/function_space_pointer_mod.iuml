@@ -1,0 +1,13 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class function_space_pointer_mod::function_space_pointer_type{
+-function_space_target: function_space_type <<pointer>>
++<<create>> function_space_pointer_constructor(<in>function_space:<<function_space_type, pointer>>): function_space_pointer_type
++<<destroy>> function_space_pointer_destructor()
++get_target(): function_space_type <<pointer>>
++clear()
+}
+
+function_space_pointer_mod::function_space_pointer_type -> function_space_mod::function_space_type : <size:8>-function_space_target\n<size:8><<pointer>>

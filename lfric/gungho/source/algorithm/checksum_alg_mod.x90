@@ -1,0 +1,86 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!>@brief Write checksums to file for input fields
+module checksum_alg_mod
+
+  implicit none
+
+  private
+  public :: checksum_alg
+
+contains
+  !> @brief Computes the checksum of a field X as the inner product:
+  !>        checksum = sum(X.X)
+  !>        Writes each checksum to file geenrate from the model and field name
+  !> @param[in] model_name Name of the model to checksum
+  !> @param[in] field1 First field to checksum
+  !> @param[in] name1 Name of the first field to checksum
+  !> @param[in] field2 Optional second field to checksum
+  !> @param[in] name2 Optional name of the second field to checksum
+  !> @param[in] field3 Optional third field to checksum
+  !> @param[in] name3 Optional name of the third field to checksum
+  !> @param[in] field4 Optional fourth field to checksum
+  !> @param[in] name4 Optional name of the fourth field to checksum
+  subroutine checksum_alg(model_name, field1, name1, field2, name2, &
+                                      field3, name3, field4, name4, &
+                                      field_bundle, bundle_name)
+    use field_mod,       only: field_type
+    use constants_mod,   only: i_def, r_def, str_max_filename
+    use mpi_mod,         only: get_comm_rank
+    use log_mod,         only: log_event,         &
+                               LOG_LEVEL_ERROR
+    implicit none
+
+    type(field_type), intent(in)           :: field1
+    character(len=*), intent(in)           :: model_name, name1
+    type(field_type), intent(in), optional :: field2, field3, field4
+    character(len=*), intent(in), optional :: name2, name3, name4
+    type(field_type), intent(in), optional :: field_bundle(:)
+    character(len=*), intent(in), optional :: bundle_name
+
+    integer(i_def)                  :: stat
+    real(r_def)                     :: chksum1, chksum2, chksum3, chksum4
+    real(r_def), allocatable        :: chksum_bundle(:)
+    character(len=str_max_filename) :: fname
+    integer(i_def)                  :: bundle_size
+    integer(i_def)                  :: ibundle
+
+    call invoke( X_innerproduct_X(chksum1, field1) )
+    if ( present(field2) ) call invoke( X_innerproduct_X(chksum2, field2) )
+    if ( present(field3) ) call invoke( X_innerproduct_X(chksum3, field3) )
+    if ( present(field4) ) call invoke( X_innerproduct_X(chksum4, field4) )
+
+    if ( present(field_bundle))then
+      bundle_size=size(field_bundle)
+      allocate(chksum_bundle(bundle_size))
+      do ibundle=1,bundle_size
+        call invoke( X_innerproduct_X(chksum_bundle(ibundle), field_bundle(ibundle)) )
+      end do
+    end if
+
+    ! Write checksums to file
+    if ( get_comm_rank() == 0 ) then
+      write(fname,'(A,A)') trim(model_name),'-checksums.txt'
+      open( 9, file=fname, status="replace", iostat=stat)
+      if (stat /= 0) then
+        call log_event( "Unable to open checksum file", LOG_LEVEL_ERROR )
+      end if
+      write(9, '(A,A,A,Z16)' ) 'Inner product checksum ',trim(name1),' = ',chksum1
+      if ( present(name2) ) write(9, '(A,A,A,Z16)' ) 'Inner product checksum ',trim(name2),' = ',chksum2
+      if ( present(name3) ) write(9, '(A,A,A,Z16)' ) 'Inner product checksum ',trim(name3),' = ',chksum3
+      if ( present(name4) ) write(9, '(A,A,A,Z16)' ) 'Inner product checksum ',trim(name4),' = ',chksum4
+      if ( present(bundle_name))then
+        do ibundle=1,bundle_size
+          write(9, '(A,A,I1,A,Z16)' ) 'Inner product checksum ',trim(bundle_name),ibundle,' = ', &
+             chksum_bundle(ibundle)
+        end do
+      end if
+      close( 9 )
+    end if
+  end subroutine checksum_alg
+end module checksum_alg_mod
+

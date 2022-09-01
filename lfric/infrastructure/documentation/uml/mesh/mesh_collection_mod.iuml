@@ -1,0 +1,29 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class mesh_collection_mod::mesh_collection_type {
+
+  -mesh_list: linked_list_type <<payload_type=mesh_type>>
+
+  -name_tags: string[] <<allocatble>>
+  -name_id: string[] <<allocatble>>
+
+  +<<create>>  mesh_collection_constructor() : mesh_collection_type
+  +<<destroy>> mesh_collection_destructor()
+  +clear()
+
+  +add_new_mesh(<<in>>mesh: mesh_type ) : mesh_id<<integer>>
+
+  +n_meshes(): integer
+  +get_mesh_names(): string[] <<allocatable>>
+  +get_mesh_id(<<in>>mesh_name:string): integer
+  +get_mesh_by_id( <<in>>mesh_id: integer ): mesh_type <<pointer>>
+  +get_mesh_by_name( <<in>>mesh_name: string ): mesh_type <<pointer>>
+  +get_mesh_variant( <<in>>mesh: mesh_type, <<in>> extrusion_id: integer ): mesh_type <<pointer>>
+  +get_mesh() <<generic>>: get_mesh_by_id(...), get_mesh_by_name(...), get_mesh_variant(...)
+  +check_for( <<in>>mesh_name:string ): logical
+
+}
+
+

@@ -1,0 +1,131 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!
+!-------------------------------------------------------------------------------
+module assign_coordinate_xyz_mod_test
+
+  use constants_mod, only : r_def, i_def
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: assign_coordinate_xyz_test_type, test_all
+
+  @TestCase
+  type, extends(TestCase) :: assign_coordinate_xyz_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type assign_coordinate_xyz_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use base_mesh_config_mod,      only : geometry_planar, &
+                                          topology_fully_periodic
+    use feign_config_mod,          only : feign_base_mesh_config, &
+                                          feign_domain_size_config, &
+                                          feign_finite_element_config
+    use finite_element_config_mod, only : cellshape_quadrilateral, &
+                                          coord_system_xyz
+
+    implicit none
+
+    class(assign_coordinate_xyz_test_type), intent(inout) :: this
+
+    call feign_base_mesh_config( filename='foo',                   &
+                                 prime_mesh_name='unit_test',      &
+                                 geometry=geometry_planar,         &
+                                 offline_partitioning=.false.,     &
+                                 topology=topology_fully_periodic, &
+                                 fplane=.false., f_lat_deg=0.0_r_def )
+
+    call feign_domain_size_config( planar_domain_max_x=2.0_r_def, &
+                                   planar_domain_max_y=2.0_r_def, &
+                                   planar_domain_min_x=0.0_r_def, &
+                                   planar_domain_min_y=0.0_r_def )
+
+    call feign_finite_element_config( cellshape=cellshape_quadrilateral, &
+                                      coord_order=0_i_def,               &
+                                      coord_system=coord_system_xyz,     &
+                                      element_order=0_i_def,             &
+                                      rehabilitate=.true. )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod, only : final_configuration
+
+    implicit none
+
+    class(assign_coordinate_xyz_test_type), intent(inout) :: this
+
+    call final_configuration()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use driver_coordinates_mod, only : assign_coordinate_xyz
+
+    implicit none
+
+    class(assign_coordinate_xyz_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter :: tol = 1.0e-3_r_def, &
+                                   one = 1.0_r_def
+
+    integer(kind=i_def) :: nlayers, ndf, nverts, i, undf, ndf_pid, undf_pid
+    integer(kind=i_def) :: map(1), map_pid(1)
+    real(kind=r_def) :: x(1),y(1),z(1), dz(1), panel_id(1)
+    real(kind=r_def) :: vertices_phys(3,8,1), vertices_comp(8,3), nodal_coord(3,1)
+
+    nlayers = 1
+    ndf     = 1
+    nverts  = 8
+    map(1)  = 1
+    undf    = 1
+    dz      = 2.0_r_def
+
+    ! Define panel_id field
+    panel_id = (/ 1.0_r_def /)
+    ndf_pid = 1
+    undf_pid = 1
+    map_pid = (/ 1 /)
+
+    vertices_phys(1,:,1) = (/ 0.0_r_def, 2.0_r_def, 2.0_r_def, 0.0_r_def, 0.0_r_def, 2.0_r_def, 2.0_r_def, 0.0_r_def /)
+    vertices_phys(2,:,1) = (/ 0.0_r_def, 0.0_r_def, 2.0_r_def, 2.0_r_def, 0.0_r_def, 0.0_r_def, 2.0_r_def, 2.0_r_def /)
+    vertices_phys(3,:,1) = (/ 0.0_r_def, 0.0_r_def, 0.0_r_def, 0.0_r_def, 2.0_r_def, 2.0_r_def, 2.0_r_def, 2.0_r_def /)
+
+    do i = 1, nverts
+      vertices_comp(i,1) =  vertices_phys(1,i,1)/2.0_r_def
+      vertices_comp(i,2) =  vertices_phys(2,i,1)/2.0_r_def
+      vertices_comp(i,3) =  vertices_phys(3,i,1)/2.0_r_def
+    end do
+
+    nodal_coord(:,1) = (/ 0.5_r_def, 0.5_r_def, 0.5_r_def /)
+
+    call assign_coordinate_xyz(nlayers,ndf,nverts,undf,map,dz,x,y,z,    &
+                               vertices_phys,nodal_coord,vertices_comp, &
+                               2.0_r_def, 0.0_r_def, panel_id, ndf_pid, &
+                               undf_pid, map_pid)
+
+    @assertEqual( one, x(1), tol )
+    @assertEqual( one, y(1), tol )
+    @assertEqual( one, z(1), tol )
+
+  end subroutine test_all
+
+end module assign_coordinate_xyz_mod_test

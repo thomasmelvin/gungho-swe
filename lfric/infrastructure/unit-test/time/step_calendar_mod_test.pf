@@ -1,0 +1,90 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2019 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+module step_calendar_mod_test
+
+  use constants_mod,     only : i_timestep
+  use pFUnit_mod
+  use step_calendar_mod, only : step_calendar_type
+
+  implicit none
+
+  private
+  public test_format_duration, test_format_instance, &
+         test_parse_duration, test_parse_instance
+
+contains
+
+  ! Ensures the calendar can convert a duration integer to the correct string
+  ! representation.
+  !
+  @test
+  subroutine test_format_duration()
+
+    implicit none
+
+    type(step_calendar_type) :: unit_under_test
+
+    @assertEqual( '-1', unit_under_test%format_duration(-1_i_timestep) )
+    @assertEqual( '0', unit_under_test%format_duration(0_i_timestep) )
+    @assertEqual( '1', unit_under_test%format_duration(1_i_timestep) )
+    @assertEqual( '37337', unit_under_test%format_duration(37337_i_timestep) )
+
+  end subroutine test_format_duration
+
+
+  ! Ensures the calendar can convert an instance integer to the correct string
+  ! representation.
+  !
+  @test
+  subroutine test_format_instance()
+
+    implicit none
+
+    type(step_calendar_type) :: unit_under_test
+
+    @assertEqual( '0', unit_under_test%format_instance(0_i_timestep) )
+    @assertEqual( '1', unit_under_test%format_instance(1_i_timestep) )
+    @assertEqual( '37337', unit_under_test%format_instance(37337_i_timestep) )
+
+  end subroutine test_format_instance
+
+
+  ! Ensures the calendar can parse a string representation to a duration
+  ! integer.
+  !
+  @test
+  subroutine test_parse_duration()
+
+    implicit none
+
+    type(step_calendar_type) :: unit_under_test
+
+    @assertEqual( -1_i_timestep, unit_under_test%parse_duration("-1") )
+    @assertEqual( 0_i_timestep, unit_under_test%parse_duration("0") )
+    @assertEqual( 1_i_timestep, unit_under_test%parse_duration("1") )
+    @assertEqual( 37337_i_timestep, unit_under_test%parse_duration("37337") )
+
+  end subroutine test_parse_duration
+
+
+  ! Ensures the calendar can parse a string representation to an instance
+  ! integer.
+  !
+  @test
+  subroutine test_parse_instance()
+
+    implicit none
+
+    type(step_calendar_type) :: unit_under_test
+
+    @assertEqual( 0_i_timestep, unit_under_test%parse_instance("0") )
+    @assertEqual( 1_i_timestep, unit_under_test%parse_instance("1") )
+    @assertEqual( 37337_i_timestep, unit_under_test%parse_instance("37337") )
+
+  end subroutine test_parse_instance
+
+end module step_calendar_mod_test

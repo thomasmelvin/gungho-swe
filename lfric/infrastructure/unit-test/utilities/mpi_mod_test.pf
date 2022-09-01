@@ -1,0 +1,308 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2018 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief Test the functionality of mpi_mod
+!>
+!> @details A pFUnit test module to exercise the functionality in mpi_mod.
+!>
+module mpi_mod_test
+
+  use pFUnit_Mod
+  use, intrinsic   :: iso_fortran_env, only : int32, real32, real64
+  use constants_mod, only: i_native, r_single, r_double, &
+                           integer_type, real_type
+  use mpi, only    : MPI_DOUBLE_PRECISION, MPI_REAL4, MPI_INTEGER
+  use mpi_mod, only: store_comm, clear_comm, &
+                     global_sum, global_max, global_min, &
+                     all_gather, broadcast, &
+                     get_mpi_datatype, &
+                     get_comm_size, get_comm_rank
+
+  implicit none
+
+  private
+  public test_real64, test_real32, test_int
+
+  @TestCase
+  type, extends(MPITestCase), public :: mpi_mod_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_real64
+    procedure test_real32
+    procedure test_int
+  end type mpi_mod_test_type
+
+contains
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(mpi_mod_test_type), intent(inout) :: this
+
+    !Store the MPI communicator for later use
+    call store_comm(this%getMpiCommunicator())
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(mpi_mod_test_type), intent(inout) :: this
+
+    ! Clear the stored MPI communicator
+    call clear_comm()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! TEST REAL64 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes = [1, 4] )
+  subroutine test_real64( this )
+
+    implicit none
+
+    class(mpi_mod_test_type), intent(inout) :: this
+
+    integer, parameter  :: r_test = real64
+
+    real(r_test)   :: l_array(3) = (/ 2.0_r_test, 3.0_r_test, 1.0_r_test /)
+    real(r_test)   :: l_local(3)
+    real(r_test)   :: l_sum, l_max, l_min
+    real(r_test)   :: g_sum, g_max, g_min
+    real(r_test)   :: r_buffer(1)
+    real(r_test)   :: s, answer
+    integer(i_native) :: i, mpi_datatype
+    integer(i_native) :: rank_number, total_ranks
+    integer(i_native) :: num_processes
+    integer(i_native) :: proc_num
+
+    num_processes = this%context%getNumProcesses()
+    proc_num      = this%getProcessRank()
+
+    ! Test real global sum routine
+    l_sum = 0.0_r_test
+    l_local(:) = l_array(:)*(proc_num+1)
+    do i = 1, size(l_local)
+       l_sum = l_sum + l_local(i)
+    end do
+    call global_sum( l_sum, g_sum )
+    ! Calculate weights
+    s = 0.0_r_test
+    do i = 1, num_processes
+       s = s + i
+    end do
+    answer = 6.0_r_test * s
+    @assertEqual(  answer, g_sum, 1.0e-2_r_test )
+
+    ! Test real global maximum routine
+    l_max = l_local(1)
+    do i = 2, size(l_local)
+       if(l_local(i) > l_max) l_max = l_local(i)
+    end do
+    call global_max( l_max, g_max )
+    answer = 3.0_r_test * num_processes
+    @assertEqual(  answer, g_max, 1.0e-2_r_test )
+
+    ! Test real global minimum routine
+    l_min = l_local(1)
+    do i = 2, size(l_local)
+       if(l_local(i) < l_min) l_min = l_local(i)
+    end do
+    call global_min( l_min, g_min )
+    answer = 1.0_r_test
+    @assertEqual( answer, g_min, 1.0e-2_r_test )
+
+    ! Test real broadcast routine
+    r_buffer(1) = 11.0_r_test*(proc_num+1)
+    call broadcast( r_buffer, 1, 0 )
+    @assertEqual( 11.0_r_test, r_buffer(1) )
+
+    ! Test the mpi data type routines - double and single
+    mpi_datatype = get_mpi_datatype( real_type, r_double )
+    @assertEqual( MPI_DOUBLE_PRECISION, mpi_datatype )
+
+    ! Test the routines for getting total number of ranks and local rank number
+    total_ranks = get_comm_size()
+    @assertEqual( num_processes, total_ranks )
+
+    rank_number=get_comm_rank()
+    @assertTrue( rank_number <= total_ranks)
+
+  end subroutine test_real64
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! TEST REAL32 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes = [1, 4] )
+  subroutine test_real32( this )
+
+    implicit none
+
+    class(mpi_mod_test_type), intent(inout) :: this
+
+    integer, parameter  :: r_test = real32
+
+    real(r_test)   :: l_array(3) = (/ 20.0_r_test, 30.0_r_test, 10.0_r_test /)
+    real(r_test)   :: l_local(3)
+    real(r_test)   :: l_sum, l_max, l_min
+    real(r_test)   :: g_sum, g_max, g_min
+    real(r_test)   :: s, answer
+    real(r_test)   :: r_buffer(1)
+    integer(i_native) :: i, mpi_datatype
+    integer(i_native) :: rank_number, total_ranks
+    integer(i_native) :: num_processes
+    integer(i_native) :: proc_num
+
+    num_processes = this%context%getNumProcesses()
+    proc_num      = this%getProcessRank()
+    l_local(:)    = l_array(:)*(proc_num+1)
+
+    ! Test real global sum routine
+    l_sum = 0.0_r_test
+    do i = 1, size(l_local)
+       l_sum = l_sum + l_local(i)
+    end do
+    call global_sum( l_sum, g_sum )
+    ! Calculate weights
+    s = 0.0_r_test
+    do i = 1, num_processes
+       s = s + i
+    end do
+    answer = 60.0_r_test * s
+    @assertEqual(  answer, g_sum, 1.0e-2_r_test )
+
+    ! Test real global maximum routine
+    l_max = l_local(1)
+    do i = 2, size(l_local)
+       if(l_local(i) > l_max) l_max = l_local(i)
+    end do
+    call global_max( l_max, g_max )
+    answer = 30.0_r_test * num_processes
+    @assertEqual(  answer, g_max, 1.0e-2_r_test )
+
+    ! Test real global minimum routine
+    l_min = l_local(1)
+    do i = 2, size(l_local)
+       if(l_local(i) < l_min) l_min = l_local(i)
+    end do
+    call global_min( l_min, g_min )
+    answer = 10.0_r_test
+    @assertEqual( answer, g_min, 1.0e-2_r_test )
+
+    ! Test real broadcast routine
+    r_buffer(1) = 13.0_r_test*(proc_num+1)
+    call broadcast( r_buffer, 1, 0 )
+    @assertEqual( 13.0_r_test, r_buffer(1) )
+
+    ! Test the mpi data type routines - double and single
+    mpi_datatype = get_mpi_datatype( real_type, r_single )
+    @assertEqual( MPI_REAL4, mpi_datatype )
+
+    ! Test the routines for getting total number of ranks and local rank number
+    total_ranks = get_comm_size()
+    @assertEqual( num_processes, total_ranks )
+
+    rank_number = get_comm_rank()
+    @assertTrue( rank_number <= total_ranks)
+
+  end subroutine test_real32
+
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! TEST INTEGERS !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes = [1, 4] )
+  subroutine test_int( this )
+
+    implicit none
+
+    class(mpi_mod_test_type), intent(inout) :: this
+
+    integer, parameter  :: i_test = int32
+
+    integer(i_test) :: l_array_i(3) = (/ 200_i_test, 300_i_test, 100_i_test /)
+    integer(i_test) :: l_local_i(3)
+    integer(i_test) :: l_sum_i, l_max_i, l_min_i
+    integer(i_test) :: g_sum_i, g_max_i, g_min_i
+    integer(i_test) :: i_buffer(1)
+    integer(i_test), allocatable :: i_buffer_ans(:)
+    integer(i_test) :: w, answer
+    character(len=2)  :: str_buffer(1)
+    integer(i_native) :: i, mpi_datatype
+    integer(i_native) :: rank_number, total_ranks
+    integer(i_native) :: num_processes
+    integer(i_native) :: proc_num
+
+    num_processes = this%context%getNumProcesses()
+    proc_num      = this%getProcessRank()
+    l_local_i(:)  = l_array_i(:)*(proc_num+1)
+
+    allocate(i_buffer_ans(num_processes))
+
+    ! Test integer global sum routine
+    l_sum_i = 0_i_test
+    do i = 1, size(l_local_i)
+       l_sum_i = l_sum_i + l_local_i(i)
+    end do
+    call global_sum( l_sum_i, g_sum_i )
+    ! Calculate weights
+    w = 0_i_test
+    do i = 1, num_processes
+       w = w + i
+    end do
+    answer = 600.0_i_test * w
+    @assertEqual(  answer, g_sum_i )
+
+    ! Test integer global maximum routine
+    l_max_i = l_local_i(1)
+    do i = 2, size(l_local_i)
+       if(l_local_i(i) > l_max_i) l_max_i = l_local_i(i)
+    end do
+    call global_max( l_max_i, g_max_i )
+    answer = 300.0_i_test * num_processes
+    @assertEqual(  answer, g_max_i )
+
+    ! Test real global minimum routine
+    l_min_i = l_local_i(1)
+    do i = 2, size(l_local_i)
+       if(l_local_i(i) < l_min_i) l_min_i = l_local_i(i)
+    end do
+    call global_min( l_min_i, g_min_i )
+    answer = 100_i_test
+    @assertEqual( answer, g_min_i )
+
+    ! Test integer gather routine
+    i_buffer(1) = 700_i_test * (proc_num + 1_i_test)
+    call all_gather(i_buffer, i_buffer_ans, 1)
+    do i = 1,num_processes
+      @assertEqual( i * 700_i_test, i_buffer_ans(i) )
+    end do
+
+    ! Test integer broadcast routine
+    i_buffer(1) = 900_i_test*(proc_num+1)
+    call broadcast( i_buffer, 1, 0 )
+    @assertEqual( 900_i_test, i_buffer(1) )
+
+    ! Test character string broadcast routine
+    str_buffer(1) = 'Hi'
+    call broadcast( str_buffer, len(str_buffer(1))*size(str_buffer), 0 )
+    @assertEqual( 'Hi', str_buffer(1) )
+
+    ! Test the mpi data type routines - integer
+    mpi_datatype = get_mpi_datatype( integer_type, i_test )
+    @assertEqual( MPI_INTEGER, mpi_datatype )
+
+    ! Test the routines for getting total number of ranks and local rank number
+    total_ranks = get_comm_size()
+    @assertEqual( num_processes, total_ranks )
+
+    rank_number=get_comm_rank()
+    @assertTrue( rank_number <= total_ranks)
+
+    deallocate(i_buffer_ans)
+
+  end subroutine test_int
+
+end module mpi_mod_test

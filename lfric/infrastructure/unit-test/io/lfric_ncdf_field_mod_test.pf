@@ -1,0 +1,85 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> @brief Exercises the LFRic NetCDF dimensions type.
+!>
+module lfric_ncdf_field_mod_test
+
+  use constants_mod,        only: r_def, str_def
+  use lfric_ncdf_dims_mod,  only: lfric_ncdf_dims_type
+  use lfric_ncdf_file_mod,  only: lfric_ncdf_file_type, &
+                                  LFRIC_NCDF_READ,      &
+                                  LFRIC_NCDF_WRITE,     &
+                                  LFRIC_NCDF_OPEN,      &
+                                  LFRIC_NCDF_CREATE
+  use lfric_ncdf_field_mod, only: lfric_ncdf_field_type
+  use pfunit_mod
+
+  implicit none
+
+  private
+  public :: test_field
+
+contains
+
+  @test
+  subroutine test_field()
+
+    implicit none
+
+    type(lfric_ncdf_file_type)  :: file1, file2, file3
+    type(lfric_ncdf_dims_type)  :: dims1, dims2, dims3
+    type(lfric_ncdf_field_type) :: field1, field2, field3
+    character(len=str_def)      :: test_attr, return_attr
+
+    real(kind=r_def) :: data_array1(10), data_array2(10), return_array(10)
+    real(kind=r_def) :: tol
+
+    tol = 10.0e-8_r_def
+
+    data_array1 = (/1.0_r_def, 2.0_r_def, 3.0_r_def, 4.0_r_def, 5.0_r_def, &
+                    6.0_r_def, 7.0_r_def, 8.0_r_def, 9.0_r_def, 10.0_r_def/)
+    test_attr = "test_attr_value"
+
+    file1 = lfric_ncdf_file_type("test_field.nc", open_mode=LFRIC_NCDF_CREATE, &
+                                  io_mode=LFRIC_NCDF_WRITE)
+    dims1 = lfric_ncdf_dims_type("dims1", file1, 10)
+    field1 = lfric_ncdf_field_type("test_field", file1, dims1)
+    call field1%set_attribute("test_attr", test_attr)
+
+    call file1%close_definition()
+
+    call field1%write_data(data_array1)
+    call file1%close_file()
+
+    file2 = lfric_ncdf_file_type("test_field.nc", open_mode=LFRIC_NCDF_OPEN, &
+                                  io_mode=LFRIC_NCDF_WRITE)
+    dims2 = lfric_ncdf_dims_type("dims1", file2)
+    field2 = lfric_ncdf_field_type("test_field", file2, dims2)
+
+    call field2%read_data(data_array2)
+
+    @assertEqual(data_array1, data_array2)
+
+    data_array2 = data_array2 * 2
+    call field2%write_data(data_array2)
+    call file2%close_file()
+
+    file3 = lfric_ncdf_file_type("test_field.nc", open_mode=LFRIC_NCDF_OPEN, &
+                                  io_mode=LFRIC_NCDF_READ)
+    dims3 = lfric_ncdf_dims_type("dims1", file3)
+    field3 = lfric_ncdf_field_type("test_field", file3, dims3)
+
+    call field3%read_data(return_array)
+    return_attr = field3%get_attribute("test_attr")
+    call file3%close_file()
+
+    @assertEqual(data_array2, return_array, tol)
+    @assertEqual(trim(test_attr), trim(return_attr))
+
+  end subroutine test_field
+
+end module lfric_ncdf_field_mod_test

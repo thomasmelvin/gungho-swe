@@ -1,0 +1,434 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2019 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> Test the halo_routing representation
+!>
+!-------------------------------------------------------------------------------
+module halo_comms_mod_test
+
+  use, intrinsic :: iso_fortran_env,  only : real32, real64, int32
+
+  use constants_mod,                  only : i_def, i_halo_index, i_native, &
+                                             r_def, integer_type, real_type
+  use halo_comms_mod,                 only : initialise_halo_comms, &
+                                             finalise_halo_comms, &
+                                             halo_routing_type, &
+                                             halo_exchange_id_type, &
+                                             perform_halo_exchange, &
+                                             perform_halo_exchange_start, &
+                                             perform_halo_exchange_finish
+  use fs_continuity_mod,              only : W3
+  use function_space_mod,             only : function_space_type
+  use function_space_collection_mod,  only : function_space_collection_type, &
+                                             function_space_collection
+  use local_mesh_mod,                 only : local_mesh_type
+  use mesh_collection_mod,            only : mesh_collection_type, &
+                                             mesh_collection
+  use mesh_mod,                       only : mesh_type, PLANE_BI_PERIODIC
+  use mpi_mod,                        only : store_comm, clear_comm
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_halo_routing, test_halo_comms
+
+  @TestCase
+  type, extends(MPITestCase), public :: halo_comms_test_type
+    private
+    type(local_mesh_type) :: unit_test_local_mesh
+    integer(i_def) :: mesh_id
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure get_local_mesh_ptr
+    procedure test_halo_routing
+    procedure test_halo_comms
+  end type halo_comms_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(halo_comms_test_type), intent(inout) :: this
+
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    type(mesh_type) :: unit_test_mesh
+
+    !Store the MPI communicator for later use
+    call store_comm(this%getMpiCommunicator())
+
+    ! Initialise halo functionality
+    call initialise_halo_comms( this%getMpiCommunicator() )
+
+    ! Create top level mesh collection
+    mesh_collection = mesh_collection_type()
+    ! Create top level function space collection
+    function_space_collection = function_space_collection_type()
+
+    call this%unit_test_local_mesh%initialise()
+    unit_test_local_mesh_ptr => this%get_local_mesh_ptr()
+
+    ! Dummy mesh mod has 9 cells, 3 layers and is uniform in vertical
+    unit_test_mesh = mesh_type( PLANE_BI_PERIODIC, unit_test_local_mesh_ptr )
+    this%mesh_id = mesh_collection%add_new_mesh( unit_test_mesh )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(halo_comms_test_type), intent(inout) :: this
+
+    call function_space_collection%clear()
+    call mesh_collection%clear()
+
+    ! Finalise halo functionality
+    call finalise_halo_comms()
+    ! Clear the stored MPI communicator
+    call clear_comm()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  function get_local_mesh_ptr(this) result(unit_test_local_mesh_ptr)
+    implicit none
+    class(halo_comms_test_type), intent(inout), target :: this
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    unit_test_local_mesh_ptr => this%unit_test_local_mesh
+  end function get_local_mesh_ptr
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  @Test( npes=[1] )
+  subroutine test_halo_routing( this )
+
+    implicit none
+
+    class(halo_comms_test_type), intent(inout) :: this
+
+    type(halo_routing_type) :: halo_routing
+    type(function_space_type), pointer :: function_space => null()
+    integer(i_halo_index), allocatable :: global_dof_id(:)
+    integer(i_def), allocatable :: halo_start(:)
+    integer(i_def), allocatable :: halo_finish(:)
+    integer(i_def) :: idepth
+    integer(i_def) :: last_owned_dof
+    integer(i_def) :: ndata
+    integer(i_def) :: result
+    type(mesh_type), pointer :: mesh => null()
+
+    mesh => mesh_collection%get_mesh(this%mesh_id)
+
+    ndata = 2
+
+    !Get indices of owned and halo cells
+    function_space => function_space_collection%get_fs( mesh, &
+                                                        0, &
+                                                        W3, &
+                                                        ndata = ndata )
+
+    last_owned_dof = function_space%get_last_dof_owned()
+
+    ! Set up the global dof index array
+    allocate( global_dof_id( function_space%get_ndof_glob()*ndata ) )
+    call function_space%get_global_dof_id(global_dof_id)
+
+    ! Set up the boundaries of the different depths of halo
+    allocate( halo_start(mesh%get_halo_depth()) )
+    allocate( halo_finish(mesh%get_halo_depth()) )
+
+    do idepth = 1, mesh%get_halo_depth()
+
+      halo_start(idepth)  = function_space%get_last_dof_owned()+1
+      halo_finish(idepth) = function_space%get_last_dof_halo(idepth)
+      ! If this is a serial run (no halos), halo_start will be out of
+      ! bounds, so re-initialise halo_start and halo_finish specifically
+      ! for a serial run
+      if ( halo_start(idepth) > function_space%get_last_dof_halo(idepth) ) then
+        halo_start(idepth)  = function_space%get_last_dof_halo(idepth)
+        halo_finish(idepth) = halo_start(idepth) - 1
+      end if
+
+    end do
+
+    ! Create a halo_routing object with a particular mesh_id, element_order,
+    ! lfric_fs, ndata, type and kind
+    halo_routing = halo_routing_type( global_dof_id, &
+                                      last_owned_dof, &
+                                      halo_start, &
+                                      halo_finish, &
+                                      this%mesh_id, &
+                                      0, &
+                                      W3, &
+                                      ndata, &
+                                      real_type, &
+                                      r_def )
+    deallocate( halo_finish )
+    deallocate( global_dof_id )
+
+    ! Test the getters on the halo_routing object return the correct values
+    result = halo_routing%get_mesh_id()
+    @assertEqual( this%mesh_id, result )
+
+    result = halo_routing%get_element_order()
+    @assertEqual( 0, result )
+
+    result = halo_routing%get_lfric_fs()
+    @assertEqual( W3, result )
+
+    result = halo_routing%get_ndata()
+    @assertEqual( 2, result )
+
+    result = halo_routing%get_fortran_type()
+    @assertEqual( real_type, result )
+
+    result = halo_routing%get_fortran_kind()
+    @assertEqual( r_def, result )
+
+    mesh => null()
+
+  end subroutine test_halo_routing
+
+  @Test( npes=[2] )
+  subroutine test_halo_comms( this )
+
+    implicit none
+
+    class(halo_comms_test_type), intent(inout) :: this
+
+    integer(i_native) :: proc_num
+
+    type(halo_routing_type),pointer :: halo_routing
+    integer(i_halo_index) :: global_dof_id(7)
+    real(real64), pointer :: dofs_r64(:)
+    real(real32), pointer :: dofs_r32(:)
+    integer(int32), pointer :: dofs_i32(:)
+    integer(i_def) :: last_owned_dof
+    integer(i_def) :: halo_start(1)
+    integer(i_def) :: halo_finish(1)
+    type(halo_exchange_id_type) :: halo_id
+
+    proc_num = this%getProcessRank()
+
+    allocate(dofs_r32(7))
+    allocate(dofs_r64(7))
+    allocate(dofs_i32(7))
+    allocate(halo_routing)
+
+    ! Initialise the arrays ready for testing synchronous halo exchenges
+    if(proc_num == 0)then
+      dofs_r64 = (/ 1.0_real64, 2.0_real64, 3.0_real64, 4.0_real64, &
+                    5.0_real64, 0.0_real64, 0.0_real64/)
+      dofs_r32 = (/ 1.0_real32, 2.0_real32, 3.0_real32, 4.0_real32, &
+                    5.0_real32, 0.0_real32, 0.0_real32/)
+      dofs_i32 = (/ 1_int32, 2_int32, 3_int32, 4_int32, &
+                    5_int32, 0_int32, 0_int32/)
+      global_dof_id = (/ 1, 2, 3, 4, 5, 6, 7 /)
+    else
+      dofs_r64 = (/ 6.0_real64, 7.0_real64, 8.0_real64, 9.0_real64, &
+                    10.0_real64, 0.0_real64, 0.0_real64/)
+      dofs_r32 = (/ 6.0_real32, 7.0_real32, 8.0_real32, 9.0_real32, &
+                    10.0_real32, 0.0_real32, 0.0_real32/)
+      dofs_i32 = (/ 6_int32, 7_int32, 8_int32, 9_int32, &
+                    10_int32, 0_int32, 0_int32/)
+      global_dof_id = (/ 6, 7, 8, 9, 10, 1, 2 /)
+    end if
+
+    last_owned_dof = 5
+    halo_start(1)  = 6
+    halo_finish(1) = 7
+
+    ! Test synchronous halo exchanging 32-bit real data
+    ! Create a halo_routing object with a particular mesh_id, element_order,
+    ! lfric_fs, ndata, type and kind
+    halo_routing = halo_routing_type( global_dof_id, &
+                                      last_owned_dof, &
+                                      halo_start, &
+                                      halo_finish, &
+                                      1_i_def, &
+                                      0_i_def, &
+                                      W3, &
+                                      1_i_def, &
+                                      real_type, &
+                                      real32 )
+
+    call perform_halo_exchange( dofs_r32, &
+                                halo_routing, &
+                                1 )
+
+    if(proc_num == 0)then
+      @assertEqual( 6.0_real32, dofs_r32(6) )
+      @assertEqual( 7.0_real32, dofs_r32(7) )
+    else
+      @assertEqual( 1.0_real32, dofs_r32(6) )
+      @assertEqual( 2.0_real32, dofs_r32(7) )
+    end if
+
+    ! Test synchronous halo exchanging 64-bit real data
+    halo_routing = halo_routing_type( global_dof_id, &
+                                      last_owned_dof, &
+                                      halo_start, &
+                                      halo_finish, &
+                                      1_i_def, &
+                                      0_i_def, &
+                                      W3, &
+                                      1_i_def, &
+                                      real_type, &
+                                      real64 )
+
+    call perform_halo_exchange( dofs_r64, &
+                                halo_routing, &
+                                1 )
+
+    if(proc_num == 0)then
+      @assertEqual( 6.0_real64, dofs_r64(6) )
+      @assertEqual( 7.0_real64, dofs_r64(7) )
+    else
+      @assertEqual( 1.0_real64, dofs_r64(6) )
+      @assertEqual( 2.0_real64, dofs_r64(7) )
+    end if
+
+    ! Test synchronous halo exchanging 32-bit integer data
+    halo_routing = halo_routing_type( global_dof_id, &
+                                      last_owned_dof, &
+                                      halo_start, &
+                                      halo_finish, &
+                                      1_i_def, &
+                                      0_i_def, &
+                                      W3, &
+                                      1_i_def, &
+                                      integer_type, &
+                                      int32 )
+
+    call perform_halo_exchange( dofs_i32, &
+                                halo_routing, &
+                                1 )
+
+    if(proc_num == 0)then
+      @assertEqual( 6_int32, dofs_i32(6) )
+      @assertEqual( 7_int32, dofs_i32(7) )
+    else
+      @assertEqual( 1_int32, dofs_i32(6) )
+      @assertEqual( 2_int32, dofs_i32(7) )
+    end if
+
+    ! Reset the arrays ready for testing asynchronous halo exchenges
+    if(proc_num == 0)then
+      dofs_r64 = (/ 1.0_real64, 2.0_real64, 3.0_real64, 4.0_real64, &
+                    5.0_real64, 0.0_real64, 0.0_real64/)
+      dofs_r32 = (/ 1.0_real32, 2.0_real32, 3.0_real32, 4.0_real32, &
+                    5.0_real32, 0.0_real32, 0.0_real32/)
+      dofs_i32 = (/ 1_int32, 2_int32, 3_int32, 4_int32, &
+                    5_int32, 0_int32, 0_int32/)
+    else
+      dofs_r64 = (/ 6.0_real64, 7.0_real64, 8.0_real64, 9.0_real64, &
+                    10.0_real64, 0.0_real64, 0.0_real64/)
+      dofs_r32 = (/ 6.0_real32, 7.0_real32, 8.0_real32, 9.0_real32, &
+                    10.0_real32, 0.0_real32, 0.0_real32/)
+      dofs_i32 = (/ 6_int32, 7_int32, 8_int32, 9_int32, &
+                    10_int32, 0_int32, 0_int32/)
+    end if
+
+    ! Test asynchronous halo exchanging 32-bit real data
+    ! Create a halo_routing object with a particular mesh_id, element_order,
+    ! lfric_fs, ndata, type and kind
+    halo_routing = halo_routing_type( global_dof_id, &
+                                      last_owned_dof, &
+                                      halo_start, &
+                                      halo_finish, &
+                                      1_i_def, &
+                                      0_i_def, &
+                                      W3, &
+                                      1_i_def, &
+                                      real_type, &
+                                      real32 )
+
+    call perform_halo_exchange_start( dofs_r32, &
+                                      halo_routing, &
+                                      1,&
+                                      halo_id )
+
+    call perform_halo_exchange_finish( halo_id )
+
+    if(proc_num == 0)then
+      @assertEqual( 6.0_real32, dofs_r32(6) )
+      @assertEqual( 7.0_real32, dofs_r32(7) )
+    else
+      @assertEqual( 1.0_real32, dofs_r32(6) )
+      @assertEqual( 2.0_real32, dofs_r32(7) )
+    end if
+
+    ! Test asynchronous halo exchanging 64-bit real data
+    halo_routing = halo_routing_type( global_dof_id, &
+                                      last_owned_dof, &
+                                      halo_start, &
+                                      halo_finish, &
+                                      1_i_def, &
+                                      0_i_def, &
+                                      W3, &
+                                      1_i_def, &
+                                      real_type, &
+                                      real64 )
+
+    call perform_halo_exchange_start( dofs_r64, &
+                                      halo_routing, &
+                                      1, &
+                                      halo_id )
+
+    call perform_halo_exchange_finish( halo_id )
+
+    if(proc_num == 0)then
+      @assertEqual( 6.0_real64, dofs_r64(6) )
+      @assertEqual( 7.0_real64, dofs_r64(7) )
+    else
+      @assertEqual( 1.0_real64, dofs_r64(6) )
+      @assertEqual( 2.0_real64, dofs_r64(7) )
+    end if
+
+    ! Test asynchronous halo exchanging 32-bit integer data
+    halo_routing = halo_routing_type( global_dof_id, &
+                                      last_owned_dof, &
+                                      halo_start, &
+                                      halo_finish, &
+                                      1_i_def, &
+                                      0_i_def, &
+                                      W3, &
+                                      1_i_def, &
+                                      integer_type, &
+                                      int32 )
+
+    call perform_halo_exchange_start( dofs_i32, &
+                                      halo_routing, &
+                                      1,&
+                                      halo_id )
+
+    call perform_halo_exchange_finish( halo_id )
+
+    if(proc_num == 0)then
+      @assertEqual( 6_int32, dofs_i32(6) )
+      @assertEqual( 7_int32, dofs_i32(7) )
+    else
+      @assertEqual( 1_int32, dofs_i32(6) )
+      @assertEqual( 2_int32, dofs_i32(7) )
+    end if
+
+    deallocate( dofs_r32 )
+    deallocate( dofs_r64 )
+    deallocate( dofs_i32 )
+    deallocate( halo_routing )
+
+
+
+  end subroutine test_halo_comms
+
+end module halo_comms_mod_test

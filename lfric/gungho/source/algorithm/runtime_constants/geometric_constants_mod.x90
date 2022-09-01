@@ -1,0 +1,441 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!
+!> @brief Provides various geometric objects for use throughout gungho.
+!>
+!> @details This module controls the set-up of various objects relating to
+!>          the geometry of the mesh that do not change during a run. These
+!>          objects are accessed from this module through appropriate 'get'
+!>          functions.
+!-------------------------------------------------------------------------------
+
+module geometric_constants_mod
+
+  ! Infrastructure
+  use check_configuration_mod,            only: check_any_scheme_ffsl
+  use constants_mod,                      only: i_def, r_def, l_def, str_def
+  use field_mod,                          only: field_type
+  use fs_continuity_mod,                  only: W0, W1, W2, W3, Wtheta, Wchi
+  use function_space_collection_mod,      only: function_space_collection
+  use function_space_mod,                 only: function_space_type
+  use io_config_mod,                      only: subroutine_timers
+  use log_mod,                            only: log_event, LOG_LEVEL_INFO, &
+                                                LOG_LEVEL_ERROR
+  use mesh_collection_mod,                only: mesh_collection
+  use mesh_mod,                           only: mesh_type
+  use timer_mod,                          only: timer
+
+  ! Other algorithms
+  use runtime_tools_mod,                  only: find_mesh_index,            &
+                                                check_initialised_field,    &
+                                                check_initialised_operator, &
+                                                primary_mesh_label,         &
+                                                shifted_mesh_label,         &
+                                                twod_mesh_label,            &
+                                                extra_mesh_label,           &
+                                                multigrid_mesh_label
+
+  ! Configuration
+  use base_mesh_config_mod,               only: f_lat, geometry, &
+                                                geometry_spherical
+  use finite_element_config_mod,          only: element_order
+  use planet_config_mod,                  only: scaled_radius
+
+  ! Kernels
+  use calc_dA_at_w2_kernel_mod,           only: calc_dA_at_w2_kernel_type
+  use compute_latlon_kernel_mod,          only: compute_latlon_kernel_type
+  use get_height_kernel_mod,              only: get_height_kernel_type
+  use get_dz_w3_kernel_mod,               only: get_dz_w3_kernel_type
+  use psykal_lite_mod,                    only: invoke_mpi_calc_cell_orientation
+
+  implicit none
+
+  private
+
+  ! Variables private to this module that can only be accessed by public
+  ! functions returning pointers to them
+
+  ! Panel ID fields
+  type(field_type), allocatable, target :: panel_id_list(:)
+
+  ! Coordinate fields
+  type(field_type), allocatable, target :: chi_list(:,:)
+
+  ! Other geometric objects
+  type(field_type), allocatable, target :: cell_orientation_list(:)
+  type(field_type), allocatable, target :: dA_at_w2_list(:)
+  type(field_type), allocatable, target :: height_w1_list(:)
+  type(field_type), allocatable, target :: height_w2_list(:)
+  type(field_type), allocatable, target :: height_w3_list(:)
+  type(field_type), allocatable, target :: height_wth_list(:)
+  type(field_type), allocatable, target :: dz_w3_list(:)
+  type(field_type), allocatable, target :: lat_w3_list(:)
+  type(field_type), allocatable, target :: long_w3_list(:)
+
+  ! Public functions to create and access the module contents
+
+  public :: create_geometric_constants
+  public :: final_geometric_constants
+  public :: get_panel_id
+  public :: get_coordinates
+  public :: get_cell_orientation
+  public :: get_dA_at_w2
+  public :: get_height
+  public :: get_dz_w3
+  public :: get_latitude
+  public :: get_longitude
+
+contains
+
+  !> @brief Subroutine to create the geometric constants
+  !> @param[in] mesh_id_list         List of mesh_ids
+  !> @param[in] chi_in               List of coordinate fields
+  !> @param[in] panel_id_in          List of panel_id fields
+  !> @param[in] label_list           List of labels for meshes
+  subroutine create_geometric_constants(mesh_id_list,      &
+                                        chi_in,            &
+                                        panel_id_in,       &
+                                        label_list         )
+    implicit none
+
+    ! Arguments
+    integer(kind=i_def),    intent(in) :: mesh_id_list(:)
+    type(field_type),       intent(in) :: chi_in(:,:)
+    type(field_type),       intent(in) :: panel_id_in(:)
+    integer(kind=i_def),    intent(in) :: label_list(:)
+
+    ! Internal variables
+    type(function_space_type), pointer :: w2_fs     => null()
+    type(function_space_type), pointer :: w3_fs     => null()
+    type(function_space_type), pointer :: wtheta_fs => null()
+    type(function_space_type), pointer :: wth_k0_fs => null() ! lowest order wth fs
+    type(function_space_type), pointer :: w1_k0_fs  => null() ! lowest order w1 fs
+    type(function_space_type), pointer :: w2_k0_fs  => null() ! lowest order w2 fs
+    type(function_space_type), pointer :: w3_k0_fs  => null() ! lowest order w3 fs
+    type(field_type)                   :: temp_w2_field
+
+    type(mesh_type), pointer :: mesh => null()
+
+    ! Temporary values for iterating through list
+    integer(kind=i_def) :: i, j, num_meshes
+    logical(kind=l_def) :: any_scheme_ffsl
+
+
+    if ( subroutine_timers ) call timer('geometric_constants_alg')
+    call log_event( "Gungho: creating geometric_constants", LOG_LEVEL_INFO )
+
+    num_meshes = size(mesh_id_list)
+
+    allocate(chi_list(3,num_meshes))
+    allocate(panel_id_list(num_meshes))
+    allocate(cell_orientation_list(num_meshes))
+    allocate(height_w1_list(num_meshes))
+    allocate(height_w2_list(num_meshes))
+    allocate(height_w3_list(num_meshes))
+    allocate(height_wth_list(num_meshes))
+    allocate(dz_w3_list(num_meshes))
+    allocate(dA_at_w2_list(num_meshes))
+    allocate(long_w3_list(num_meshes))
+    allocate(lat_w3_list(num_meshes))
+
+    !==========================================================================!
+    ! Begin loop through meshes
+    !==========================================================================!
+
+    ! TODO: #2790 should change this structure to avoid looping through meshes
+    do i = 1, num_meshes
+
+      !=========== Create function spaces required for setup ==================!
+      mesh => mesh_collection%get_mesh( mesh_id_list(i) )
+
+      w3_k0_fs => function_space_collection%get_fs( mesh, 0, W3 )
+
+      ! Don't need most function spaces for 2D meshes
+      if ( mesh%get_id() /= twod_mesh_label) then
+        w2_fs     => function_space_collection%get_fs( mesh, element_order, W2 )
+        w3_fs     => function_space_collection%get_fs( mesh, element_order, W3 )
+        wtheta_fs => function_space_collection%get_fs( mesh, element_order, Wtheta )
+        w1_k0_fs  => function_space_collection%get_fs( mesh,             0, W1 )
+        w2_k0_fs  => function_space_collection%get_fs( mesh,             0, W2 )
+        wth_k0_fs => function_space_collection%get_fs( mesh,             0, Wtheta )
+      end if
+
+      !================ Set coordinates field and panel ID ====================!
+
+      do j = 1, 3
+        call chi_in(j,i)%copy_field(chi_list(j,i))
+      end do
+
+      call panel_id_in(i)%copy_field(panel_id_list(i))
+
+      !================== Create cell orientation field =======================!
+
+      any_scheme_ffsl = check_any_scheme_ffsl()
+
+      if ( any_scheme_ffsl .and. &
+           ( label_list(i) == primary_mesh_label .or. &
+             label_list(i) == shifted_mesh_label ) ) then
+
+        call temp_w2_field%initialise( vector_space = w2_fs )
+        call cell_orientation_list(i)%initialise( vector_space = w3_fs )
+        call invoke( setval_c(temp_w2_field,    0.0_r_def), &
+                     setval_c(cell_orientation_list(i), 0.0_r_def) )
+        if ( element_order == 0 ) then
+          ! Currently this isn't set up to work with high order dynamics
+          call invoke_mpi_calc_cell_orientation( temp_w2_field, &
+                                                 cell_orientation_list(i) )
+        else
+          call log_event( "Cell orientation not set up for high order elements", &
+                           LOG_LEVEL_ERROR )
+        end if
+      end if
+
+      !======================= Create a height field ==========================!
+      ! Note that these fields represent the height relative to
+      ! the surface as represented by a sphere.  With the current
+      ! representation of chi, this will result in the lowest
+      ! levels being -ve. This should be reviewed with ticket #562
+
+      if ( label_list(i) == primary_mesh_label .or. &
+           label_list(i) == shifted_mesh_label .or. &
+           label_list(i) == extra_mesh_label .or. &
+           label_list(i) == multigrid_mesh_label) then
+        call height_w1_list(i)%initialise( vector_space = w1_k0_fs )
+        call height_w2_list(i)%initialise( vector_space = w2_k0_fs )
+        call height_w3_list(i)%initialise( vector_space = w3_k0_fs )
+        call height_wth_list(i)%initialise( vector_space = wth_k0_fs )
+        call invoke( get_height_kernel_type( height_w1_list(i),  &
+                                             chi_in(:,i),        &
+                                             scaled_radius ),    &
+                     get_height_kernel_type( height_w2_list(i),  &
+                                             chi_in(:,i),        &
+                                             scaled_radius ),    &
+                     get_height_kernel_type( height_w3_list(i),  &
+                                             chi_in(:,i),        &
+                                             scaled_radius ),    &
+                     get_height_kernel_type( height_wth_list(i), &
+                                             chi_in(:,i),        &
+                                             scaled_radius )     )
+      end if
+
+      ! ======================= Calculate dz for w3 ===========================!
+      ! Calculate dz at W3 using the difference of the heights at vertical W2 dofs
+
+      if ( label_list(i) == primary_mesh_label .or. &
+           label_list(i) == shifted_mesh_label) then
+        call dz_w3_list(i)%initialise( vector_space = w3_k0_fs )
+        call invoke( get_dz_w3_kernel_type( dz_w3_list(i), height_w2_list(i)) )
+      end if
+
+      ! ================= Compute latitude and longitude maps =================!
+
+      if ( label_list(i) == twod_mesh_label ) then
+        call lat_w3_list(i)%initialise( vector_space = w3_k0_fs )
+        call long_w3_list(i)%initialise( vector_space = w3_k0_fs )
+        if ( geometry == geometry_spherical ) then
+          call invoke( compute_latlon_kernel_type( lat_w3_list(i),   &
+                                                   long_w3_list(i),  &
+                                                   chi_in(:,i),      &
+                                                   panel_id_in(i) )  )
+        else
+          call invoke( setval_c(lat_w3_list(i), f_lat),  &
+                       setval_c(long_w3_list(i), 0.0_r_def) )
+        end if
+      end if
+
+      !================ Create dA values at W2 dof locations ==================!
+
+      if ( label_list(i) /= twod_mesh_label .and. &
+           label_list(i) /= multigrid_mesh_label) then
+        call dA_at_w2_list(i)%initialise( vector_space = w2_fs )
+        call invoke( setval_c(dA_at_w2_list(i), 0.0_r_def),&
+                     calc_dA_at_w2_kernel_type(dA_at_w2_list(i), &
+                                               chi_in(:,i),      &
+                                               panel_id_in(i)  ) )
+      end if
+
+    !========================= End loop through meshes ========================!
+
+    end do
+
+    nullify( w2_fs  )
+    nullify( w3_fs  )
+    nullify( wtheta_fs )
+    nullify( wth_k0_fs )
+    nullify( w3_k0_fs  )
+    nullify( w2_k0_fs  )
+    nullify( w1_k0_fs  )
+
+    call log_event( "Gungho: created geometric_constants", LOG_LEVEL_INFO )
+    if ( subroutine_timers ) call timer('geometric_constants_alg')
+
+  end subroutine create_geometric_constants
+
+  !> @brief Function to return a pointer to the panel_id
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return The coordinate field array
+  function get_panel_id(mesh_id) result(panel_id_ptr)
+    implicit none
+    integer(kind=i_def), intent(in) :: mesh_id
+    integer(kind=i_def)             :: mesh_index
+    type(field_type),       pointer :: panel_id_ptr
+
+    mesh_index = find_mesh_index(mesh_id)
+    panel_id_ptr => panel_id_list(mesh_index)
+  end function get_panel_id
+
+  !> @brief Returns a pointer to the coordinate field array on the finest level
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return The coordinate field array
+  function get_coordinates(mesh_id) result(coords_ptr)
+    implicit none
+    integer(kind=i_def), intent(in) :: mesh_id
+    integer(kind=i_def)             :: mesh_index
+    type(field_type),       pointer :: coords_ptr(:)
+
+    mesh_index = find_mesh_index(mesh_id)
+    coords_ptr => chi_list(:,mesh_index)
+
+  end function get_coordinates
+
+  !> @brief Returns a pointer to the cell_orientation field
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return The cell_orientation field
+  function get_cell_orientation(mesh_id) result(orientation)
+    implicit none
+    integer(kind=i_def), intent(in) :: mesh_id
+    integer(kind=i_def)             :: mesh_index
+    type(field_type),       pointer :: orientation
+    character(str_def)              :: field_name
+
+    field_name = 'cell orientation'
+
+    mesh_index = find_mesh_index(mesh_id)
+    orientation => cell_orientation_list(mesh_index)
+
+    call check_initialised_field(orientation, field_name, mesh_id)
+
+  end function get_cell_orientation
+
+  !> @brief Returns the dA values at W2 DoF locations
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return The dA field
+  function get_dA_at_w2(mesh_id) result(dA)
+    implicit none
+    integer(kind=i_def), intent(in) :: mesh_id
+    integer(kind=i_def)             :: mesh_index
+    type(field_type),       pointer :: dA
+    character(str_def)              :: field_name
+
+    mesh_index = find_mesh_index(mesh_id)
+    field_name = 'dA_at_w2'
+    dA => dA_at_w2_list(mesh_index)
+    call check_initialised_field(dA, field_name, mesh_id)
+
+  end function get_dA_at_w2
+
+  !> @brief Returns a pointer to a height field
+  !> @param[in] space   The space of the desired height field
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return A height field
+  function get_height(space, mesh_id) result(height)
+    implicit none
+    integer(kind=i_def), intent(in) :: space
+    integer(kind=i_def), intent(in) :: mesh_id
+    integer(kind=i_def)             :: mesh_index
+    type(field_type),       pointer :: height
+    character(str_def)              :: field_name
+
+    mesh_index = find_mesh_index(mesh_id)
+    field_name = 'height'
+
+    select case (space)
+    case (W1)
+      height => height_w1_list(mesh_index)
+    case (W2)
+      height => height_w2_list(mesh_index)
+    case (W3)
+      height => height_w3_list(mesh_index)
+    case (Wtheta)
+      height => height_wth_list(mesh_index)
+    case default
+      height => null()
+      call log_event( "Height not available on requested space", LOG_LEVEL_ERROR)
+    end select
+
+    call check_initialised_field(height, field_name, mesh_id, space)
+
+  end function get_height
+
+  !> @brief Returns a pointer to the delta z at W3 field.
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return The dz at W3 field
+  function get_dz_w3(mesh_id) result(dz_w3)
+    implicit none
+    integer(kind=i_def), intent(in) :: mesh_id
+    type(field_type),       pointer :: dz_w3
+    integer(kind=i_def)             :: mesh_index
+
+    mesh_index = find_mesh_index(mesh_id)
+    dz_w3 => dz_w3_list(mesh_index)
+
+  end function get_dz_w3
+
+  !> @brief Returns a pointer to the latitude map
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return The latitude field array
+  function get_latitude(mesh_id) result(lat_ptr)
+    implicit none
+    integer(kind=i_def), intent(in) :: mesh_id
+    integer(kind=i_def)             :: mesh_index
+    type(field_type),       pointer :: lat_ptr
+    character(str_def)              :: field_name
+
+    mesh_index = find_mesh_index(mesh_id)
+    field_name = 'latitude'
+    lat_ptr => lat_w3_list(mesh_index)
+    call check_initialised_field(lat_ptr, field_name, mesh_id)
+
+  end function get_latitude
+
+  !> @brief Returns a pointer to the longitude map
+  !> @param[in] mesh_id The ID of the mesh to get the object for
+  !> @return The longitude field array
+  function get_longitude(mesh_id) result(long_ptr)
+    implicit none
+    integer(kind=i_def), intent(in) :: mesh_id
+    integer(kind=i_def)             :: mesh_index
+    type(field_type),       pointer :: long_ptr
+    character(str_def)              :: field_name
+
+    mesh_index = find_mesh_index(mesh_id)
+    field_name = 'longitude'
+    long_ptr => long_w3_list(mesh_index)
+    call check_initialised_field(long_ptr, field_name, mesh_id)
+
+  end function get_longitude
+
+  !> @brief Explicitly reclaim memory from module scope variables
+  !
+  subroutine final_geometric_constants()
+
+    implicit none
+
+    if (allocated(lat_w3_list)) deallocate(lat_w3_list)
+    if (allocated(long_w3_list)) deallocate(long_w3_list)
+    if (allocated(dA_at_w2_list)) deallocate(dA_at_w2_list)
+    if (allocated(height_wth_list)) deallocate(height_wth_list)
+    if (allocated(height_w3_list)) deallocate(height_w3_list)
+    if (allocated(height_w2_list)) deallocate(height_w2_list)
+    if (allocated(height_w1_list)) deallocate(height_w1_list)
+    if (allocated(dz_w3_list)) deallocate(dz_w3_list)
+    if (allocated(cell_orientation_list)) deallocate(cell_orientation_list)
+    if (allocated(panel_id_list)) deallocate(panel_id_list)
+    if (allocated(chi_list)) deallocate(chi_list)
+
+  end subroutine final_geometric_constants
+
+end module geometric_constants_mod

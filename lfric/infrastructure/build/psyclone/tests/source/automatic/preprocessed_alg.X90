@@ -1,0 +1,19 @@
+module preprocessed_alg_mod
+
+  implicit none
+
+  use field_mod, only : field_type
+
+contains
+
+  subroutine preprocessed_alg( one )
+    implicit none
+    type(field_type), intent(inout) :: one
+    call invoke(setval_c(one, 1.0))
+  end subroutine preprocessed_alg
+
+#ifdef NOT_SET
+This is just broken syntax guff which should cause a failure.
+#endif
+
+end module preprocessed_alg_mod

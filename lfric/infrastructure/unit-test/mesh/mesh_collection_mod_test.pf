@@ -1,0 +1,191 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the mesh collection object
+!>
+module mesh_collection_mod_test
+
+    use constants_mod,        only : i_def, r_def, str_def, l_def
+    use extrusion_mod,        only : uniform_extrusion_type, PRIME_EXTRUSION
+    use global_mesh_mod,      only : global_mesh_type
+    use partition_mod,        only : partition_type
+    use global_mesh_collection_mod,                                         &
+                              only : global_mesh_collection_type,           &
+                                     global_mesh_collection
+    use halo_comms_mod,       only : initialise_halo_comms, &
+                                     finalise_halo_comms
+    use local_mesh_mod,       only : local_mesh_type
+    use mesh_collection_mod,  only : mesh_collection_type,                  &
+                                     mesh_collection
+    use mesh_mod,             only : mesh_type, PLANE_BI_PERIODIC, PLANE
+    use mpi_mod,    only: store_comm, clear_comm
+    use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(MPITestCase), public ::mesh_collection_test_type
+    private
+    type(global_mesh_type), pointer :: global_mesh => null()
+    type(partition_type)            :: partition
+    type(local_mesh_type)           :: local_mesh
+    type(uniform_extrusion_type)    :: extrusion
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure get_local_mesh_ptr
+    procedure test_all
+  end type mesh_collection_test_type
+
+  integer(i_def), parameter :: nlayers       = 5_i_def
+  real(r_def),    parameter :: domain_bottom = 0.0_r_def
+  real(r_def),    parameter :: domain_top    = 10000.0_r_def
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(mesh_collection_test_type), intent(inout) :: this
+
+    integer(i_def) :: global_test_mesh_id
+
+    !Store the MPI communicator for later use
+    call store_comm(this%getMpiCommunicator())
+    ! Initialise halo functionality
+    call initialise_halo_comms( this%getMpiCommunicator() )
+
+    ! Create top level collections
+    global_mesh_collection = global_mesh_collection_type()
+
+    global_test_mesh_id = global_mesh_collection%add_unit_test_global_mesh()
+    this%global_mesh => global_mesh_collection%get_global_mesh( global_test_mesh_id )
+    this%partition   = partition_type()
+    call this%local_mesh%initialise( this%global_mesh, this%partition )
+    call this%local_mesh%init_cell_owner()
+    this%extrusion   = uniform_extrusion_type( domain_bottom, &
+                                               domain_top,    &
+                                               nlayers,       &
+                                               PRIME_EXTRUSION )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod, only: final_configuration
+
+    implicit none
+
+    class(mesh_collection_test_type), intent(inout) :: this
+
+    call global_mesh_collection%clear()
+    call final_configuration()
+
+    ! Finalise halo functionality
+    call finalise_halo_comms()
+    ! Clear the stored MPI communicator
+    call clear_comm()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  function get_local_mesh_ptr(this) result(local_mesh_ptr)
+    implicit none
+    class(mesh_collection_test_type), intent(inout), target :: this
+    type(local_mesh_type), pointer :: local_mesh_ptr
+    local_mesh_ptr => this%local_mesh
+  end function get_local_mesh_ptr
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  @test( npes=[1] )
+  subroutine test_all( this )
+
+    implicit none
+
+    class(mesh_collection_test_type), intent(inout) :: this
+
+    type(mesh_type), pointer :: mesh_ptr => null()
+    type(local_mesh_type), pointer :: local_mesh_ptr
+    type(mesh_type) :: mesh
+    type(mesh_type) :: unit_test_mesh
+
+    integer(i_def) :: mesh_id, mesh_test_id
+    integer(i_def) :: ncells_2d_with_ghost, num_layers
+
+    character(str_def) :: mesh_name
+    character(str_def), allocatable :: test_character_array(:)
+
+    type(mesh_type), pointer :: mesh_by_name => null()
+    type(mesh_type), pointer :: mesh_variant => null()
+
+    ! Create a mesh collection
+    mesh_collection = mesh_collection_type()
+
+    local_mesh_ptr => this%get_local_mesh_ptr()
+
+    ! Add a couple of meshes to the collection
+    mesh = mesh_type( local_mesh_ptr, this%extrusion )
+    mesh_id = mesh_collection%add_new_mesh( mesh )
+
+    unit_test_mesh = mesh_type( PLANE_BI_PERIODIC, local_mesh_ptr )
+    mesh_test_id = mesh_collection%add_new_mesh( unit_test_mesh )
+
+    ! Two consecutively created meshes should have consecutive ids
+    @assertTrue ( mesh_test_id /= mesh_id )
+
+    ! Extract the second mesh using its mesh id
+    mesh_ptr => mesh_collection%get_mesh( mesh_test_id )
+
+    ! Do some tests to check we have the mesh we expect (9 cells, 3 vert levels)
+    ncells_2d_with_ghost = mesh_ptr%get_ncells_2d_with_ghost()
+    @assertEqual ( 9, ncells_2d_with_ghost )
+
+    num_layers = mesh_ptr%get_nlayers()
+    @assertEqual ( 3, num_layers )
+
+    ! Extract the first mesh in the list using its mesh id
+    mesh_ptr => mesh_collection%get_mesh( mesh_id )
+
+    ! Do some tests to check we have the mesh we expect (9 cells, 5 vert levels)
+    ncells_2d_with_ghost = mesh_ptr%get_ncells_2d_with_ghost()
+    @assertEqual ( 9, ncells_2d_with_ghost )
+
+    num_layers = mesh_ptr%get_nlayers()
+    @assertEqual ( 5, num_layers )
+
+    !-----------------------------------------------------------------------
+    ! Check the names of the meshes
+    test_character_array = mesh_collection % get_mesh_names()
+    mesh_name = mesh_ptr%get_mesh_name()
+    @assertTrue( mesh_name == test_character_array(1) )
+
+    ! Check you can extract mesh by name
+    mesh_by_name => mesh_collection % get_mesh(mesh_name)
+    @assertAssociated( mesh_by_name )
+
+    ! Check it's the same mesh as the one extracted by id
+    @assertTrue(associated( mesh_by_name, mesh_ptr ))
+
+    ! Check you can extract mesh variant
+    mesh_variant => mesh_collection % get_mesh(mesh_ptr, PRIME_EXTRUSION)
+    @assertAssociated( mesh_variant )
+
+    ! Check it's the same mesh as the one extracted by id
+    @assertTrue(associated( mesh_variant, mesh_ptr ))
+
+    call mesh_collection%clear()
+
+  end subroutine test_all
+
+end module mesh_collection_mod_test

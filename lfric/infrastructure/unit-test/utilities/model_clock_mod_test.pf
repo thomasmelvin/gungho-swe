@@ -1,0 +1,270 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2019 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+module model_clock_mod_test
+
+  use calendar_mod,  only : calendar_type
+  use model_clock_mod,     only : model_clock_type
+  use constants_mod, only : i_timestep, r_def, r_second
+  use pFUnit_mod
+
+  implicit none
+
+  private
+  public :: get_parameters, test_constructor, test_everything
+
+  ! Each test case consists of inputs:
+  !   First step, Last step, Step length, Spinup period
+  ! And expected outputs:
+  !   First step, Last step, Clock ticks executed, Clock ticks in spinup state
+  !
+  @testParameter
+  type, public, extends(AbstractTestParameter) :: parameter_type
+    character(:), allocatable :: inject_first
+    character(:), allocatable :: inject_last
+    real(r_second)            :: inject_delta_t
+    real(r_second)            :: inject_spinup_period
+    integer :: expect_first
+    integer :: expect_last
+    integer :: expect_ticks
+    integer :: expect_spinup_ticks
+  contains
+    procedure :: toString
+  end type parameter_type
+
+
+  @TestCase(testParameters={get_parameters()}, constructor=test_constructor)
+  type, public, extends(ParameterizedTestCase) :: clock_test_type
+    private
+    character(:), allocatable :: inject_first
+    character(:), allocatable :: inject_last
+    real(r_second)            :: inject_delta_t
+    real(r_second)            :: inject_spinup_period
+    integer :: expect_first
+    integer :: expect_last
+    integer :: expect_ticks
+    integer :: expect_spinup_ticks
+  contains
+    procedure test_everything
+  end type clock_test_type
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  ! A stub calendar whith a crude understanding of timesteps. We don't use the
+  ! much smarter timestep calendar in order to avoid increasing our test
+  ! surface.
+  !
+  type, extends(calendar_type) :: calendar_stub_type
+    private
+  contains
+    procedure, public :: format_duration
+    procedure, public :: format_instance
+    procedure, public :: parse_duration
+    procedure, public :: parse_instance
+  end type calendar_stub_type
+
+
+contains
+
+  ! Sets the array of test parameters. Each parameter group (object) is passed
+  ! to the test in turn allowing a single test function to test multiple
+  ! scenarios. See the comment prior to each object definition for details on
+  ! the scenario it represents.
+  !
+  function get_parameters() result(parameters)
+    implicit none
+    type(parameter_type) :: parameters(8)
+    parameters = (/                                                   &
+  ! Initial run without spinup
+                   parameter_type('1', '5', 12.7, 0.0, 1, 5, 5, 0),   &
+  ! Initial run with full spinup
+                   parameter_type('1', '5', 12.7, 20.0, 1, 5, 5, 2),  &
+  ! Initial run with start of spinup
+                   parameter_type('1', '5', 0.4, 2.5, 1, 5, 5, 5),   &
+  ! Subsequent run without spinup
+                   parameter_type('9', '15', 13.2, 0.0, 9, 15, 7, 0), &
+  ! Subsequent run across spinup
+                   parameter_type('9', '15', 0.3, 4.0, 9, 15, 7, 6),  &
+  ! Subsequent run after spinup
+                   parameter_type('9', '15', 0.3, 2.0, 9, 15, 7, 0),  &
+  ! Single step initial run without spinup
+                   parameter_type('1', '1', 7.9, 0.0, 1, 1, 1, 0),    &
+  ! Single step subsequent run after spinup
+                   parameter_type('3', '3', 7.9, 8.0, 3, 3, 1, 0)/)
+  end function get_parameters
+
+  ! Tests a scenario described by the associated parameters.
+  !
+  ! The "inject_" parameters are used to initialise a clock object. The object
+  ! is then stepped over the range described by the parameters and the result
+  ! is checked against the "expect_*" parameters.
+  !
+  @test
+  subroutine test_everything( this )
+
+    implicit none
+
+    class(clock_test_type), intent(inout) :: this
+
+    type(model_clock_type)        :: unit_under_test
+    type(calendar_stub_type)      :: stub_calendar
+    class(calendar_type), pointer :: returned_calendar
+    integer                       :: tally
+    integer                       :: spinning_tally
+    real(r_second)                :: elapsed
+    real(r_second)                :: end_spinup
+    integer                       :: spinup_length
+    integer                       :: this_spinup
+    integer                       :: idx
+    real(r_def), allocatable      :: spinup_fraction(:)
+
+    ! If a spinup is specified, calculate the expected spinup fractions over
+    ! this run.
+    !
+    spinup_length = ceiling(this%inject_spinup_period / this%inject_delta_t)
+    if (spinup_length > 0) then
+      end_spinup = spinup_length * this%inject_delta_t
+      this_spinup = spinup_length - this%expect_first + 1
+      allocate( spinup_fraction(this_spinup) )
+      do idx=1, this_spinup
+        spinup_fraction(idx) = (real(this%expect_first + idx - 1, r_def) &
+                                  - 0.5_r_def) / real(spinup_length, r_def)
+        spinup_fraction(idx) = min(spinup_fraction(idx), 1.0_r_def)
+      end do
+    else ! spinup_length <= 0
+      end_spinup = 0.0
+    end if
+
+    unit_under_test = model_clock_type( stub_calendar,       &
+                                        this%inject_first,   &
+                                        this%inject_last,    &
+                                        this%inject_delta_t, &
+                                        this%inject_spinup_period )
+
+    ! There is no direct way to confirm the calendar made it through correctly
+    ! so we just perform a single test to confirm it does what we think it
+    ! should.
+    !
+    returned_calendar => unit_under_test%get_calendar()
+    @assertEqual( 3, returned_calendar%parse_instance( '3' ) )
+
+    ! Ensure the clock is configured and ready to go on the first step.
+    !
+    @assertEqual( this%expect_first, unit_under_test%get_first_step() )
+    @assertEqual( this%expect_last, unit_under_test%get_last_step() )
+    @assertEqual( this%expect_first, unit_under_test%get_step() )
+    @assertEqual( this%inject_delta_t, unit_under_test%get_seconds_per_step() )
+    @assertEqual( (this%expect_first == 1), unit_under_test%is_initialisation(), 'Is initialisation:' )
+
+
+    ! Run the clock until it thinks it's done.
+    !
+    ! At each step make sure the clock is in the correct states. Ensure the
+    ! spinup fraction is correct.
+    !
+    tally = 0
+    spinning_tally = 0
+    do while (unit_under_test%tick())
+      @assertTrue( unit_under_test%is_running() )
+      @assertFalse( unit_under_test%is_initialisation() )
+      elapsed = this%inject_delta_t * (tally + this%expect_first - 1)
+      tally = tally + 1
+      @assertEqual( (elapsed < end_spinup), unit_under_test%is_spinning_up(), 'Is spinning up:' )
+      if (unit_under_test%is_spinning_up()) then
+        @assertEqual( spinup_fraction(tally), unit_under_test%get_spinup_fraction() )
+        spinning_tally = spinning_tally + 1
+      else
+        @assertEqual( 1.0_r_def, unit_under_test%get_spinup_fraction() )
+      end if
+    end do ! clock%is_running()
+
+    ! Ensure the correct number of ticks occured.
+    !
+    @assertEqual( this%expect_ticks, tally )
+    @assertEqual( this%expect_spinup_ticks, spinning_tally )
+
+  end subroutine test_everything
+
+
+  ! Constructs the test object from a parameter object.
+  !
+  function test_constructor( clock_test_parameter ) result(new_test)
+    implicit none
+    type(parameter_type), intent(in) :: clock_test_parameter
+    type(clock_test_type) :: new_test
+    new_test%inject_first = clock_test_parameter%inject_first
+    new_test%inject_last = clock_test_parameter%inject_last
+    new_test%inject_delta_t = clock_test_parameter%inject_delta_t
+    new_test%inject_spinup_period = clock_test_parameter%inject_spinup_period
+    new_test%expect_first = clock_test_parameter%expect_first
+    new_test%expect_last = clock_test_parameter%expect_last
+    new_test%expect_ticks = clock_test_parameter%expect_ticks
+    new_test%expect_spinup_ticks = clock_test_parameter%expect_spinup_ticks
+
+  end function test_constructor
+
+
+  ! Format a nice human readable description of the current parameter set.
+  !
+  function toString( this ) result(string)
+    implicit none
+    class(parameter_type), intent(in) :: this
+    character(:), allocatable :: string
+    character(20) :: buffer
+    write( buffer,                                               &
+           '(A,", ",A,", ",F5.2,",",F5.2)') this%inject_first,   &
+                                            this%inject_last,    &
+                                            this%inject_delta_t, &
+                                            this%inject_spinup_period
+    string = trim(buffer)
+  end function toString
+
+
+  ! Simple conversion from duration integer to string.
+  !
+  function format_duration( this, duration )
+    implicit none
+    class(calendar_stub_type), intent(in) :: this
+    integer(i_timestep),       intent(in) :: duration
+    character(:), allocatable :: format_duration
+    allocate( character(5)::format_duration )
+    write( format_duration, '(I0)' ) duration
+  end function format_duration
+
+
+  ! Simple conversion from instance integer to string.
+  !
+  function format_instance( this, instance )
+    implicit none
+    class(calendar_stub_type), intent(in) :: this
+    integer(i_timestep),       intent(in) :: instance
+    character(:), allocatable :: format_instance
+    allocate( character(5)::format_instance )
+    write( format_instance, '(I0)') instance
+  end function format_instance
+
+
+  ! Simple conversion from string to duration integer.
+  !
+  function parse_duration( this, string )
+    implicit none
+    class(calendar_stub_type), intent(in) :: this
+    character(*),              intent(in) :: string
+    integer(i_timestep) :: parse_duration
+    read( string, '(I5)') parse_duration
+  end function parse_duration
+
+
+  ! Simple conversion from string to duration integer.
+  !
+  function parse_instance( this, string )
+    implicit none
+    class(calendar_stub_type), intent(in) :: this
+    character(*),              intent(in) :: string
+    integer(i_timestep) :: parse_instance
+    read( string, '(I5)') parse_instance
+  end function parse_instance
+
+end module model_clock_mod_test

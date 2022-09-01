@@ -1,0 +1,18 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class global_mesh_map_collection_mod::global_mesh_map_collection_type {
+
+  -global_mesh_map_list: linked_list_type <<payload_type=global_mesh_map_type>>
+
+  +<<create>>  global_mesh_map_collection_constructor() : global_mesh_map_collection_type
+  +<<destroy>> global_mesh_map_collection_destructor()
+  +clear()
+
+  +add_global_mesh_map(<<in>>source_global_mesh_id:<<integer>>, <<in>>target_global_mesh_id:<<integer>>, <<in>>map:<<integer[:::]>>)
+  +get_global_mesh_map(<<in>>source_global_mesh_id:<<integer>>, <<in>>target_global_mesh_id:<<integer>>): global_mesh_map_type <<pointer>>
+
+}
+
+

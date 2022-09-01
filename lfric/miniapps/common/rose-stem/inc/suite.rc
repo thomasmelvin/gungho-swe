@@ -1,0 +1,920 @@
+%include "inc/targets.rc"
+
+{# SETUP SOME JINJA2 VARIABLES #}
+{%- set plot_config = {} %}
+{%- set appsToRun = [] %}
+{%- set appConfigsCompilerRuns = {} %}
+{%- set appPrecisionRuns = {} %}
+{%- set appPrecisionBuilds = {} %}
+{%- set variables = {} %}
+{%- set rdef_build_precisions = [] %}
+{%- set rose_suite_gui_headers = [] %}
+{%- set resolution_choices = {} %}
+{%- set support_meshes = {} %}
+{%- set scheduledTasksDict = {} %}
+{%- set mesh_names = [] %}
+
+{%- set science_label = TARGET_SCIENCE_COMPILER + '_'
+                      + rdef_default + '-bit_'
+                      + run_application_profile|default('fast-debug', true) %}
+
+{%- set compilers = target[PRIMARY_TARGET['platform']]['setup']['compiler'].keys() %}
+
+{%- if RUN_NAMES is defined %}
+{%-   if RUN_NAMES is string %}
+{%-     set groupsToRun = [RUN_NAMES] %}
+{%-     set publishGroup = RUN_NAMES %}
+{%-   else %}
+{%-     set groupsToRun = RUN_NAMES %}
+{%-     set publishGroup = RUN_NAMES|join(",") %}
+{%-   endif %}
+{%- else %}
+{%-   set groupsToRun = ['developer'] %}
+{%-   set publishGroup = 'developer' %}
+{%- endif %}
+
+{%- if miniappFlag == True %}
+{%-   set appPathFragment = 'miniapps/' %}
+{%- else  %}
+{%-   set appPathFragment = '' %}
+{%- endif %}
+
+{%- set build_profiles = ['fast-debug', 'full-debug', 'production'] %}
+
+{%- if MIRROR_UPLOAD_URL is defined %}
+{%-   if MIRROR_UPLOAD_URL and MIRROR_UPLOAD_URL|list|last != '/' %}
+{%-     set MIRROR_UPLOAD_URL = MIRROR_UPLOAD_URL + '/' %}
+{%-   endif %}
+{%- endif %}
+
+
+{# crunInfo is dictionary containing variables needed to dynamically    #}
+{# construct the graph for cruns:                                       #}
+{#                                                                      #}
+{#     maxcrun              Specifies the maximum number of cycles      #}
+{#     scheduledTasksDict   Python Dictionary of environment variables  #}
+{#                          To be passed from the mission to the task - #}
+{#                          this is then used in setting the directives #}
+
+{%- set crunInfo = {'maxcrun':1} %}  {# 'maxcrun' is used as the number of cycles based on the requested jobs #}
+{%- set MAXRUNAHEAD = (MAXRUNAHEAD|default(3)) %} {# The maximum allowable runahead limit #}
+
+{%- set dummy = setTaskEnv(scheduledTasksDict) -%} {# sets the environment configurations for each job #}
+{%- set dummy = setCrunInfo(crunInfo, scheduledTasksDict) -%} {# sets the crunInfo #}
+{%- set dummy = setResolutions(resolution_choices, support_meshes) %} {# sets the requested resolutions #}
+{%- set dummy = setPrecisions(rdef_build_precisions) %}  {# sets the requested precisions #}
+
+{# Based on the resolutions and configurations, work out which meshes we need to generate #}
+{%- for config, resolutions in resolution_choices.items() %}
+{%-   for resolution in resolutions %}
+{%-     set mesh_name = resolution if resolution is string else (resolution[0] if resolution|length>0 else '') %}
+{%-     do mesh_names.append(mesh_name) if mesh_name not in mesh_names%}
+{%-   endfor %}
+{%- endfor %}
+
+{%- for config, extra_meshes in support_meshes.items() %}
+{%-   for mesh_name in extra_meshes %}
+{%-     do mesh_names.append(mesh_name) if mesh_name not in mesh_names%}
+{%-   endfor %}
+{%- endfor %}
+
+
+[cylc]
+    UTC mode = True
+    [[events]]
+        mail events = timeout
+        abort on timeout = True
+{%- if 'nightly' in groupsToRun %}
+        abort on stalled = True
+{%- endif %}
+        timeout = PT3H
+
+[visualization]
+    number of cycle points = {{ crunInfo['maxcrun'] if crunInfo['maxcrun'] < MAXRUNAHEAD else MAXRUNAHEAD }}
+
+[scheduling]
+    cycling mode = integer
+    initial cycle point = 1
+    final cycle point   = {{ crunInfo['maxcrun'] }}
+    max active cycle points = {{ crunInfo['maxcrun'] if crunInfo['maxcrun'] < MAXRUNAHEAD else MAXRUNAHEAD }}
+
+    [[queues]]
+        [[[host_throttle]]]
+            limit   = {{ SUITE_THROTTLE }}
+            members = root
+    [[dependencies]]
+{%- set scheduledTasks = schedule() | deduplicate_schedule() %}
+{{scheduledTasks}}
+
+[runtime]
+    [[root]]
+        env-script = "eval $(rose task-env)"
+        init-script = """
+                      export CYLC_VERSION={{CYLC_VERSION}}
+                      export ROSE_VERSION={{ROSE_VERSION}}
+                      """
+        script = "rose task-run"
+{%- if TARGET_REQUIRES_POLLING is defined %}
+        [[[job]]]
+            submission polling intervals = PT10S, PT20S, PT30S, PT1M
+            execution polling intervals  = PT1M, 2*PT2M, 3*PT3M, 4*PT4M, PT5M
+{%- endif %}
+        [[[events]]]
+{%- if TROUBLE_MAIL_ADDRESS is defined %}
+            mail to = {{TROUBLE_MAIL_ADDRESS}}
+            mail events = submission timeout, submission failed, timeout, failed, execution timeout
+{%- endif %}
+            submission timeout = PT12H
+            execution timeout  =  PT3H
+        [[[environment]]]
+            SOURCE_ROOT = $CYLC_SUITE_SHARE_DIR/source
+            OUTPUT_ROOT = $CYLC_SUITE_SHARE_DIR/output
+            PYTHONPATH  = $CYLC_SUITE_RUN_DIR/lib/python
+            PATH        = $PATH:$PYTHONPATH/bin
+
+{# Set up Families for platform properties.                #}
+{# These would be platforms specific to a site, i.e. meto  #}
+{# Could be brought in from include file specific to site. #}
+    [[METO-SPICE]]
+        [[[environment]]]
+            HYPERTHREADS    = 1
+            CORES_PER_NODE  = 1
+            NUMA_REGIONS_PER_NODE = 0
+
+    [[METO-XC]]
+        [[[environment]]]
+            HYPERTHREADS    = 1
+            CORES_PER_NODE  = 36
+            NUMA_REGIONS_PER_NODE = 2
+
+    [[METO-XC40]]
+        inherit = METO-XC
+
+    [[METO-XCS]]
+        inherit = METO-XC
+
+    [[MONSOON-XC40]]
+        inherit = METO-XC
+
+    [[ LOCAL ]]
+        [[[remote]]]
+            host = {{ ROSE_ORIG_HOST }}
+        [[[job]]]
+            batch system = background
+
+    [[TARGET]]
+        inherit = {{TARGET_OPT|upper}}
+        [[[remote]]]
+            host = {{get_target_property(PRIMARY_TARGET, 'hostname')}}
+        [[[job]]]
+            batch system = {{get_target_property(PRIMARY_TARGET, 'batcher')}}
+
+    [[TECHNICAL]]
+        [[[remote]]]
+            host = {{ get_target_property(SECONDARY_TARGET, 'hostname') }}
+        [[[job]]]
+            batch system = {{ get_target_property(SECONDARY_TARGET,
+                                                  'batcher') }}
+{{ directives(SECONDARY_TARGET, 'tech') }}
+        [[[environment]]]
+            SOURCE_DIRECTORY      = $SOURCE_ROOT/{{appPathFragment}}{{projectName}}
+            DESTINATION_DIRECTORY = $OUTPUT_ROOT/{{SECONDARY_TARGET['compiler']}}_fast-debug
+            WORKING_DIR           = {{ get_target_property(SECONDARY_TARGET, 'build_root') }}/{{SECONDARY_TARGET['compiler']}}_fast-debug
+
+##############################################################################
+{#- PRELIMINARIES                                                            #}
+{%- if 'preliminaries' not in rose_suite_gui_headers %}
+{%-   do rose_suite_gui_headers.append('preliminaries') %}
+    [[PRELIMINARIES]]
+{%- endif %}
+
+{%- if 'export_source' in scheduledTasks %}
+    [[export_source]]
+        inherit = PRELIMINARIES, LOCAL
+        script  = """
+                  mkdir -p `dirname $SOURCE_ROOT`
+                  svn export --force {{SOURCE_LFRIC}} $SOURCE_ROOT
+
+                  TMP_SOURCE_DIR={{SOURCE_LFRIC}}/{{appPathFragment}}{{projectDir}}
+                  TMP_TARGET_DIR=$SOURCE_ROOT/{{appPathFragment}}{{projectName}}
+
+                  # Mini-Apps currently use gungho's optimisations.
+                  # Though this will need to be revisited once we know
+                  # what should be done if the miniapp itself has
+                  # optimisations.
+                  mkdir -p `dirname $TMP_TARGET_DIR/optimisation`
+                  svn export --force {{SOURCE_LFRIC}}/gungho/optimisation $TMP_TARGET_DIR/optimisation
+
+                  unset TMP_SOURCE_DIR
+                  unset TMP_TARGET_DIR
+
+                  HOST={{target[PRIMARY_TARGET['platform']]['hostname']}}
+                  RELATIVE_SOURCE_DIRECTORY=`echo $SOURCE_DIRECTORY | sed "s|$HOME/||"`
+                  ssh $HOST mkdir -p $RELATIVE_SOURCE_DIRECTORY
+                  rsync -avz $SOURCE_DIRECTORY/ $HOST:$RELATIVE_SOURCE_DIRECTORY/
+                  sleep 5
+                  """
+
+        [[[environment]]]
+            SOURCE_DIRECTORY = $SOURCE_ROOT
+{%- endif %}
+
+
+##############################################################################
+{#- DOCUMENTATION                                                            #}
+{%- if 'documentation' not in rose_suite_gui_headers %}
+{%-   do rose_suite_gui_headers.append('documentation') %}
+    [[DOCUMENTATION]]
+        inherit = TECHNICAL
+{%- endif %}
+
+
+##############################################################################
+{#- PUBLISH                                                                  #}
+{%- set publish_destination = '$CYLC_SUITE_SHARE_DIR/publish-' + projectName + '-' + publishGroup + '-' + TARGET_OPT %}
+    [[PUBLISH]]
+        inherit = TECHNICAL
+        [[[environment]]]
+            DESTINATION = {{publish_destination}}
+
+{%- if 'publish_node' in scheduledTasks %}
+    [[publish_node]]
+        script = true
+{%- endif %}
+
+{%- if 'publish_index' in scheduledTasks %}
+    [[publish_index]]
+        inherit = PUBLISH
+
+        {{scripting(
+              SECONDARY_TARGET,
+              ['base', 'tech'],
+              ['base'],
+              script='rose task-run --app-key=publish --command-key=index'
+          )}}
+
+        [[[environment]]]
+            DESTINATION = {{publish_destination}}
+{%-   if ROSE_BUSH_URL %}
+            ROSE_BUSH_ARG = -bush {{ROSE_BUSH_URL}}
+{%-   endif %}
+{%- endif %}
+
+{%- if 'mirror_results_local' in scheduledTasks %}
+    [[mirror_results_local]]
+        inherit = PUBLISH
+
+        {{scripting(
+              SECONDARY_TARGET,
+              ['base', 'tech'],
+              ['base'],
+              script='rose task-run --app-key=publish_mirror'
+          )}}
+
+        [[[environment]]]
+            SOURCE  = {{publish_destination}}
+            TARGET  = file://$HOME/public_html/lfric-{{projectName}}-{{TARGET_OPT}}-{{publishGroup}}
+{%- endif %}
+
+{%- if 'mirror_results_remote' in scheduledTasks %}
+    # Again, something which happens after publishing and so cannot be in the
+    # PUBLISH family.
+    [[mirror_results_remote]]
+        inherit = None, LOCAL
+        script = rose task-run --app-key=publish_mirror
+        [[[environment]]]
+            REWRITE = {{MIRROR_REWRITE}}
+            SOURCE  = {{publish_destination}}
+            TARGET  = {{MIRROR_UPLOAD_URL}}lfric-{{projectName}}-{{TARGET_OPT}}-{{publishGroup}}
+{%- endif %}
+
+{{ publish_node_task('PUBLISH') }}
+
+##############################################################################
+# TECHNICAL                                                                  #
+##############################################################################
+{%- for app in projectApps %}
+{{ validate_rose_meta_task( projectName, 'TECHNICAL', appName=app ) }}
+{%- endfor %}
+
+{{ check_config_dump_task('TECHNICAL', SECONDARY_TARGET) }}
+
+{{ check_style_task( 'TECHNICAL', SECONDARY_TARGET) }}
+
+{{ api_documentation_task( 'DOCUMENTATION', SECONDARY_TARGET, 'PUBLISH', SECONDARY_TARGET) }}
+{{ uml_documentation_task( 'DOCUMENTATION', SECONDARY_TARGET, 'PUBLISH', SECONDARY_TARGET) }}
+{{ design_documentation_task( 'DOCUMENTATION', SECONDARY_TARGET, 'PUBLISH', SECONDARY_TARGET) }}
+
+##############################################################################
+# COMPILE {{projectName|upper}} PROJECT
+##############################################################################
+{%- for compiler in compilers -%}
+{%-   for precision in rdef_build_precisions %}
+{%-     set compiler_label = compiler|lower + '_' + precision + '-bit' %}
+{%-     set compiler_family = compiler_label|upper %}
+    [[{{compiler_family}}]]
+        [[[environment]]]
+            BIN_DIR               = $OUTPUT_ROOT/{{compiler_label}}/bin
+            COMPILER              = {{compiler}}
+            DESTINATION_DIRECTORY = $OUTPUT_ROOT/{{compiler_label}}
+            SOURCE_DIRECTORY      = $SOURCE_ROOT/{{appPathFragment}}{{projectName}}
+            {#- We can't define WORKING_DIR here as it may contain          #}
+            {#- target specific variables not existing on the local machine #}
+
+{%-     for build in build_profiles %}
+{%-       set label = compiler_label + '_' + build|lower %}
+{%-       set family = label|upper %}
+    [[{{family}}]]
+        inherit = {{compiler_family}}
+
+        [[[environment]]]
+            BIN_DIR               = $OUTPUT_ROOT/{{label}}/bin
+            DESTINATION_DIRECTORY = $OUTPUT_ROOT/{{label}}
+
+
+{%-       if 'compile_' + projectName + '_with_' + label in scheduledTasks %}
+    [[compile_{{projectName}}_with_{{label}}]]
+        inherit = {{family}}, TARGET
+
+        {{scripting(
+              PRIMARY_TARGET,
+              ['base', 'compiler.'+compiler, 'build'],
+              ['base'],
+              prescript=deleteDirectory('$WORKING_DIR')+"\nmkdir -p $DESTINATION_DIRECTORY",
+              script='rose task-run --app-key=compile',
+              finalscript=deleteDirectory('$WORKING_DIR') + """
+# Future publisher stages need this information
+RELATIVE_LOG_ROOT=$(echo $CYLC_TASK_LOG_ROOT | sed 's|$HOME/||')
+echo $RELATIVE_LOG_ROOT > $DESTINATION_DIRECTORY/compile.log.path
+                          """
+          )}}
+
+        [[[environment]]]
+            WORKING_DIR           = {{get_target_property(PRIMARY_TARGET, 'build_root')}}/{{label}}
+            TARGET                = build
+            PROFILE               = {{build}}
+            LFRIC_TARGET_PLATFORM = {{TARGET_OPT}}
+            MAKE_THREADS          = 4
+            RDEF_PRECISION        = {{precision}}
+
+            {{directives(PRIMARY_TARGET, 'build')}}
+{%-       endif %}
+
+{%-       if 'publish_' + label + '_compile' in scheduledTasks %}
+{%-         if 'compilation_info' not in rose_suite_gui_headers %}
+{%-           do rose_suite_gui_headers.append('compilation_info') %}
+    [[COMPILATION_INFO]]
+        inherit = PUBLISH
+{%-         endif %}
+
+    [[publish_{{label}}_compile]]
+        inherit = COMPILATION_INFO, {{family}}
+        pre-script = """
+                     {{ensureDestination()}}
+                     """
+
+        script = rose task-run --app-key=publish_compile
+
+        [[[environment]]]
+            HOST     = {{target[PRIMARY_TARGET['platform']]['hostname']}}
+            CONTEXT  = {{build}}
+            DIR_FILE = compile.log.path
+            # This needs to be overridden as it is set to a none word-size
+            # specific directory (e.g. intel_fast-debug) by the PUBLISH
+            # family. It should be set by the {{family}} family
+            # but for reasons unclear to me that doesn't override.
+            DESTINATION_DIRECTORY = $OUTPUT_ROOT/{{label}}
+
+        [[[job]]]
+            execution retry delays = 2*PT5S, 5*PT10S, 9*PT1M, 5*PT10M, 3*PT1H
+{%-       endif %}
+
+{%-     endfor %} {# build #}
+{%-   endfor %} {# rdef_precision #}
+{%- endfor %} {# compile #}
+
+
+##############################################################################
+# COMPILE MESH TOOLS
+##############################################################################
+{%- set mesh_label  = (TARGET_MESH_COMPILER|lower + '_' +
+                       mesh_rdef + '-bit_' +
+                       mesh_build|lower) %}
+{%- set mesh_family = (mesh_label|upper) %}
+
+{%- if mesh_family not in rose_suite_gui_headers %}
+{%-   do rose_suite_gui_headers.append(mesh_family) %}
+    [[{{mesh_family}}]]
+        [[[environment]]]
+            COMPILER = {{TARGET_MESH_COMPILER}}
+            {#- We can't define WORKING_DIR here as it may contain          #}
+            {#- target specific variables not existing on the local machine #}
+
+{%- endif %}
+
+{%- if 'compile_mesh_tools_with_' + mesh_label in scheduledTasks %}
+    [[compile_mesh_tools_with_{{mesh_label}}]]
+        inherit = {{mesh_family}}, TARGET
+
+        {{scripting(
+              PRIMARY_TARGET,
+              ['base', 'compiler.'+TARGET_MESH_COMPILER, 'build'],
+              ['base'],
+              prescript=deleteDirectory('$WORKING_DIR'),
+              script='rose task-run --app-key=compile',
+              finalscript=deleteDirectory('$WORKING_DIR')
+          )}}
+
+        [[[environment]]]
+            SOURCE_DIRECTORY      = $SOURCE_ROOT/mesh_tools
+            DESTINATION_DIRECTORY = $OUTPUT_ROOT/{{mesh_label}}
+            MESH_DIR              = $OUTPUT_ROOT/{{mesh_label}}/meshes
+            BIN_DIR               = $OUTPUT_ROOT/{{mesh_label}}/bin
+            WORKING_DIR           = {{get_target_property(PRIMARY_TARGET, 'build_root')}}/{{mesh_label}}
+            TARGET                = build
+            PROFILE               = {{mesh_build}}
+            LFRIC_TARGET_PLATFORM = {{TARGET_OPT}}
+            MAKE_THREADS          = 4
+            RDEF_PRECISION        = {{mesh_rdef}}
+
+      {{directives(PRIMARY_TARGET, 'build')}}
+{%- endif %}   {# Compile mesh tools #}
+
+##############################################################################
+# UNIT, INTEGRATION & CANNED TESTS
+##############################################################################
+{%- for compiler in compilers %}
+{%-   for precision in rdef_build_precisions %}
+{%-     set compiler_label = compiler | lower + '_' + precision + '-bit' %}
+{%-     set compiler_family = compiler_label | upper %}
+    [[TESTING_WITH_{{compiler_family}}]]
+        inherit = {{compiler_family}}, TARGET
+
+{{      unit_test_tasks( 'TESTING_WITH_'+compiler_family, PRIMARY_TARGET, compiler, precision ) }}
+
+{%-     for build in build_profiles %}
+{%-       set label = compiler_label + '_' + build | lower %}
+{%-       set family = label | upper %}
+
+
+{#############################################################################}
+{# CANNED CONFIGURATIONS                                                     #}
+{%-       for appName in canned_configurations %}
+{%-         if 'run_' + appName + '_canned_test_' + label in scheduledTasks %}
+{%-           if 'CANNED_TASKS_' + label|upper not in rose_suite_gui_headers %}
+{%-             do rose_suite_gui_headers.append('CANNED_TASKS_'+label|upper) %}
+    [[CANNED_TASKS_{{label|upper}}]]
+        inherit = {{family}}
+{%-           endif %}
+    [[run_{{appName}}_canned_test_{{label}}]]
+        inherit = CANNED_TASKS_{{label|upper}}, TARGET
+
+        {{scripting(
+              PRIMARY_TARGET,
+              ['base', 'compiler.'+compiler, 'run'],
+              ['base'],
+              prescript='cp -r $SOURCE_DIRECTORY/example/* $CYLC_TASK_WORK_DIR',
+              script='rose task-run --app-key=canned_test --command-key='+get_target_property(PRIMARY_TARGET, 'queue.run.launcher'),
+          )}}
+
+        [[[environment]]]
+            APP_NAME         = {{appName}}
+{%-           if 'canned_processes' in variables %}
+            PROCESSES        = {{variables['canned_processes']}}
+{%-           endif %}
+            OMP_NUM_THREADS  = 1
+
+{{            directives(PRIMARY_TARGET, 'run')}}
+{%-         endif %}
+{%-       endfor %} {# canned configs #}
+
+{%-     endfor %}  {# build #}
+{%-   endfor %} {# rdef_precision #}
+{%- endfor %}  {# compiler #}
+
+{# #############################################################################}
+{# This Jinja section is to get the rose suite tree in the gui right           #}
+{%- for appName in appsToRun %}
+{%-   for configuration in application_configurations[appName] %}
+
+{%-     set appLabel = appName + '_' + configuration %}
+
+{%-     if appLabel in appConfigsCompilerRuns.keys() %}
+{%-       for compiler in appConfigsCompilerRuns[appLabel] %}
+{%-         for build in build_profiles %}
+{%-           for precision in rdef_build_precisions %}
+
+{%-             set label = compiler | lower + '_' + precision + '-bit_' + build | lower %}
+{%-             set family = label | upper %}
+{%-             set configuration_label = appLabel|lower + '_' + label %}
+{%-             if appLabel in resolution_choices %}
+{%-               set resolution_options=resolution_choices[appLabel] %}
+{%-             else %}
+{%-               set resolution_options=[('')] %}
+{%-             endif %}
+{%-             for resolution in resolution_options %}
+{%-               set res_value, dt_values, res_label, dt_labels, res_opt = resolution | get_resolution_labels() %}
+{%-               for i in range(0,dt_values|length) %}
+{%-                 set configuration_label_res = appLabel|lower ~ res_label ~ dt_labels[i] ~ '_' ~ label %}
+{%-                 if 'run_' + configuration_label_res in scheduledTasks %}
+{%-                   if appName|upper + '_' + label|upper not in rose_suite_gui_headers %}
+{%-                     do rose_suite_gui_headers.append(appName|upper+'_'+label|upper) %}
+    [[{{appName|upper}}_{{label|upper}}]]
+        inherit = {{family}}
+{%-                   endif %}
+{%-                   if appLabel|upper + '_' + label|upper not in rose_suite_gui_headers %}
+{%-                     do rose_suite_gui_headers.append(appLabel|upper+'_'+label|upper) %}
+    [[{{appLabel|upper}}_{{label|upper}}]]
+        inherit = {{appName|upper}}_{{label|upper}}
+{%-                   endif %}
+{%-                 endif %}
+{%-               endfor %}  {# i #}
+{%-             endfor %}  {# resolution #}
+{%-           endfor %}  {# rdef_precision #}
+{%-         endfor %}  {# build #}
+{%-       endfor %}  {# compiler #}
+{%-     endif %}   {# appLabel #}
+{%-   endfor %}  {# configuration #}
+{%- endfor %}  {# appName #}
+
+{# #############################################################################}
+{# APP CONFIGURATIONS #}
+
+{%- set mesh_label = (TARGET_MESH_COMPILER|lower + '_' +
+                      mesh_rdef + '-bit_' +
+                      mesh_build|lower) %}
+
+##############################################################################
+# {{projectName|upper}} RUN TASKS
+##############################################################################
+
+{%- for appName in appsToRun %}
+{%-   for configuration in application_configurations[appName] %}
+
+{%-     set appLabel = appName + '_' + configuration %}
+{%-     set config_opt =  '--opt-conf-key=' + configuration %}
+
+{%-     if appLabel in appConfigsCompilerRuns.keys() %}
+{%-       for compiler in appConfigsCompilerRuns[appLabel] %}
+{%-         for build in build_profiles %}
+{%-           for precision in rdef_build_precisions %}
+
+{%-             set label  = (compiler|lower + '_' + precision + '-bit_' + build|lower) %}
+{%-             set family = (label|upper) %}
+{%-             set configuration_label = (appLabel|lower + '_' + label) %}
+
+{%-             if appLabel in resolution_choices %}
+{%-               set resolution_options=resolution_choices[appLabel] %}
+{%-             else %}
+{%-               set resolution_options=[('')] %}
+{%-             endif %}
+
+{%-             for resolution in resolution_options %} {# science resolutions #}
+{%-               set res_value, dt_values, res_label, dt_labels, res_opt = resolution | get_resolution_labels() %}
+{%-               for i in range(0,dt_values|length) %}
+
+{%-                 set configuration_res = res_value ~ dt_labels[i] %}
+{%-                 set configuration_label_res = appLabel|lower ~ res_label ~ dt_labels[i] ~ '_' ~ label %}
+
+{%-                 if 'run_' + configuration_label_res in scheduledTasks %}
+{%-                   set command_key = get_target_property(PRIMARY_TARGET, 'queue.run.launcher') %}
+
+{%-                   set wallclock = "00:15:00" %}
+{%-                   set threads   = 1 %}
+{%-                   set mpi_parts = 1 %}
+
+{%-                   set use_xios        = default_use_xios %}
+{%-                   set xios_nodes      = 0 %}
+{%-                   set xios_server_opt = '' %}
+{%-                   set mpi_parts_xios  = default_mpi_parts_xios %}
+
+{%-                   set run_batcher = get_target_property(PRIMARY_TARGET, 'queue.run.directives') %}
+
+{%-                   if configuration_label in scheduledTasksDict.keys() %}
+{#                      If the directives are configured by the suite, #}
+{#                      then we will expand these in the directives.   #}
+{%-                     if 'directives' in scheduledTasksDict[configuration_label].keys() %}
+
+{#                        Set directive dictionarys #}
+{%-                       set directiveKey = res_value if res_value in scheduledTasksDict[configuration_label]['directives'].keys() else 'default' %}
+{%-                       set directiveDict = scheduledTasksDict[configuration_label]['directives'][directiveKey] %}
+
+{#                        Set up different batcher if required.         #}
+{#                        e.g if setting directives requires a parallel #}
+{#                        queue, rather than the default shared queue.  #}
+{%-                       set mpi_parts      = directiveDict['mpi_parts']      if 'mpi_parts'      in directiveDict.keys() else mpi_parts      %}
+{%-                       set mpi_parts_xios = directiveDict['mpi_parts_xios'] if 'mpi_parts_xios' in directiveDict.keys() else mpi_parts_xios %}
+{%-                       set wallclock      = directiveDict['wallclock']      if 'wallclock'      in directiveDict.keys() else wallclock      %}
+{%-                       set threads        = directiveDict['threads']        if 'threads'        in directiveDict.keys() else threads        %}
+{%-                       set use_xios       = directiveDict['use_xios']       if 'use_xios'       in directiveDict.keys() else use_xios       %}
+{%-                       set xios_nodes     = directiveDict['xios_nodes']     if 'xios_nodes'     in directiveDict.keys() else xios_nodes     %}
+
+{%-                       if use_xios == "True" and xios_nodes > 0 and mpi_parts_xios > 0 %}
+{%-                         set run_batcher = TARGET_PARAM_RUN_BATCHER_DIRECTIVES| directive_modifier(mpi_parts*threads, wallclock, xios_nodes) %}
+{%-                         set xios_server_opt = '--opt-conf-key=xios_server' %}
+{%                        else %}
+{%-                         set run_batcher = TARGET_PARAM_RUN_BATCHER_DIRECTIVES| directive_modifier(mpi_parts*threads, wallclock) %}
+{%-                       endif %}
+
+{%-                     endif %}  {# directives #}
+{%-                   endif %}  {# configuration_label #}
+
+{%-                   if configuration_res == '' %}
+{%-                     set pathFragment = appName ~ '/' ~ configuration %}
+{%-                   else  %}
+{%-                     set pathFragment = appName ~ '/' ~ configuration ~ '/' ~ configuration_res %}
+{%-                   endif %}
+
+{%-                   set lines = [] %}
+{%-                   for config, extra_meshes in support_meshes.items() %}
+{%-                     for mesh_name in extra_meshes %}
+{%-                       if mesh_name != '' %}
+{%-                         do lines.append("if [ ! -e $CYLC_TASK_WORK_DIR/mesh_"+mesh_name+".nc ] ; then") %}
+{%-                         do lines.append('ln -fs $OUTPUT_ROOT/'+mesh_label+'/meshes/mesh_'+mesh_name+'.nc $CYLC_TASK_WORK_DIR/') %}
+{%-                         do lines.append('fi') %}
+{%-                       endif %}
+{%-                     endfor %}
+{%-                   endfor %}
+
+    [[run_{{configuration_label_res}}]]
+        inherit = {{appLabel|upper}}_{{label|upper}}, TARGET
+
+        {{scripting(
+              PRIMARY_TARGET,
+              ['base', 'compiler.'+compiler, 'run'],
+              ['base'],
+              prescript='\n'|join(lines),
+              script='rose task-run --app-key='+appName+' --command-key='+command_key+' '+config_opt+' '+res_opt+' '+xios_server_opt+' --opt-conf-key=suite_controlled',
+              finalscript="""
+mkdir -p $DESTINATION_DIRECTORY/"+pathFragment+"
+
+# Future publisher stages need this information
+RELATIVE_LOG_ROOT=$(echo $CYLC_TASK_LOG_ROOT | sed 's|$HOME/||')
+echo $RELATIVE_LOG_ROOT > $DESTINATION_DIRECTORY/"+pathFragment+"/run.log.path
+
+find . -regex '.*PET0+\..+\.Log' -exec cp {} $ROSE_TASK_LOG_DIR \;
+find . -regex '.*PET0+\..+\.Log' -exec cat {} \;
+                          """,
+              postscript="""
+mkdir -p $DESTINATION_DIRECTORY/"+pathFragment+"/results
+
+test -f "+appName+"-checksums.txt && \
+cp "+appName+"-checksums.txt $DESTINATION_DIRECTORY/"+pathFragment+"/"+compiler+".checksums
+
+# Move nodal .m output
+touch $CYLC_TASK_WORK_DIR/tmp.m
+mv $CYLC_TASK_WORK_DIR/*.m $DESTINATION_DIRECTORY/"+pathFragment+"/results/
+
+# Move XIOS netCDF files if they exist.
+#
+# In the case where the file does not exist the return
+# code of a line of the form \"test ... && mv\" will be
+# \"failure\", which is what the test returned. The move
+# was not executed so it does not affect the return code.
+#
+# If the last test fails this return code becomes the
+# value of this whole script and as such causes Cylc to
+# believe the script has failed.
+#
+# By executing \"true\" if the file does not exist then
+# the return code is \"success\" even if the file was not
+# present. This should ensure the suite behaves the way
+# we would expect.
+#
+test -f $CYLC_TASK_WORK_DIR/lfric_diag.nc && \
+mv $CYLC_TASK_WORK_DIR/lfric_diag.nc $DESTINATION_DIRECTORY/"+pathFragment+"/results/ || true
+
+test -f $CYLC_TASK_WORK_DIR/lfric_initial.nc && \
+mv $CYLC_TASK_WORK_DIR/lfric_initial.nc $DESTINATION_DIRECTORY/"+pathFragment+"/results/ || true
+
+test -f $CYLC_TASK_WORK_DIR/lfric_averages.nc && \
+mv $CYLC_TASK_WORK_DIR/lfric_averages.nc $DESTINATION_DIRECTORY/"+pathFragment+"/results/ || true
+                      """
+          )}}
+
+        [[[environment]]]
+{%-                   if configuration_label in scheduledTasksDict.keys() %}
+{%-                     set configTaskDict = scheduledTasksDict[configuration_label] %}
+
+            {{ configTaskDict | dict_to_assign('            ') }}
+
+{#                      If the directives are configured by the suite, then we will #}
+{#                      expand those in the environment                             #}
+{%-                     if 'directives' in configTaskDict.keys() %}
+{%-                       set directiveKey  = res_value if res_value in configTaskDict['directives'].keys() else 'default'%}
+{%-                       set directiveDict = configTaskDict['directives'][directiveKey] %}
+            {{ directiveDict | dict_to_assign('            ') }}
+{%-                     endif %}
+
+{#                      If we have nrun dependent on resolution / timestep then we  #}
+{#                      need to set that in the environment too                     #}
+{%                      if 'nrun' in configTaskDict.keys() and configTaskDict['nrun'] is not number %}
+{%-                       set nrunKey = res_value if dt_values[i]=='' else (res_value, dt_values[i]) %}
+{%-                       set nrunKey = nrunKey if nrunKey in configTaskDict['nrun'].keys() else 'default' %}
+            nrun = {{configTaskDict['nrun'][nrunKey] }}
+{%-                     endif %}
+
+{%-                   endif %} {# configuration_label #}
+
+            MESH_DIR          = $OUTPUT_ROOT/{{mesh_label}}/meshes
+            APP_NAME          = {{appName}}
+            RUN_METHOD        = {{get_target_property(PRIMARY_TARGET, 'queue.run.launcher')}}
+            TARGET_PLATFORM   = {{TARGET_OPT}}
+            OMP_NUM_THREADS   = $(echo ${threads:-1})
+            TOTAL_RANKS       = $(echo ${mpi_parts:-1})
+{#-----------------------------------------------------------------#}
+{#    Note: As this is an enumeration it must end up having single #}
+{#          quotes so that the resultant fortran namelist reads it #}
+{#          in correctly, not doing so may result in kgo failures  #}
+{#          for some tasks.                                        #}
+{#-----------------------------------------------------------------#}
+            PANEL_DECOMP      = $(echo \'${panel_decomp:-"auto"}\')
+            XPROC             = $(echo ${xproc:-${mpi_parts:-1}})
+            YPROC             = $(echo ${yproc:-1})
+
+{# Enable/disable XIOS #}
+{%-         if use_xios == "True" %}
+            USE_XIOS_IO        = .true.
+            NODAL_OUTPUT_ON_W3 = .false.
+{# Enable/disable XIOS Server #}
+{%-           if xios_nodes > 0 and mpi_parts_xios > 0 %}
+            XIOS_SERVER_MODE   = True
+            XIOS_SERVER_RANKS  = $(echo ${mpi_parts_xios})
+{%-           else %}
+            XIOS_SERVER_MODE   = False
+            XIOS_SERVER_RANKS  = 0
+{%-           endif %}
+{%-         else %}
+            USE_XIOS_IO        = .false.
+            NODAL_OUTPUT_ON_W3 = .true.
+            XIOS_SERVER_MODE   = False
+            XIOS_SERVER_RANKS  = 0
+{%-         endif %}
+
+            DT            = {{dt_values[i]}}
+            CRUN_LENGTH   = $(echo ${crun:-1})
+            RESTART_NTS   = $(echo ${nrun:-1})
+            RESTART_NO    = $(echo $[$CYLC_TASK_CYCLE_POINT -1])
+            RESTART       = $(if [ $CYLC_TASK_CYCLE_POINT == $CYLC_SUITE_INITIAL_CYCLE_POINT ] && [ $CYLC_TASK_TRY_NUMBER -eq 1 ]; then echo ""; else echo "true"; fi)
+            RESTART_START = $(echo $[$RESTART_NO*$RESTART_NTS + 1])
+            RESTART_STOP  = $(echo $[$RESTART_NO*$RESTART_NTS + $RESTART_NTS])
+            RESTART_READ  = $(if [[ $RESTART ]]; then echo ".true."; else echo ".false."; fi)
+            RESTART_WRITE = $(if [ $CRUN_LENGTH -gt $CYLC_TASK_CYCLE_POINT ]; then echo ".true."; else echo ".false."; fi)
+
+        [[[directives]]]
+{%-                   for directive in run_batcher %}
+            {{directive}}
+{%-                   endfor %}
+{%-                 endif %} {# 'run_' + configuration_label_res #}
+
+{# ###########################################################################}
+{# CHECK THE APP OUTPUT #}
+{%-                 if 'check_' + configuration_label_res in scheduledTasks %}
+    [[check_{{configuration_label_res}}]]
+        inherit = {{appLabel|upper}}_{{label|upper}}, TARGET
+
+        pre-script = """
+                     export KGO_PREC_DIR={{precision}}-bit/
+                     if [ ! -d $KGO_DIR/$APP_NAME/$TARGET_OPT/${KGO_PREC_DIR} ] ; then
+                       export KGO_PREC_DIR=''
+                     fi
+                     """
+
+        script = rose task-run --app-key=check_application_kgo
+
+        [[[environment]]]
+            APP_NAME   = {{appName}}
+            KGO_DIR    = $SOURCE_ROOT/{{appPathFragment}}{{projectName}}/kgos
+            TARGET_OPT = {{TARGET_OPT}}
+            CONFIG     = {{configuration}}
+            RES        = {{res_value}}{{dt_labels[i]}}
+            RES_LABEL  = {{res_label}}{{dt_labels[i]}}
+
+{{                    directives(PRIMARY_TARGET, 'tech') }}
+{%-                 endif %}
+
+{# #############################################################################}
+{# PLOT THE APP OUTPUT #}
+{%-                 if 'plot_' + configuration_label_res in scheduledTasks %}
+{%-                   set plot_label = appLabel %}
+
+    [[plot_{{configuration_label_res}}]]
+        inherit = {{appLabel|upper}}_{{label|upper}}, TARGET
+        pre-script = """
+                     {{ensureDestination()}}
+                     mkdir -p $PLOT_DIR
+                     # remove old plots before running new ones
+                     rm -rf $PLOT_DIR/*.png
+                     {{TARGET_PLOT_PYTHON_SETUP}}
+                     """
+        script = rose task-run --app-key=plot
+
+        [[[environment]]]
+            DESTINATION = {{publish_destination}}
+            NODAL_DATA_DIR = $DESTINATION_DIRECTORY/{{pathFragment}}/results
+            PLOT_DIR = $DESTINATION_DIRECTORY/{{pathFragment}}/plots
+            PLOT_CONFIG = {{plot_config[plot_label]}}
+
+        [[[job]]]
+            execution retry delays = 2*PT5S, 5*PT10S, 3*PT1M
+
+{{                    directives(PRIMARY_TARGET, 'tech')}}
+{%-                 endif %}
+
+{#- ##########################################################################}
+{#- PUBLISH THE APP OUTPUT                                                   #}
+{%-                 if 'publish_' + configuration_label_res + '_run' in scheduledTasks %}
+{%-                   set target_host = target[PRIMARY_TARGET['platform']]['hostname'] %}
+    [[publish_{{configuration_label_res}}_run]]
+        inherit = {{appLabel|upper}}_{{label|upper}}, PUBLISH
+        pre-script = """
+                     {{ensureDestination()}}
+                     mkdir -p $DESTINATION_DIRECTORY/{{pathFragment}}
+                     RELATIVE_DESTINATION_DIRECTORY=`echo $DESTINATION_DIRECTORY | sed "s|$HOME/||"`
+                     cd $DESTINATION_DIRECTORY/{{pathFragment}}
+                     scp {{target_host}}:$RELATIVE_DESTINATION_DIRECTORY/{{pathFragment}}/run.log.path .
+                     scp {{target_host}}:$(cat run.log.path).status .
+                     scp {{target_host}}:$(cat run.log.path).out .
+                     scp {{target_host}}:$(cat run.log.path).err .
+                     """
+        script = rose task-run --app-key=publish_run
+        [[[environment]]]
+            APP_NAME      = {{appName}}
+            CONTEXT       = {{build}}
+            CONFIGURATION = {{configuration}}
+            COMPILER      = {{compiler}}
+            LOG_STATUS    = $DESTINATION_DIRECTORY/{{pathFragment}}/job.status
+            LOG_ERR       = $DESTINATION_DIRECTORY/{{pathFragment}}/job.err
+        [[[job]]]
+            execution retry delays = 2*PT5S, 5*PT10S, 9*PT1M, 5*PT10M, 3*PT1H
+{%-                 endif %}
+
+
+{# #############################################################################}
+{# PUBLISH THE APP PLOTS #}
+{%-                 if 'publish_' + configuration_label_res + '_plots' in scheduledTasks %}
+    [[publish_{{configuration_label_res}}_plots]]
+        inherit = {{appLabel|upper}}_{{label|upper}}, PUBLISH
+        script = """
+                 mkdir -p $DESTINATION/{{compiler}}/{{build}}/{{pathFragment}}
+                 RELATIVE_DESTINATION_DIRECTORY=`echo $DESTINATION_DIRECTORY | sed "s|$HOME/||"`
+                 rsync -avz {{target[PRIMARY_TARGET['platform']]['hostname']}}:$RELATIVE_DESTINATION_DIRECTORY/{{pathFragment}}/plots/ \
+                            $DESTINATION/{{compiler}}/{{build}}/{{pathFragment}}/
+                 """
+        [[[job]]]
+            execution retry delays = 2*PT5S, 5*PT10S, 9*PT1M, 5*PT10M, 3*PT1H
+{%-                 endif %}
+
+{%-               endfor %}  {# i #}
+
+{%-             endfor %}  {# resolution #}
+{%-           endfor %}  {# rdef_precision #}
+{%-         endfor %}  {# build #}
+{%-       endfor %}  {# compiler #}
+{%-     endif %}   {# appLabel #}
+{%-   endfor %}  {# configuration #}
+{%- endfor %}  {# appName #}
+
+##############################################################################
+# MESH GENERATION
+##############################################################################
+{%- set mesh_label = (TARGET_MESH_COMPILER|lower + '_' +
+                      mesh_rdef + '-bit_' +
+                      mesh_build|lower) %}
+{%- set mesh_family = (mesh_label|upper) %}
+
+{%- if 'GENERATE_MESHES_' + mesh_family not in rose_suite_gui_headers %}
+{%-   do rose_suite_gui_headers.append('GENERATE_MESHES_' + mesh_family) %}
+    [[GENERATE_MESHES_{{mesh_family}}]]
+        inherit = {{mesh_family}}
+{%- endif %}
+
+{%- for mesh_name in mesh_names|sort %}
+{%-   if 'generate_mesh_' + mesh_name + '_' + mesh_label in scheduledTasks %}
+
+    [[generate_mesh_{{mesh_name}}_{{mesh_label}}]]
+        inherit = GENERATE_MESHES_{{mesh_family}}, TARGET
+
+        {{scripting(
+              PRIMARY_TARGET,
+              ['base', 'compiler.'+TARGET_MESH_COMPILER, 'run', 'tech'],
+              ['base'],
+              prescript='mkdir -p $MESH_DIR',
+              script="rose task-run --app-key=mesh --opt-conf-key="+mesh_name
+          )}}
+
+        [[[environment]]]
+            BIN_DIR               = $OUTPUT_ROOT/{{mesh_label}}/bin
+            DESTINATION_DIRECTORY = $OUTPUT_ROOT/{{mesh_label}}
+            MESH_DIR              = $OUTPUT_ROOT/{{mesh_label}}/meshes
+            OUTPUT_FILE           = $MESH_DIR/mesh_{{mesh_name}}.nc
+            SOURCE_DIRECTORY      = $SOURCE_ROOT/mesh_tools
+
+{{    directives(PRIMARY_TARGET, 'tech')}}
+{%-   endif %}
+{%- endfor %}  {# mesh_name #}
+
+##############################################################################
+# NULL TASKS
+##############################################################################
+{{null_tasks()}}

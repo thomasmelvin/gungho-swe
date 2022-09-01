@@ -1,0 +1,18 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML Basic 1.1//EN"
+                      "http://www.w3.org/TR/xhtml-basic/xhtml-basic11.dtd">
+<html>
+  <head>
+    <title>{{title}}</title>
+    <style type="text/css">
+      h1 { text-align: center; }
+    </style>
+  </head>
+  <body>
+    <h1>{{title}}</h1>
+    <ul>
+{%- for filename in files %}
+      <li><a href="{{filename}}">{{filename}}</a></li>
+{%- endfor %}
+    </ul>
+  </body>
+</html>

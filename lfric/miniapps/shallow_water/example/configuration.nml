@@ -1,0 +1,295 @@
+! Configuration for running Gaussian test with shallow water miniapp
+
+&base_mesh
+filename             = 'PUSM_res32.nc'
+        ! Mesh Name
+        ! 'mesh_Cxx.nc' for spherical test cases (C12, C24, C48, C96)
+        ! 'PUSM_resxx.nc' for periodic unit square test cases (128, 64, 32, 16)
+        ! 'PSM_Lxxkm_resxx.nc' for unit square test cases
+prime_mesh_name      = 'dynamics'
+geometry             = 'planar'
+        ! Geometry either 'planar' or 'spherical'
+topology             ='fully_periodic'
+offline_partitioning = .false.
+fplane               = .true.
+f_lat_deg            = 90.0
+        ! Choose 90.0 for planar shallow water equations with Coriolis term f u^perp
+/
+
+&extrusion
+method           = 'uniform'
+domain_top       = 1.0
+number_of_layers = 1
+        ! Have just one layer for shallow water equations
+stretching_method='linear'
+/
+
+&files
+diag_stem_name       = 'shallow_water'
+checkpoint_stem_name = "restartShallowWater"
+start_dump_filename  = 'UM2LFRic_dump'
+start_dump_directory = './'
+/
+
+&finite_element
+        ! These do not need changing
+cellshape       = 'quadrilateral'
+coord_order     = 2
+coord_system    ='xyz'
+element_order   = 0
+rehabilitate    = .true.
+vorticity_in_w1 = .true.
+/
+
+&formulation
+eos_method  = 'sampled'
+l_multigrid = .false.
+moisture_formulation='traditional'
+rotating    = .true.
+/
+
+&idealised
+test = 'none'
+        ! The initial conditions are set in shallow_water_settings
+/
+
+&logging
+run_log_level='info'
+/
+
+&domain_size
+planar_domain_min_x = -0.5
+planar_domain_max_x =  0.5
+planar_domain_min_y = -0.5
+planar_domain_max_y =  0.5
+        ! Use +/- 0.5 for all planar tests except
+        ! dimensional thermal double vortex (then 2500000)
+/
+
+&partitioning
+panel_decomposition = 'auto'
+partitioner='planar'
+        ! use planar or cubedsphere
+/
+
+&planet
+cp             = 1005.0
+p_zero         = 100000.0
+rd             = 287.05
+gravity        = 1.0
+        ! For our purposes gravity is hidden in ref_gp except for spherical tests initial conditions.
+        ! Recommended values: 9.80616 for Williamson and Galewsky  Sphere test cases
+        !                     1.0     for gaussian hill
+        !                     5.0     for geostrophic imbalance test case
+        !                     10.0    for geostrophic balance test case
+        !                     10.0    for thermal double vortex test case (non-dim)
+        !                     9.80616 for thermal double vortex test case
+        !                     9.80616 for vortex field test case
+radius         = 1.0
+        ! Recommended values: 6371229 for spherical and dimensional test cases
+        !                     1.0     for non-dimensional test cases (i.e. PUSM)
+omega          = 5.0
+        ! Equal to f/2. for coriolis parameter f in shallow water equations
+        ! Recommended values: 7.292116E-5 for spherical test cases
+        !                     2.5         for geostrophic imbalance test case
+        !                     5.0         for planar geostrophic balance test case
+        !                     0.02        for thermal double vortex test case (non-dim)
+        !                     0.000030735 for thermal double vortex test case
+        !                     0.0         for no Coriolis
+scaling_factor = 1.0
+        ! divides radius by this factor (for spherical domains),
+        ! multiplies omega by this factor (for all domains)
+        ! use 1.0 usually
+/
+
+&time
+calendar       = 'timestep'
+timestep_start = '1'
+timestep_end   = '200'
+        ! Recommended T_max:
+        !  288  for Galewsky                     (i.e. 6 days for dt = 1800)
+        !  720  for Williamson test cases       (i.e. 15 days for dt = 1800)
+        !  100  for Gaussian Test on P32                    (for dt = 0.001)
+        !  1000 for Vortex Test on P64                      (for dt = 0.001)
+        !  100  for Geostrophic planar test cases
+        !  360  for non-dim thermal double vortex test case (for dt = 0.1)
+        !  500  for thermal double vortex test case         (for dt = 486 s)
+calendar_type  = 'gregorian'
+calendar_start = '2016-01-01 15:00:00'
+/
+
+&timestepping
+method             = 'semi_implicit'
+        ! Note: To use Runge Kutta change time_scheme in shallow_water_settings.
+dt                 = 0.001
+        ! Recommended values:
+        ! O(10)      for Williamson and Galewsky test cases ( O(0.0001) for scaled)
+        ! O(0.001)   for Geostrophic planar test cases
+        ! O(0.001)   for Gaussian and Vortex field tests
+        ! O(0.1)     for thermal double vortex test case (non-dim)
+        ! O(500)     for thermal double vortex test case (res 120: 486 s)
+alpha              = 0.5
+outer_iterations   = 2
+inner_iterations   = 2
+runge_kutta_method = 'ssp3'
+        ! 'ssp3' is standard, but can use 'fe1' with explicit time stepping
+spinup_alpha       = .false.
+spinup_period      = 0
+spinup_winds       = .false.
+tau_r              = 0.0
+tau_t              = 0.0
+tau_u              = 0.0
+/
+
+&transport
+cfl_mol_1d_stab    = 2.0
+cfl_mol_2d_stab    = 2.0
+cfl_mol_3d_stab    = 2.0
+consistent_metric  = .false.
+dry_field_name     = 'q'
+enforce_min_value  = 4*.false.
+ffsl_advective_splitting = 'full'
+ffsl_flux_splitting      = 'full'
+ffsl_scheme        = 'three_dim'
+field_names        = 'geopot','buoyancy','wind','q'
+fv_horizontal_order = 2
+fv_vertical_order  = 2
+horizontal_method  = 4*1
+log_space          = 4*.false.
+max_vert_cfl_calc  = 'uniform'
+min_value          = 0.0,0.0,-99999999.0,-99999999.0
+moisture_eqn     = 'advective'
+monotone           = 4*1
+oned_reconstruction = .false.
+operators          = 'fv'
+profile_size       = 4
+reversible         = .false., .false., .false., .false.
+runge_kutta_method = 'ssp3'
+scheme             = 4*1
+slice_order        = 'cubic'
+splitting          = 4*1
+use_density_predictor = .true.
+vertical_method    = 4*1
+vertical_sl_order  = 'cubic'
+/
+
+&io
+use_xios_io               = .ftrue.
+write_diag                = .true.
+write_dump                = .false.
+diagnostic_frequency      = 20
+nodal_output_on_w3        = .false.
+subroutine_timers         = .true.
+subroutine_counters       = .false.
+checkpoint_read           = .false.
+checkpoint_write          = .false.
+/
+
+&solver
+method                         = 'cg'   ! gmres, bicgstab do not converge for v2 spherical initialisation of q
+preconditioner                 = 'none' ! or diagonal (still need to build diagonal one for q mass solver)
+maximum_iterations             = 1599   ! Lots of iterations required for v2 spherical initialisation of q
+tolerance                      = 1e-12  ! Use 12 except for Galewsky: 5
+gcrk                           = 18
+/
+
+&mixed_solver
+eliminate_variables            = 'none'
+si_method                      = 'gmres',
+si_preconditioner              = 'diagonal',
+si_maximum_iterations          = 20,
+gcrk                           = 4,
+si_tolerance                   = 1.0e-4,
+guess_np1                      = .F
+reference_reset_freq           = 1
+normalise                      = .true.,
+/
+
+&helmholtz_solver
+gcrk                           = 4,
+method                         = 'bicgstab',
+preconditioner                 = 'tridiagonal'
+si_pressure_tolerance          = 1.0e-4,
+si_pressure_maximum_iterations = 199,
+normalise                      = .true.,
+/
+
+
+! required
+
+&initial_wind
+profile        = 'none'
+u0             = 0.0
+v0             = 0.0
+sbr_angle_lat  = 0.0
+sbr_angle_lon  = 0.0
+/
+
+&initialization
+ancil_option = 'none'
+init_option  = 'analytic'
+lbc_option   = 'none'
+ls_option    = 'none'
+/
+
+&multigrid
+multigrid_chain_nitems = 4
+/
+
+&section_choice
+radiation='none',
+boundary_layer='none',
+convection='none',
+microphysics='none',
+cloud='none',
+aerosol='none',
+spectral_gwd='none',
+orographic_drag='none',
+dynamics='gungho',
+surface='none',
+stochastic_physics='none'
+/
+
+&shallow_water_settings
+ref_gp = 5.0     ! reference geopotential; gravity*reference_height
+                 ! Recommended values: 29420   for spherical geostrophic balance test case (i.e. 3000*g)
+                 !                     58440   for mountain test case                      (i.e. 5960*g)
+	               !                     98061.6 for Galewsky test case                      (i.e. 10000*g)
+                 !                     100.0   for planar geostrophic balance test case
+	               !                     5.0     for geostrophic imbalance test case
+	               !                     5.0     for Gaussian test case
+	               !                     10.0     for vortex field test case
+	               !                     0.0015  for thermal double vortex test case (non-dim)
+	               !                     7354.62 for thermal double vortex test case         (i.e. 750*g)
+thermal_swe     = .false.
+momentum_form   = 'vector_invariant' ! 'momentum' ! 'vector_invariant' ! Choose between vector_invariant or momentum
+time_scheme='semi_implicit'
+                 ! Choose between 'semi_implicit' (standard) or 'explicit' (RK-SSP3)
+swe_test        = 'swe_gaussian_hill'
+                 ! choose from swe_geostr_imbalance   (planar sin wave)
+                 !             swe_geostr_balance     (planar sin wave|spherical Williamson2)
+                 !             swe_gaussian_hill      (planar Gaussian graivty wave)
+                 !             swe_vortex_field       (planar Vortex Field)
+                 !             swe_thermal_dbl_vortex (planar thermal test)
+                 !             swe_mountain           (spherical Williamson5 Mountain Test)
+                 !             swe_galewsky           (spherical Galewsky Instability Test)
+/
+
+&shallow_water_test_coeff
+! Gaussian hill parameters
+mag1 = 2.0 ! magnitude
+xr = 0.1   ! extend factor in x-direction
+yr = 0.1   ! extend factor in y-direction
+x1 = 0.1   ! position in x-direction
+y1 = 0.1   ! position in y-direction
+u1 = 1.0   ! 1st velocity component for advected hill
+u2 = -1.0   ! 2nd velocity component for advected hill
+/
+
+&subgrid
+! Method to compute Det(J) and FFSL options
+calculate_detj                   = 'upwind'
+dep_pt_stencil_extent            = 1
+rho_approximation                = 'ppm_no_limiter'
+rho_approximation_stencil_extent = 2
+/

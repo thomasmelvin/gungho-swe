@@ -1,0 +1,82 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! For further details please refer to the file COPYRIGHT.txt
+! which you should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the delta_z calculation between layer heights at cell centres,
+!! evaluated at cell faces.
+module calc_dz_face_kernel_mod_test
+
+  use constants_mod, only : i_def, r_def
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: calc_dz_face_test_type
+    private
+  contains
+    procedure test_all
+  end type calc_dz_face_test_type
+
+contains
+
+  @test
+  subroutine test_all( this )
+
+    use calc_dz_face_kernel_mod, only : calc_dz_face_code
+
+    implicit none
+
+    class(calc_dz_face_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter :: tol = 1.0e-9_r_def
+
+    ! Mesh
+    integer(kind=i_def), parameter :: nlayers = 3
+
+    integer(kind=i_def), parameter             :: ndf = 4_i_def
+    integer(kind=i_def), parameter             :: undf_centre = 12_i_def
+    integer(kind=i_def), parameter             :: undf_face   = 16_i_def
+    integer(kind=i_def), dimension(ndf)        :: map_centre, map_face
+    real(kind=r_def),    dimension(undf_centre):: height_centre
+    real(kind=r_def),    dimension(undf_face)  :: height_face, dz_face, &
+                                                  answer
+
+    integer(kind=i_def) :: i, k
+
+    do i = 1, ndf
+      map_centre(i) = 1 + (i-1)*nlayers
+      map_face(i) = 1 + (i-1)*(nlayers+1)
+    end do
+
+    do k = 0, nlayers
+      do i = 1, ndf
+        height_face(map_face(i) + k) = real(i * k, r_def)
+      end do
+    end do
+
+    do k = 0, nlayers-1
+      do i = 1, ndf
+        height_centre(map_centre(i) + k) = real(i * (k+0.5_r_def), r_def)
+      end do
+    end do
+
+    call calc_dz_face_code( nlayers, dz_face, height_centre, &
+                            height_face, ndf,                &
+                            ndf, undf_face, map_face,        &
+                            ndf, undf_centre, map_centre )
+
+    answer = (/ 0.5_r_def, 1.0_r_def, 1.0_r_def, 1.0_r_def, &
+                1.0_r_def, 2.0_r_def, 2.0_r_def, 2.0_r_def, &
+                1.5_r_def, 3.0_r_def, 3.0_r_def, 3.0_r_def, &
+                2.0_r_def, 4.0_r_def, 4.0_r_def, 4.0_r_def /)
+    @assertEqual(answer,dz_face,tol)
+
+  end subroutine test_all
+
+end module calc_dz_face_kernel_mod_test

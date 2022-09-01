@@ -1,0 +1,155 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2022 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> Test the get dz at W3 kernel. Sets up a planar domain with variable height
+!! and tests computing the difference at W3.
+!!
+module get_dz_w3_kernel_mod_test
+
+    use constants_mod,                       only : i_def, r_def
+    use pFUnit_Mod
+    use get_unit_test_m3x3_q3x3x3_sizes_mod, only : get_w2_m3x3_q3x3x3_size, &
+                                                    get_w3_m3x3_q3x3x3_size
+    use get_unit_test_m3x3_dofmap_mod,       only : get_w2_m3x3_dofmap, &
+                                                    get_w3_m3x3_dofmap
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: get_dz_w3_kernel_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type get_dz_w3_kernel_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use base_mesh_config_mod,      only : geometry_planar, &
+                                          topology_fully_periodic
+    use finite_element_config_mod, only : cellshape_quadrilateral, &
+                                          coord_system_xyz
+    use feign_config_mod,          only : feign_finite_element_config, &
+                                          feign_base_mesh_config
+
+    implicit none
+
+    class(get_dz_w3_kernel_test_type), intent(inout) :: this
+
+    call feign_base_mesh_config( filename='foo',                   &
+                                 prime_mesh_name='unit_test',      &
+                                 geometry=geometry_planar,         &
+                                 offline_partitioning=.false.,     &
+                                 topology=topology_fully_periodic, &
+                                 fplane=.false., f_lat_deg=45.0_r_def )
+
+    call feign_finite_element_config(           &
+             cellshape=cellshape_quadrilateral, &
+             coord_order=0_i_def,               &
+             coord_system=coord_system_xyz,     &
+             element_order=0_i_def,             &
+             rehabilitate=.true.,               &
+             vorticity_in_w1=.false. )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod, only: final_configuration
+
+    implicit none
+
+    class(get_dz_w3_kernel_test_type), intent(inout) :: this
+
+    call final_configuration()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use get_dz_w3_kernel_mod, only : get_dz_w3_code
+
+    implicit none
+
+    class(get_dz_w3_kernel_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter :: tol = 1.0e-6_r_def
+
+    integer(kind=i_def) :: nlayers, cell
+    integer(kind=i_def) :: ndf_w2, undf_w2, ndf_w3, undf_w3
+    integer(kind=i_def) :: unused
+
+    integer(kind=i_def), allocatable :: map_w2(:,:)
+    integer(kind=i_def), allocatable :: map_w3(:,:)
+
+    real(kind=r_def),    allocatable :: height(:)
+    real(kind=r_def),    allocatable :: dz(:)
+
+    ! Set number of layers
+    nlayers = 3
+
+    ! Set up degrees of freedom information
+    call get_w2_m3x3_q3x3x3_size( ndf_w2, undf_w2, unused, &
+                                  unused, unused,          &
+                                  unused, unused,          &
+                                  nlayers )
+    call get_w3_m3x3_q3x3x3_size( ndf_w3, undf_w3, unused, &
+                                  unused, unused,          &
+                                  unused, unused,          &
+                                  nlayers )
+
+    ! Set up dof maps
+    call get_w2_m3x3_dofmap(map_w2)
+    call get_w3_m3x3_dofmap(map_w3)
+
+    ! Allocate W2 and W3
+    allocate( height(undf_w2) )
+    allocate( dz(undf_w3) )
+
+    ! Test the operator kernel
+    cell = 1
+    ! Initialise data
+    height(:) = 0.0_r_def
+    dz(:) = 0.0_r_def
+    ! Create height data
+    height(map_w2(5,cell)+0) = 0.0_r_def
+    height(map_w2(5,cell)+1) = 2.0_r_def
+    height(map_w2(5,cell)+2) = 6.0_r_def
+    height(map_w2(6,cell)+2) = 16.0_r_def
+
+    call get_dz_w3_code( nlayers,         &
+                         dz,              &
+                         height,          &
+                         ndf_w3,          &
+                         undf_w3,         &
+                         map_w3(:,cell),  &
+                         ndf_w2,          &
+                         undf_w2,         &
+                         map_w2(:,cell) )
+
+    ! Answer is difference of heights
+    @assertEqual(2.0_r_def, dz(map_w3(1,cell)+0), tol)
+    @assertEqual(4.0_r_def, dz(map_w3(1,cell)+1), tol)
+    @assertEqual(10.0_r_def, dz(map_w3(1,cell)+2), tol)
+
+    deallocate(height)
+    deallocate(dz)
+    deallocate(map_w2)
+    deallocate(map_w3)
+
+  end subroutine test_all
+
+end module get_dz_w3_kernel_mod_test

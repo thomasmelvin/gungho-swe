@@ -1,0 +1,514 @@
+{#- ##########################################################################
+ # (c) Crown copyright 2020 Met Office. All rights reserved.
+ # The file LICENCE, distributed with this code, contains details of the terms
+ # under which the code may be used.
+ #############################################################################}
+{#-
+ # The data structure defined here holds information used to target the
+ # various computer platforms we use for testing.
+ #
+ # The goal is that the suites themselves should be complete platform agnostic
+ # and all specifics be defined here.
+ #}
+{#-
+ #
+ # Due to the production model illadvisedly depending on the
+ # "fortran/opt/gfortran" collection it cannot be taken out of the default
+ # shell profile. Thus it must be unloaded manually. We also unload the legacy
+ # LFRic collection in case it is floating around in people's shell profile or
+ # *.rc files.
+ #}
+{%- set target = {
+    'user-local' : {
+        'hostname' : ROSE_ORIG_HOST,
+        'batcher' : 'background',
+        'build_root': '/var/tmp/${USER}',
+        'setup' : {
+            'base' : [],
+            'build' : [],
+            'compiler' : {
+                'cray' : [],
+                'gnu' : [],
+                'intel' : []
+            },
+            'plot': [],
+            'reveal' : [],
+            'tech' : [],
+            'run' : []
+        },
+        'teardown' : {
+            'base' : []
+        },
+        'queue' : {
+            'build' : {
+                'launcher' : '',
+                'directives' : {}
+            },
+            'run' : {
+                'launcher' : '',
+                'directives' : {}
+            },
+            'tech' : {
+                'launcher' : '',
+                'directives' : {}
+            }
+        }
+    },
+
+    'meto-spice' : {
+        'hostname' : ROSE_ORIG_HOST,
+        'batcher' : 'slurm',
+        'build_root' : '${TMPDIR}',
+        'update' : 'interupt',
+        'setup' : {
+            'base' : [
+                'umask 0022',
+                'module unuse /data/users/lfric/modules/modulefiles.rhel7',
+                'module unuse /project/ukmo/rhel7/fortran/opt/gfortran/modulefiles',
+                'module use /project/extrasoftware/modulefiles.rhel7',
+                'module use /data/users/lfric/software/modulefiles.rhel7'
+            ],
+            'build' : [
+            ],
+            'compiler' : {
+                'intel' : [
+                    'module load environment/lfric/ifort/17.0_64/5'
+                ],
+                'gnu' : [
+                    'module use /project/ukmo/rhel7/fortran/opt/gfortran/modulefiles',
+                    'module load environment/lfric/gcc/6.1.0/5'
+                ]
+            },
+            'plot' : ['module load scitools/production-os45-1'],
+            'reveal' : ['module list 2>&1', 'export'],
+            'tech' : ['module load environment/lfric/common/9'],
+            'run'  : ['ulimit -s unlimited'],
+        },
+        'teardown' : {
+            'base' : [
+                'module unload environment/lfric'
+            ]
+        },
+        'queue' : {
+            'build' : {
+                'launcher' : 'mpiexec',
+                'directives' : [
+                    '--partition=rhel7', '--time=00:45:00',
+                    '--ntasks=6', '--mem-per-cpu=1G', '--gres=tmp:1024',
+                    '--export=NONE'
+                ]
+            },
+            'run' : {
+                'launcher' : 'mpiexec',
+                'directives' : [
+                    '--partition=rhel7', '--time=00:10:00',
+                    '--ntasks=6', '--mem-per-cpu=1G', '--export=NONE'
+                ]
+            },
+            'tech' : {
+                'launcher' : 'mpiexec',
+                'directives' : [
+                    '--partition=rhel7', '--time=00:15:00', '--ntasks=6',
+                    '--mem-per-cpu=1G', '--export=NONE'
+                ]
+            }
+        }
+    },
+
+    'meto-xc40' : {
+        'hostname' : '$(rose host-select --rank-method=random xc)',
+        'batcher' : 'pbs',
+        'build_root' : '\${RAMTMP}',
+        'update' : 'interupt',
+        'setup' : {
+            'base' : [
+                'umask 0022',
+                'source /data/d03/lfric/modules/setup'
+            ],
+            'build' : [
+            ],
+            'compiler' : {
+                'intel' : [
+                    'module load meto-environment/lfric/intel/17.0.0.098/5'
+                ],
+                'cray' : [
+                    'module load meto-environment/lfric/cce/8.7.0/4'
+                ]
+            },
+            'reveal' : ['module list 2>&1', 'export'],
+            'run' : [],
+            'tech' : ['module load meto-common/lfric/15',
+                      'module load cray-snplauncher/$CRAY_MPICH2_VER']
+        },
+        'teardown' : {
+            'base' : [
+                'module unload meto-environment/lfric',
+            ],
+        },
+        'queue' : {
+            'build' : {
+                'launcher' : 'mpiexec',
+                'directives' : [
+                    '-l select=1:ncpus=6:mem=6GB:tmpsize=3GB',
+                    '-l walltime=01:00:00',
+                    '-q=shared'
+                ]
+            },
+            'run' : {
+                'launcher': 'aprun',
+                'directives' : [
+                    '-l select=1',
+                    '-l walltime=00:10:00',
+                    '-q=normal'
+                ]
+            },
+            'tech' : {
+                'launcher' : 'mpiexec',
+                'directives' : [
+                    '-l select=1:ncpus=1:mem=3GB:tmpsize=3GB',
+                    '-l walltime=00:20:00',
+                    '-q=shared'
+                ],
+            }
+        }
+    },
+
+    'meto-xcs' : {
+        'hostname' : '$(rose host-select --rank-method=random xcsr)',
+        'batcher' : 'pbs',
+        'build_root' : '\${RAMTMP}',
+        'update' : 'polling',
+        'setup' : {
+            'base' : [
+                'umask 0022',
+                'module use /common/lfric/modules/modulefiles'
+            ],
+            'build' : [
+            ],
+            'compiler' : {
+                'intel' : [
+                    'module load meto-environment/lfric/intel/17.0.0.098/4'
+                ],
+                'cray' : [
+                    'module load meto-environment/lfric/cray/8.7.0/4'
+                ]
+            },
+            'reveal' : ['module list 2>&1', 'export'],
+            'run' : [],
+            'tech' : ['module load meto-common-environment/lfric/15',
+                      'module load cray-snplauncher/$CRAY_MPICH2_VER']
+        },
+        'teardown' : {
+            'base' : [
+                'module unload meto-environment/lfric',
+            ],
+        },
+        'queue' : {
+            'build' : {
+                'launcher' : 'mpiexec',
+                'directives' : [
+                    '-l select=1:ncpus=6:mem=6GB:tmpsize=3GB',
+                    '-l walltime=01:00:00',
+                    '-q=shared'
+                ]
+            },
+            'run' : {
+                'launcher': 'aprun',
+                'directives' : [
+                    '-l select=1',
+                    '-l walltime=00:10:00',
+                    '-q=normal'
+                ]
+            },
+            'tech' : {
+                'launcher' : 'mpiexec',
+                'directives' : [
+                    '-l select=1:ncpus=1:mem=3GB',
+                    '-l walltime=00:20:00',
+                    '-q=shared'
+                ]
+            }
+        }
+    },
+
+    'monsoon-xc40' : {
+        'hostname' : 'xcslc0',
+        'batcher' : 'pbs',
+        'build_root' : '\${RAMTMP}',
+        'update' : 'polling',
+        'setup' : {
+            'base' : [
+                'umask 0022',
+                'module use /common/lfric/modules/modulefiles'
+            ],
+            'build' : [
+            ],
+            'compiler' : {
+                'intel' : [
+                    'module load meto-environment/lfric/intel/17.0.0.098/4'
+                ],
+                'cray' : [
+                    'module load meto-environment/lfric/cray/8.7.0/4'
+                ]
+            },
+            'reveal' : ['module list 2>&1', 'export'],
+            'run': [],
+            'tech' : ['module load cray-snplauncher/$CRAY_MPICH2_VER']
+        },
+        'teardown' : {
+            'base' : [
+                'module unload meto-environment/lfric',
+            ],
+        },
+        'queue' : {
+            'build' : {
+                'launcher' : 'mpiexec',
+                'directives' : [
+                    '-A=' + get_accountname(),
+                    '-P=' + get_accountname(),
+                    '-l select=1:ncpus=6:mem=6GB:tmpsize=3GB',
+                    '-l walltime=00:45:00',
+                    '-q=shared'
+                ]
+            },
+            'run' : {
+                'launcher': 'aprun',
+                'directives' : [
+                    '-A=' + get_accountname(),
+                    '-P=' + get_accountname(),
+                    '-l select=1',
+                    '-l walltime=00:10:00',
+                    '-q=normal'
+                ]
+            },
+            'tech' : {
+                'launcher' : 'mpiexec',
+                'directives' : [
+                    '-A=' + get_accountname(),
+                    '-P=' + get_accountname(),
+                    '-l select=1:ncpus=1:mem=3GB',
+                    '-l walltime=00:20:00',
+                    '-q=shared'
+                ]
+            }
+        }
+    },
+
+    'nci-gadi' : {
+        'hostname' : '$(rose host-select gadi.nci.org.au)',
+        'batcher' : 'pbs',
+        'build_root' : '${CYLC_TASK_WORK_DIR}/${CYLC_SUITE_NAME}_${USER}',
+        'update' : 'interupt',
+        'setup' : {
+            'base' : [
+                'module use /g/data/dk92/apps/Modules/modulefiles',
+                'module use /g/data/access/projects/access/modules',
+                'module load xconv/1.94 hdf5/1.10.5p netcdf/4.7.4p zlib/1.2.11 python3/3.10.0',
+                'module load jinja2/3.0.1 psyclone/2.3.0 rose-picker/2.0',
+                'module unload python2-as-python',
+                'ln -fs /apps/python3/3.10.0/bin/python3 python',
+                'export PATH=$PWD:$PATH'
+            ],
+            'build' : [
+                'export FPP="cpp -traditional-cpp"',
+                'export LDMPI=mpif90'
+            ],
+            'compiler' : {
+                'intel' : [
+                    'module load openmpi/4.0.2',
+                    'module load intel-compiler/2019.3.199',
+                    'module load yaxt/0.9.0_ompi.4.0.2_ifort.2019.3.199 xios/ompi.4.0.2_ifort.2019.3.199 pfunit/3.2.9_ompi.4.0.2_ifort.2019.3.199',
+                ],
+                'gnu' : [
+                    'module load openmpi/4.0.2',
+                    'module load gcc/system',
+                    'module load yaxt/0.9.0_ompi.4.0.2_gfortran.8.4.1 xios/ompi.4.0.2_gfortran.8.4.1 pfunit/3.2.9_ompi.4.0.2_gfortran.8.4.1',
+                    'export CC=gcc; export CXX=g++; export F77=gfortran; export F90=gfortran; export FC=gfortran'
+                ]
+            },
+            'plot' : [
+                'module use /g/data/dk92/apps/Modules/modulefiles',
+                'module load NCI-data-analysis/2021.09 udunits/2.2.26 geos/3.8.0 proj/6.2.1 netcdf/4.7.4p'
+            ],
+            'reveal' : ['module list 2>&1', 'export'],
+            'run' : [],
+            'tech' : ['']
+        },
+        'teardown' : {
+            'base' : [
+            ],
+        },
+        'queue' : {
+            'build' : {
+                'launcher' : 'mpiexec',
+                'directives' : [
+                    '-l ncpus=6',
+                    '-l mem=12GB',
+                    '-l jobfs=2GB',
+                    '-l walltime=01:00:00',
+                    '-q=normal',
+                    '-W umask=0022',
+                    '-l storage=gdata/access+gdata/dk92+gdata/dp9+gdata/hr22+gdata/ki32+scratch/access'
+                ]
+            },
+            'run' : {
+                'launcher' : 'mpiexec',
+                'directives' : [
+                    '-l ncpus=24',
+                    '-l mem=30GB',
+                    '-l walltime=02:00:00',
+                    '-q=normal',
+                    '-W umask=0022',
+                    '-l storage=gdata/access+gdata/dk92+gdata/dp9+gdata/hr22+gdata/ki32+scratch/access'
+                ]
+            },
+            'tech' : {
+                'launcher' : 'mpiexec',
+                'directives' : [
+                    '-l ncpus=4',
+                    '-l mem=3GB',
+                    '-l walltime=00:20:00',
+                    '-q=normal',
+                    '-W umask=0022',
+                    '-l storage=gdata/access+gdata/dk92+gdata/dp9+gdata/hr22+gdata/ki32+scratch/access'
+                ]
+            }
+        }
+    },
+    'nci-ood' : {
+        'hostname' : 'localhost',
+        'batcher' : 'background',
+        'build_root' : '\${CYLC_TASK_WORK_DIR}/\${CYLC_SUITE_NAME}_\$USER',
+        'update' : 'interupt',
+        'setup' : {
+            'base' : [''],
+            'build' : [''],
+            'compiler' : {
+                'intel' : [''],
+                'gnu' : ['']
+            },
+            'plot' : [''],
+            'reveal' : ['module list 2>&1', 'export'],
+            'tech' : ['']
+        },
+        'teardown' : {
+            'base' : [
+            ],
+        },
+        'queue' : {
+            'build' : {
+                'launcher' : '',
+                'directives' : ['']
+            },
+            'run' : {
+                'launcher' : '',
+                'directives' : ['']
+            },
+            'tech' : {
+                'launcher' : '',
+                'directives' : ['']
+            }
+        }
+    },
+    'niwa-xc50-sl' : {
+        'hostname' : 'login.maui.niwa.co.nz',
+        'batcher' : 'slurm',
+        'build_root' : '\$CYLC_SUITE_RUN_DIR/share/lfric_build',
+        'update' : 'interupt',
+        'setup' : {
+            'base' : [
+                'export HDF5_USE_FILE_LOCKING=FALSE',
+            ],
+            'build' : [],
+            'compiler' : {
+                'intel' : [
+                    'module swap NeSI NIWA; module load YAXT/0.9.0-CrayIntel-19.04b XIOS/r2279-CrayIntel-19.04b-NC4PAR pfunit/3.2.9-CrayIntel-19.04b PSyclone/2.3.0-Python-3.6 Jinja2/3.0.3-Python-3.6 Rose_Picker/1.0.0; export FC=ftn FPP=\"cpp -P -x f95-cpp-input\" LDMPI=ftn PFUNIT=$EBROOTPFUNIT FFLAGS=\"-I$EBROOTXIOS/inc -real-size 64\"'
+                ],
+            },
+            'plot' : [],
+            'reveal' : ['module list 2>&1', 'export'],
+            'tech' : [],
+            'run' : [],
+        },
+        'teardown' : {
+            'base' : [],
+        },
+        'queue' : {
+            'build' : {
+                'launcher' : 'background',
+                'directives' : []
+            },
+            'run' : {
+                'launcher': 'srun',
+                'directives' : [
+                    '--account=niwa00001',
+                    '--partition=nesi_research',
+                    '--nodes=1',
+                    '--ntasks=6',
+                    '--cpus-per-task=1',
+                    '--hint=nomultithread',
+                    '--mem=60G',
+                    '--time=01:30:00'
+                ]
+            },
+            'tech' : {
+                'launcher' : 'srun',
+                'directives' : [
+                    '--account=niwa00001',
+                    '--partition=nesi_research',
+                    '--nodes=1',
+                    '--ntasks=1',
+                    '--cpus-per-task=1',
+                    '--hint=nomultithread',
+                    '--mem=60G',
+                    '--time=00:05:00',
+                ]
+            }
+        }
+    },
+    'niwa-xc50-bg' : {
+        'hostname' : 'login.maui.niwa.co.nz',
+        'batcher' : 'background',
+        'build_root' : '\$CYLC_SUITE_RUN_DIR/share/lfric_build',
+        'update' : 'interupt',
+        'setup' : {
+            'base' : [],
+            'build' : [],
+            'compiler' : {
+                'intel' : [],
+            },
+            'plot' : [],
+            'reveal' : ['module list 2>&1', 'export'],
+            'tech' : [],
+            'run' : [],
+        },
+        'teardown' : {
+            'base' : [],
+        },
+        'queue' : {
+            'build' : {
+                'launcher' : 'background',
+                'directives' : []
+            },
+            'run' : {
+                'launcher': 'background',
+                'directives' : []
+            },
+            'tech' : {
+                'launcher' : 'background',
+                'directives' : []
+            }
+        }
+    },
+
+} -%}
+
+{#- Convenience Macros #}
+
+{%- macro directives( target, nature ) %}
+    [[[directives]]]
+{%- for directive in get_target_property(target,
+                                         'queue.' ~ nature ~ '.directives') %}
+      {{directive}}
+{%- endfor %}
+{%- endmacro %}

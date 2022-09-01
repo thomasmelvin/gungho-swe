@@ -1,0 +1,105 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the operator inversion
+!>
+module invert_local_operator_kernel_mod_test
+
+  use constants_mod,                 only : i_def, r_def
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: invert_local_operator_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type invert_local_operator_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(invert_local_operator_test_type), intent(inout) :: this
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(invert_local_operator_test_type), intent(inout) :: this
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use invert_local_operator_kernel_mod, only : invert_local_operator_code
+
+    use get_unit_test_m3x3_q3x3x3_sizes_mod, only: get_w3_m3x3_q3x3x3_size
+
+    implicit none
+
+    class(invert_local_operator_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: tol = 1.0e-6_r_def
+
+    real(r_def) :: answer
+
+    integer(i_def) :: nlayers, ncells, cell
+    integer(i_def) :: ndf_w3, undf_w3
+
+  ! Dummy variable for passing into multi-getter routines where item is not needed
+    integer(i_def) :: unused
+
+   ! Test field data
+    real(r_def), allocatable :: matrix_inv(:,:,:)
+    real(r_def), allocatable :: matrix(:,:,:)
+
+    ! Get canned data for a 3-layer mesh
+    nlayers = 3
+
+    ! Get sizes
+    call get_w3_m3x3_q3x3x3_size( ndf_w3, undf_w3, ncells, &
+                                  unused, unused,          &
+                                  unused, unused,          &
+                                  nlayers )
+
+    allocate(matrix_inv(ndf_w3,ndf_w3,ncells))
+    allocate(matrix(ndf_w3,ndf_w3,ncells))
+
+    cell = 1
+    matrix(:,:,:) = 5.0_r_def
+    call invert_local_operator_code( cell,       &
+                                     nlayers,    &
+                                     ncells,     &
+                                     matrix_inv, &
+                                     ncells,     &
+                                     matrix,     &
+                                     ndf_w3      &
+                                     )
+
+    answer = 1.0_r_def/5.0_r_def
+    @assertEqual(answer, matrix_inv(1, 1, 1 ), tol)
+
+    deallocate(matrix_inv)
+    deallocate(matrix)
+
+  end subroutine test_all
+
+end module invert_local_operator_kernel_mod_test

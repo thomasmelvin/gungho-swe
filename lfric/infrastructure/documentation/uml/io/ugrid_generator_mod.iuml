@@ -1,0 +1,24 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+interface ugrid_generator_mod::ugrid_generator_type{
+
++{abstract} generate()
+
++{abstract} get_metadata(\n\t<<out, optional>> mesh_name: string,\n\t<<out, optional>> geometry: string,\n\t<<out, optional>> topology: string,\n\t<<out, optional>> coord_sys: string,\n\t<<out, optional>> periodic_x: logical,\n\t<<out, optional>> periodic_y: logical,\n\t<<out, optional>> npanels: integer,\n\t<<out, optional>> coord_sys: integer,\n\t<<out, optional>> edge_cells_x: integer,\n\t<<out, optional>> edge_cells_y: integer,\n\t<<out, optional>> constructor_inputs: string,\n\t<<out, optional>> nmaps: integer,\n\t<<out, optional, allocatable>> map_mesh_names: string[:],\n\t<<out, optional, allocatable>> map_edge_cells_x: integer[:],\n\t<<out, optional, allocatable>> map_edge_cells_y: integer[:] )
+
++{abstract} get_dimensions( \n\t<<out>> num_nodes: integer,\n\t<<out>> num_edges: integer,\n\t<<out>> num_faces: integer,\n\t<<out>> num_nodes_per_face: integer,\n\t<<out>> num_edges_per_face: integer,\n\t<<out>> num_nodes_per_edge: integer,\n\t<<out>> max_num_faces_per_node: integer )
+
++{abstract} get_coordinates( \n\t<<out>> node_coordinates: real[::],\n\t<<out>> cell_coordinates: real[::],\n\t<<out>> coord_units_x: string,\n\t<<out>> coord_units_y: string )
+
++{abstract} get_connectivity( \n\t<<out>> face_node_connectivity: integer[::],\n\t<<out>> edge_node_connectivity: integer[::],\n\t<<out>> face_edge_connectivity: integer[::],\n\t<<out>> face_face_connectivity: integer[::] )
+
++{abstract} get_global_mesh_maps_interface(): global_mesh_map_collection_type <<pointer>>
+
+}
+
+note "ugrid_generator_type used as\ninput for set_by_generator()" as N1
+
+ugrid_generator_mod::ugrid_generator_type .down. N1
+N1 .down. ugrid_2d_mod::ugrid_2d_type

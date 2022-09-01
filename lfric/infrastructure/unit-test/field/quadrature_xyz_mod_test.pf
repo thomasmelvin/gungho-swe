@@ -1,0 +1,320 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2017 Met Office. All rights reserved.
+! For further details please refer to the file LICENCE which you should have
+! received as part of this distribution.
+!-----------------------------------------------------------------------------
+module quadrature_xyz_mod_test
+
+  implicit none
+
+contains
+
+  @test
+  ! Test xyz quadrature with symmetrical constructor
+  subroutine test_quadrature_xyz_symmetrical()
+
+    use pFUnit_Mod
+
+    use quadrature_xyz_mod,           only : quadrature_xyz_type, quadrature_xyz_proxy_type
+    use constants_mod,                only : r_def
+    use quadrature_rule_gaussian_mod, only : quadrature_rule_gaussian_type
+
+    implicit none
+
+    integer, parameter :: nqp = 3
+
+    real(kind=r_def) :: epsilon
+
+    real(kind=r_def) :: points_xyz(3,nqp*nqp*nqp)
+    real(kind=r_def) :: weights_xyz(nqp*nqp*nqp)
+
+    real(kind=r_def) :: test_points_xyz(3,nqp*nqp*nqp)
+    real(kind=r_def) :: test_weights_xyz(nqp*nqp*nqp)
+
+    type(quadrature_xyz_type)           :: qr
+    type(quadrature_xyz_proxy_type)     :: qr_proxy
+    type(quadrature_rule_gaussian_type) :: gaussian_quadrature
+
+    ! Get quadrature object and proxy
+    qr = quadrature_xyz_type(nqp, gaussian_quadrature)
+    qr_proxy = qr%get_quadrature_proxy()
+
+    epsilon = 1.0e-14_r_def
+
+    ! Define expected data
+    test_points_xyz(1,:) = [1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def]
+
+    test_points_xyz(2,:) = [1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def]
+
+    test_points_xyz(3,:) = [1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def]
+
+    test_weights_xyz(:)  = [2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            5.486968449931384E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            5.486968449931384E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            5.486968449931384E-002_r_def, &
+                            8.779149519890260E-002_r_def, &
+                            5.486968449931384E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            5.486968449931384E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            5.486968449931384E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def]
+
+    ! Get the data from the object and compare
+    points_xyz = qr_proxy%points_xyz
+    @assertEqual( test_points_xyz, points_xyz, epsilon )
+
+    weights_xyz = qr_proxy%weights_xyz
+    @assertEqual( test_weights_xyz, weights_xyz, epsilon )
+
+  end subroutine test_quadrature_xyz_symmetrical
+
+  @test
+  ! Test xyz quadrature with variable constructor
+  subroutine test_quadrature_xyz_variable()
+
+    use pFUnit_Mod
+
+    use quadrature_xyz_mod,           only : quadrature_xyz_type, quadrature_xyz_proxy_type
+    use constants_mod,                only : r_def
+    use quadrature_rule_gaussian_mod, only : quadrature_rule_gaussian_type
+
+    implicit none
+
+    integer, parameter :: nqp_x = 3, nqp_y = 3, nqp_z = 3
+
+    real(kind=r_def) :: epsilon
+
+    real(kind=r_def) :: points_xyz(3,nqp_x*nqp_y*nqp_z)
+    real(kind=r_def) :: weights_xyz(nqp_x*nqp_y*nqp_z)
+
+    real(kind=r_def) :: test_points_xyz(3,nqp_x*nqp_y*nqp_z)
+    real(kind=r_def) :: test_weights_xyz(nqp_x*nqp_y*nqp_z)
+
+    type(quadrature_xyz_type)           :: qr
+    type(quadrature_xyz_proxy_type)     :: qr_proxy
+    type(quadrature_rule_gaussian_type) :: gaussian_quadrature
+
+    ! Get quadrature object and proxy
+    qr = quadrature_xyz_type(nqp_x, nqp_y, nqp_z, gaussian_quadrature)
+    qr_proxy = qr%get_quadrature_proxy()
+
+    epsilon = 1.0e-14_r_def
+
+    ! Define expected data
+    test_points_xyz(1,:) = [1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def]
+
+    test_points_xyz(2,:) = [1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            8.872983346207417E-001_r_def]
+
+    test_points_xyz(3,:) = [1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def, &
+                            1.127016653792583E-001_r_def, &
+                            5.000000000000000E-001_r_def, &
+                            8.872983346207417E-001_r_def]
+
+    test_weights_xyz(:)  = [2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            5.486968449931384E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            5.486968449931384E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            5.486968449931384E-002_r_def, &
+                            8.779149519890260E-002_r_def, &
+                            5.486968449931384E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            5.486968449931384E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            5.486968449931384E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def, &
+                            3.429355281207098E-002_r_def, &
+                            2.143347050754425E-002_r_def]
+
+    ! Get the data from the object and compare
+    points_xyz = qr_proxy%points_xyz
+    @assertEqual( test_points_xyz, points_xyz, epsilon )
+
+    weights_xyz = qr_proxy%weights_xyz
+    @assertEqual( test_weights_xyz, weights_xyz, epsilon )
+
+  end subroutine test_quadrature_xyz_variable
+
+end module quadrature_xyz_mod_test

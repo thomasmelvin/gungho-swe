@@ -1,0 +1,28 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class global_mesh_collection_mod::global_mesh_collection_type {
+  -global_mesh_list: linked_list_type
+  -source_global_mesh: global_mesh_type <<pointer>>
+  -npanels: integer
+  -name_tags: string[:] <<allocatable>>
+  -name_ids: integer[:] <<allocatable>>
+
+  +<<create>>  global_mesh_collection_constructor() : global_mesh_collection_type
+  +<<destroy>> global_mesh_collection_destructor()
+  +clear()
+
+  +add_new_global_mesh(<<in>>global_mesh: global_mesh_type)
+  +add_unit_test_global_mesh() : mesh_id<<integer>>
+
+  +n_meshes(): integer
+  +get_mesh_names(): string[ ]<<allocatable>>
+  +get_mesh_id(<<in>>mesh_name:string): integer
+  +get_mesh_by_id(<<in>> global_mesh_id:integer): global_mesh_type <<pointer>>
+  +get_mesh_by_name(<<in>> global_mesh_name:string): global_mesh_type <<pointer>>
+  +get_global_mesh() <<generic>>: get_mesh_by_id(...), get_mesh_by_name(...)
+  +check_for(<<in>> mesh_name:string): logical
+}
+
+

@@ -1,0 +1,100 @@
+!-------------------------------------------------------------------------------
+! (c) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-------------------------------------------------------------------------------
+!> @brief Algorithm to apply the orography field to the multigrid meshes.
+
+module mg_orography_alg_mod
+
+  use constants_mod,                 only: i_def
+  use field_mod,                     only: field_type
+  use fs_continuity_mod,             only: W3
+  use function_space_collection_mod, only: function_space_collection
+  use mesh_collection_mod,           only: mesh_collection
+  use mesh_mod,                      only: mesh_type
+
+
+  implicit none
+
+contains
+
+  !> @brief Assigns the orography field to the multigrid meshes
+  !> @details This algorithm first computes the surface altitude field on
+  !>          each multigrid mesh by restricting the surface altitude field
+  !>          from the finest mesh. Then the orography field for the
+  !>          multigrid meshes is assigned from the respective surface
+  !>          altitude field for each multigrid mesh.
+  !> @param[in]     multigrid_mesh_ids    An array of the mesh IDs for the
+  !>                                      multigrid meshes.
+  !> @param[in]     multigrid_2D_mesh_ids An array of the mesh IDs for the
+  !>                                      2D multigrid meshes.
+  !> @param[in,out] chi_mg                An array of all the coordinate fields
+  !>                                      for the multigrid meshes.
+  !> @param[in]     panel_id_mg           An array of the mesh panel IDs for the
+  !>                                      multigrid meshes.
+  !> @param[in]     surface_altitude      Surface altitude on the finest mesh.
+  subroutine mg_orography_alg( multigrid_mesh_ids,    &
+                               multigrid_2D_mesh_ids, &
+                               chi_mg, panel_id_mg,   &
+                               surface_altitude       )
+
+    use assign_orography_field_mod, only: assign_orography_field
+    use restrict_kernel_mod,        only: restrict_kernel_type
+
+
+    implicit none
+
+    integer(kind=i_def), intent(in)    :: multigrid_mesh_ids(:)
+    integer(kind=i_def), intent(in)    :: multigrid_2D_mesh_ids(:)
+    type( field_type ),  intent(inout) :: chi_mg(:,:)
+    type( field_type ),  intent(in)    :: panel_id_mg(:)
+    type( field_type ),  intent(in)    :: surface_altitude
+
+    ! local variables
+    type(mesh_type), pointer      :: mesh => null()
+    type(mesh_type), pointer      :: twod_mesh => null()
+    integer(kind=i_def)           :: level, surface_order
+    integer(kind=i_def)           :: mg_mesh_id
+    integer(kind=i_def)           :: mg_2D_mesh_id
+    type(field_type), allocatable :: surface_altitude_mg(:)
+
+    allocate(surface_altitude_mg(SIZE(multigrid_mesh_ids)))
+    call surface_altitude%copy_field(surface_altitude_mg(1))
+
+
+    surface_order = surface_altitude%get_element_order()
+
+    do level = 2, SIZE(multigrid_mesh_ids)
+
+      mg_mesh_id    = multigrid_mesh_ids(level)
+      mg_2D_mesh_id = multigrid_2D_mesh_ids(level)
+
+      mesh      => mesh_collection%get_mesh(mg_mesh_id)
+      twod_mesh => mesh_collection%get_mesh(mg_2D_mesh_id)
+
+      !------------------------------------------------------------------------!
+      ! Create the surface altitude fields on the multigrid meshes
+      !------------------------------------------------------------------------!
+
+      call surface_altitude_mg( level )%initialise( vector_space = &
+         function_space_collection%get_fs( twod_mesh, surface_order, W3) )
+      ! We use a simple restriction from fine to coarse levels
+      call invoke( restrict_kernel_type( surface_altitude_mg( level ),  &
+                                         surface_altitude_mg( level-1 ) ) )
+
+
+      !------------------------------------------------------------------------!
+      ! Use the surface altitude to introduce orography on the multigrid meshes
+      !------------------------------------------------------------------------!
+
+      call assign_orography_field(chi_mg(:,level), panel_id_mg(level), &
+                                  mesh, surface_altitude_mg(level))
+    end do
+
+    deallocate(surface_altitude_mg)
+
+
+  end subroutine mg_orography_alg
+
+end module mg_orography_alg_mod

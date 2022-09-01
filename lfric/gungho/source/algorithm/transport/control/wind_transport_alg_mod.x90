@@ -1,0 +1,169 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief Contains routine for transporting the wind field.
+
+module wind_transport_alg_mod
+
+  use constants_mod,                  only: i_def, r_def
+  use convert_hdiv_field_kernel_mod,  only: convert_hdiv_field_kernel_type
+  use enforce_bc_kernel_mod,          only: enforce_bc_kernel_type
+  use fem_constants_mod,              only: get_project_xdot_to_w2, &
+                                            get_project_ydot_to_w2, &
+                                            get_project_zdot_to_w2
+  use field_mod,                      only: field_type
+  use finite_element_config_mod,      only: element_order
+  use formulation_config_mod,         only: si_momentum_equation
+  use fs_continuity_mod,              only: W2, W3
+  use function_space_mod,             only: function_space_type
+  use function_space_collection_mod,  only: function_space_collection
+  use geometric_constants_mod,        only: get_coordinates, get_panel_id
+  use io_config_mod,                  only: subroutine_timers
+  use log_mod,                        only: log_event, &
+                                            LOG_LEVEL_ERROR, &
+                                            LOG_LEVEL_INFO
+  use mesh_mod,                       only: mesh_type
+  use operator_mod,                   only: operator_type
+  use timer_mod,                      only: timer
+  use transport_enumerated_types_mod, only: equation_advective
+  use transport_field_mod,            only: transport_field
+  use transport_metadata_mod,         only: transport_metadata_type
+
+  implicit none
+
+  private
+
+  public :: wind_transport_alg
+
+contains
+
+  !=============================================================================
+  !> @brief Central routine for transporting the wind field.
+  !> @details Performs a whole transport time step for the wind field, with
+  !!          different routines called depending on the form of the transport
+  !!          equation being used.
+  !> @param[in,out] rhs_u              Right-hand-side for weak wind transport
+  !!                                   equation. In other words, the advective
+  !!                                   increment to the wind multiplied by the
+  !!                                   W2 mass matrix.
+  !> @param[in]     wind_n             Wind field at start of transport step
+  !> @param[in]     model_dt           Model timestep
+  !> @param[in]     transport_metadata Contains the configuration options for
+  !!                                   transporting these fields
+  subroutine wind_transport_alg(rhs_u, wind_n, model_dt, transport_metadata)
+
+    use matrix_vector_kernel_mod, only: matrix_vector_kernel_type
+
+    implicit none
+
+    ! Arguments
+    type(field_type),              intent(inout) :: rhs_u
+    type(field_type),              intent(in)    :: wind_n
+    real(kind=r_def),              intent(in)    :: model_dt
+    type(transport_metadata_type), intent(in)    :: transport_metadata
+
+    ! Internal variables
+    type(mesh_type), pointer  :: mesh => null()
+    integer(kind=i_def)       :: dir
+    type(field_type)          :: u_w3_n(3), u_w3_inc(3), u_w3_np1(3)
+    type(field_type), pointer :: chi(:) => null()
+    type(field_type), pointer :: panel_id => null()
+    type(operator_type),        pointer :: project_xdot_to_w2 => null()
+    type(operator_type),        pointer :: project_ydot_to_w2 => null()
+    type(operator_type),        pointer :: project_zdot_to_w2 => null()
+    type(function_space_type),  pointer :: w3_fs => null()
+
+    if ( subroutine_timers ) call timer('wind transport')
+
+    ! ------------------------------------------------------------------------ !
+    ! Semi-implicit formulation
+    ! ------------------------------------------------------------------------ !
+    if ( si_momentum_equation ) then
+      ! Transport terms are handled by the semi-implicit scheme the increment is zero
+      call invoke( setval_c(rhs_u, 0.0_r_def) )
+
+    else
+      ! Transport the wind. First choose form of transport equation
+      select case ( transport_metadata%get_equation() )
+
+      ! ---------------------------------------------------------------------- !
+      ! Advective form of transport equation
+      ! ---------------------------------------------------------------------- !
+      case ( equation_advective )
+
+        ! Compute u in physical space and advect components in geocentric
+        ! Cartesian coordinates and then map back to computational form
+
+        mesh => wind_n%get_mesh()
+        w3_fs => function_space_collection%get_fs( mesh, element_order, W3 )
+        chi => get_coordinates(mesh%get_id())
+        panel_id => get_panel_id(mesh%get_id())
+        project_xdot_to_w2 => get_project_xdot_to_w2(mesh%get_id())
+        project_ydot_to_w2 => get_project_ydot_to_w2(mesh%get_id())
+        project_zdot_to_w2 => get_project_zdot_to_w2(mesh%get_id())
+
+        ! -------------------------------------------------------------------- !
+        ! Split wind into components in W3
+        ! -------------------------------------------------------------------- !
+
+        do dir = 1,3
+          call u_w3_n(dir)%initialise( w3_fs )
+          call u_w3_inc(dir)%initialise( w3_fs )
+          call u_w3_np1(dir)%initialise( w3_fs )
+        end do
+        call wind_n%log_minmax( LOG_LEVEL_INFO, 'advected u' )
+        call invoke( setval_c(u_w3_n(1), 0.0_r_def), &
+                     setval_c(u_w3_n(2), 0.0_r_def), &
+                     setval_c(u_w3_n(3), 0.0_r_def), &
+                     convert_hdiv_field_kernel_type(u_w3_n, wind_n, &
+                                                    chi, panel_id) )
+        call u_w3_n(1)%log_minmax(LOG_LEVEL_INFO, 'xdot')
+        call u_w3_n(2)%log_minmax(LOG_LEVEL_INFO, 'ydot')
+        call u_w3_n(3)%log_minmax(LOG_LEVEL_INFO, 'zdot')
+
+        ! -------------------------------------------------------------------- !
+        ! Transport wind components in W3
+        ! -------------------------------------------------------------------- !
+
+        do dir = 1,3
+          call transport_field(u_w3_np1(dir), u_w3_n(dir), model_dt, transport_metadata)
+        end do
+
+        ! -------------------------------------------------------------------- !
+        ! Return from components to full wind field in W2
+        ! -------------------------------------------------------------------- !
+
+        ! Compute the updates to W2 wind field using physical scalar update
+        ! First obtain the W3 increments
+        call invoke( X_minus_Y( u_w3_inc(1), u_w3_np1(1), u_w3_n(1) ),        &
+                     X_minus_Y( u_w3_inc(2), u_w3_np1(2), u_w3_n(2) ),        &
+                     X_minus_Y( u_w3_inc(3), u_w3_np1(3), u_w3_n(3) ),        &
+                     setval_c(rhs_u, 0.0_r_def),                              &
+                     matrix_vector_kernel_type(rhs_u, u_w3_inc(1), project_xdot_to_w2), &
+                     matrix_vector_kernel_type(rhs_u, u_w3_inc(2), project_ydot_to_w2), &
+                     matrix_vector_kernel_type(rhs_u, u_w3_inc(3), project_zdot_to_w2), &
+                     enforce_bc_kernel_type(rhs_u) )
+
+        nullify( w3_fs, chi, panel_id, project_xdot_to_w2, &
+                 project_ydot_to_w2, project_zdot_to_w2 )
+
+      ! ---------------------------------------------------------------------- !
+      ! Default form of transport equation
+      ! ---------------------------------------------------------------------- !
+      case default
+        call log_event('Form of wind transport equation either not compatible ' // &
+                       'with wind transport or not implemented', LOG_LEVEL_ERROR)
+
+      end select
+
+    end if ! si_momentum_equation
+
+    nullify ( mesh )
+
+    if ( subroutine_timers ) call timer('wind transport')
+
+  end subroutine wind_transport_alg
+
+end module wind_transport_alg_mod

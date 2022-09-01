@@ -1,0 +1,221 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the scaled addition of two columnwise assembled operators
+!> For this, add the operators and check that the product operator
+!> has the same entries as the corresponding dense matrix.
+module columnwise_op_scaledadd_kernel_mod_test
+
+  use constants_mod,                 only : i_def, r_def, r_solver
+
+  use get_unit_test_m3x3_cma_data_mod, &
+       only : get_cma_size, get_cma_prod_size
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_all
+
+  @TestCase
+  type, extends(TestCase), public :: columnwise_op_scaledadd_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type columnwise_op_scaledadd_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(columnwise_op_scaledadd_test_type), intent(inout) :: this
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(columnwise_op_scaledadd_test_type), intent(inout) :: this
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use columnwise_op_scaledadd_kernel_mod, only : &
+         columnwise_op_scaledadd_kernel_code
+
+    implicit none
+
+    class(columnwise_op_scaledadd_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: tol = 1.0e-6_r_def
+
+    integer(kind=i_def) :: i, j, cell
+    integer(kind=i_def) :: ncell_2d, nlayers, unused, ndf_w3, ndf_wt
+    integer(kind=i_def) :: ndf_face_wt, ndf_interior_wt, ndf_face_w3, ndf_interior_w3
+    integer(kind=i_def) :: alpha_33, beta_33, bw_33, g_m_33, g_p_33, nrow_33, ncol_33
+    integer(kind=i_def) :: alpha_prod, beta_prod, bw_prod, g_m_prod, g_p_prod, &
+         nrow_prod, ncol_prod
+    integer(kind=i_def) :: alpha_T3, beta_T3, bw_T3, g_m_T3, g_p_T3, nrow_T3, ncol_T3
+    integer(kind=i_def) :: alpha_3T, beta_3T, bw_3T, g_m_3T, g_p_3T, nrow_3T, ncol_3T
+
+    ! Scaling factors
+    real(kind=r_solver) :: mu, nu
+
+    ! Dense representations of the operators mass, D^T.D and
+    ! mass + beta*D^T.D
+    real(kind=r_def), allocatable, dimension(:,:) :: densematrix_mass, &
+                                                     densematrix_DT_D, &
+                                                     densematrix_mass_DT_D
+
+    real(kind=r_solver), allocatable, dimension(:,:,:) :: clm_mat_M,   &
+                                                          clm_mat_DTD, &
+                                                          clm_mat_DTD_M
+
+    integer(kind=i_def) :: j_minus, j_plus
+    real(kind=r_def) :: matrixentry ! Sparse matrix entry to compare in test
+
+    ! set some sizes - no maps are required
+    nlayers         = 3_i_def
+    ncell_2d        = 1_i_def  ! Only 1 column required for test
+
+    ndf_face_w3     = 0_i_def
+    ndf_interior_w3 = 1_i_def
+    ndf_w3          = 1_i_def
+
+    ndf_face_wt     = 1_i_def
+    ndf_interior_wt = 0_i_def
+    ndf_wt          = 2_i_def
+
+    ! get some CMA sizes
+    call get_cma_size(nlayers, ndf_w3, ndf_w3, &
+         ndf_face_w3, ndf_interior_w3, ndf_face_w3, ndf_interior_w3, &
+         alpha_33, beta_33, g_m_33, g_p_33, bw_33, ncol_33, nrow_33)
+    call get_cma_size(nlayers, ndf_w3, ndf_wt, &
+         ndf_face_w3, ndf_interior_w3, ndf_face_wt, ndf_interior_wt, &
+         alpha_3T, beta_3T, g_m_3T, g_p_3T, bw_3T, ncol_3T, nrow_3T)
+    call get_cma_size(nlayers, ndf_wt, ndf_w3, &
+         ndf_face_wt, ndf_interior_wt, ndf_face_w3, ndf_interior_w3, &
+         alpha_T3, beta_T3, g_m_T3, g_p_T3, bw_T3, ncol_T3, nrow_T3)
+
+    call get_cma_prod_size(alpha_3T, beta_3T, g_m_3T, g_p_3T, nrow_3T, &
+                           alpha_T3, beta_T3, g_m_T3, g_p_T3, nrow_T3, &
+                           alpha_prod, beta_prod, g_m_prod, g_p_prod, bw_prod, nrow_prod, ncol_prod)
+    cell = 1_i_def
+    mu = 2.4_r_solver
+    nu = 3.7_r_solver
+
+    ! Spaces for operators
+    ! mass matrix is W3W3
+    ! D  is WTW3
+    ! DT is W3WT
+    ! DT.D is W3W3
+    ! DT.D + M is W3W3
+
+    ! construct banded and dense matrix representation,
+    allocate(densematrix_mass( nrow_33, ncol_33) )
+    allocate(densematrix_DT_D( nrow_prod, ncol_prod) )
+    allocate(densematrix_mass_DT_D( nrow_prod, ncol_prod) )
+
+    densematrix_mass(:,:) = 0.0_r_def
+    densematrix_DT_D(:,:) = 0.0_r_def
+    densematrix_mass_DT_D(:,:) = 0.0_r_def
+
+    allocate(clm_mat_M(bw_33, nrow_33, ncell_2d))
+    allocate(clm_mat_DTD(bw_prod, nrow_33, ncell_2d))
+    allocate(clm_mat_DTD_M(bw_prod, nrow_33, ncell_2d))
+
+    clm_mat_M(:,:,:)   = 0.0_r_solver
+    clm_mat_DTD(:,:,:) = 0.0_r_solver
+
+    ! Populate matrix entries
+    do i = 1_i_def, nrow_33
+       clm_mat_DTD(1,i,cell) = +1.0_r_solver
+       clm_mat_DTD(2,i,cell) = +2.0_r_solver
+       clm_mat_DTD(3,i,cell) = +1.0_r_solver
+       clm_mat_M(1,i,cell)   = +1.0_r_solver
+       densematrix_mass(i,i) = +1.0_r_solver
+       if (i > 1_i_def) then
+          densematrix_DT_D(i,i-1_i_def) = +1.0_r_def
+       end if
+       densematrix_DT_D(i,i) = +2.0_r_def
+       if (i < nrow_33) then
+          densematrix_DT_D(i,i+1_i_def) = +1.0_r_def
+       end if
+    end do
+    call columnwise_op_scaledadd_kernel_code(cell,                        &
+                                             ncell_2d,                    &
+                                             clm_mat_M,                   &
+                                             nrow_33,                     &
+                                             ncol_33,                     &
+                                             bw_33,                       &
+                                             alpha_33,                    &
+                                             beta_33,                     &
+                                             g_m_33,                      &
+                                             g_p_33,                      &
+                                             clm_mat_DTD,                 &
+                                             nrow_prod,                   &
+                                             ncol_prod,                   &
+                                             bw_prod,                     &
+                                             alpha_prod,                  &
+                                             beta_prod,                   &
+                                             g_m_prod,                    &
+                                             g_p_prod,                    &
+                                             clm_mat_DTD_M,               &
+                                             nrow_prod,                   &
+                                             ncol_prod,                   &
+                                             bw_prod,                     &
+                                             alpha_prod,                  &
+                                             beta_prod,                   &
+                                             g_m_prod,                    &
+                                             g_p_prod,                    &
+                                             mu,                          &
+                                             nu)
+
+    ! Same calculation with dense matrices
+    ! Mass matrix is smaller, DT_D is larger but final column should be zero
+    ! and tested. Adding explicit looping.
+    do i = 1_i_def, ncol_33
+       densematrix_mass_DT_D(:,i) = real(mu, r_def) * densematrix_mass(:,i) &
+            + real(nu, r_def)  * densematrix_DT_D(:,i)
+    end do
+    do i = ncol_33+1_i_def, ncol_prod
+       densematrix_mass_DT_D(:,i) = real(nu, r_def)  * densematrix_DT_D(:,i)
+    end do
+
+    ! Check result by comparing non-zero matrix entries in columnwise and
+    ! dense matrices
+    do i = 1_i_def, nrow_prod
+       j_minus = ceiling( ( alpha_prod*i - g_p_prod) / (1.0_r_def*beta_prod),i_def )
+       j_plus = floor( ( alpha_prod*i + g_m_prod) / (1.0_r_def*beta_prod),i_def )
+       do j = MAX(1,j_minus), MIN( ncol_prod, j_plus)
+    matrixentry &
+             = real(clm_mat_DTD_M(j-j_minus+1,i,cell), r_def)
+          @assertEqual( densematrix_mass_DT_D(i,j), matrixentry, tol )
+
+       end do
+    end do
+
+    deallocate(densematrix_mass)
+    deallocate(densematrix_DT_D)
+    deallocate(densematrix_mass_DT_D)
+
+    deallocate(clm_mat_M)
+    deallocate(clm_mat_DTD)
+    deallocate(clm_mat_DTD_M)
+
+  end subroutine test_all
+
+end module columnwise_op_scaledadd_kernel_mod_test

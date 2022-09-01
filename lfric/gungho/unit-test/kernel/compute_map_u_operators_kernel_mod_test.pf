@@ -1,0 +1,308 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+module compute_map_u_operators_kernel_mod_test
+
+  use constants_mod,                 only : i_def, r_def, pi
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: compute_map_u_operators_test_type, test_all
+
+  @TestCase
+  type, extends(TestCase) :: compute_map_u_operators_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type compute_map_u_operators_test_type
+
+  real(r_def), parameter :: gravity  = 10.0_r_def
+  real(r_def), parameter :: radius   = 6000000_r_def
+  real(r_def), parameter :: omega    = 8.0E-5_r_def
+  real(r_def), parameter :: p_zero   = 100000.0_r_def
+  real(r_def), parameter :: rd       = 300.0_r_def
+  real(r_def), parameter :: cp       = 1000.0_r_def
+  real(r_def), parameter :: scaling  = 1.0_r_def
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use base_mesh_config_mod,      only : geometry_spherical, &
+                                          topology_fully_periodic
+    use chi_transform_mod,         only : init_chi_transforms
+    use finite_element_config_mod, only : cellshape_quadrilateral, &
+                                          coord_system_lonlatz
+    use feign_config_mod,          only : feign_finite_element_config, &
+                                          feign_base_mesh_config,      &
+                                          feign_planet_config
+
+    implicit none
+
+    class(compute_map_u_operators_test_type), intent(inout) :: this
+
+    call feign_base_mesh_config( filename='foo',                   &
+                                 prime_mesh_name='unit_test',      &
+                                 geometry=geometry_spherical,      &
+                                 offline_partitioning=.false.,     &
+                                 topology=topology_fully_periodic, &
+                                 fplane=.false., f_lat_deg=0.0_r_def )
+
+    call feign_finite_element_config(           &
+             cellshape=cellshape_quadrilateral, &
+             element_order=0_i_def,             &
+             rehabilitate=.true.,               &
+             coord_order = 0_i_def,             &
+             coord_system=coord_system_lonlatz, &
+             vorticity_in_w1=.false. )
+
+    call feign_planet_config( gravity=gravity, radius=radius, omega=omega, &
+                              rd=rd, cp=cp, p_zero=p_zero,                 &
+                              scaling_factor=scaling )
+
+    call init_chi_transforms()
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod,        only: final_configuration
+    use chi_transform_mod,        only: final_chi_transforms
+
+    implicit none
+
+    class(compute_map_u_operators_test_type), intent(inout) :: this
+
+    call final_configuration()
+    call final_chi_transforms()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use matrix_vector_kernel_mod,            only : matrix_vector_code
+    use compute_map_u_operators_kernel_mod,         only : compute_map_u_operators_code
+
+    use get_unit_test_m3x3_q3x3x3_sizes_mod, only : get_w0_m3x3_q3x3x3_size, &
+                                                    get_w2_m3x3_q3x3x3_size, &
+                                                    get_w3_m3x3_q3x3x3_size, &
+                                                    get_wtheta_m3x3_q3x3x3_size
+
+    use get_unit_test_m3x3_dofmap_mod,       only : get_w0_m3x3_dofmap, &
+                                                    get_w2_m3x3_dofmap, &
+                                                    get_w3_m3x3_dofmap, &
+                                                    get_wtheta_m3x3_dofmap
+
+    use get_unit_test_q3x3x3_basis_mod,      only : get_w0_q3x3x3_basis,      &
+                                                    get_w0_q3x3x3_diff_basis, &
+                                                    get_w2_q3x3x3_basis,      &
+                                                    get_w3_q3x3x3_basis,      &
+                                                    get_wtheta_q3x3x3_basis
+
+    use get_unit_test_3x3x3_chi_mod,         only : get_w0_3x3x3_field
+
+    use get_unit_test_q3x3x3_quadrature_mod, only : get_gaussian_q3x3x3_quadrature_weights_xy, &
+                                                    get_gaussian_q3x3x3_quadrature_weights_z
+   implicit none
+
+    class(compute_map_u_operators_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: tol = 1.0e-3_r_def
+    real(r_def), parameter :: dlon = 1.0_r_def/radius, &
+                              dlat = 1.0_r_def/radius, &
+                              dz = 1.0_r_def
+
+    real(r_def) :: answer
+
+    integer(i_def) :: cell, ncells, ncell_3d
+
+    integer(i_def) :: nlayers, k, nqp_h, nqp_v
+    integer(i_def) :: ndf_w0, ndf_w2, ndf_w3, ndf_wt
+    integer(i_def) :: undf_w0, undf_w2, undf_w3, undf_wt
+
+    ! Dummy variable for passing into multi-getter routines where item is not needed
+    integer(i_def) :: unused
+
+    integer(i_def), allocatable :: map_w0(:,:)
+    integer(i_def), allocatable :: map_w2(:,:)
+    integer(i_def), allocatable :: map_w3(:,:)
+    integer(i_def), allocatable :: map_wt(:,:)
+
+    real(r_def), allocatable :: basis_w0(:,:,:,:), diff_basis_w0(:,:,:,:)
+    real(r_def), allocatable :: basis_w2(:,:,:,:)
+    real(r_def), allocatable :: basis_w3(:,:,:,:)
+    real(r_def), allocatable :: basis_wt(:,:,:,:)
+
+    real(r_def), allocatable :: wh(:), wv(:)
+
+    ! Test field data
+    real(r_def), allocatable :: chi_data(:,:)
+    real(r_def), allocatable :: r_u_data(:)
+    real(r_def), allocatable :: u_lon_data(:)
+    real(r_def), allocatable :: u_lat_data(:)
+    real(r_def), allocatable :: u_up_data(:)
+    real(r_def), allocatable :: panel_id_data(:)
+
+    real(r_def), allocatable :: u_lon_map(:,:,:)
+    real(r_def), allocatable :: u_lat_map(:,:,:)
+    real(r_def), allocatable :: u_up_map(:,:,:)
+
+    ! Get canned data for a 3-layer mesh
+    nlayers = 3
+
+    ! Get sizes
+    call get_w0_m3x3_q3x3x3_size( ndf_w0, undf_w0, ncells, &
+                                  unused, unused,          &
+                                  nqp_h, nqp_v,            &
+                                  nlayers )
+
+    call get_w2_m3x3_q3x3x3_size( ndf_w2, undf_w2, unused, &
+                                  unused, unused,          &
+                                  unused, unused,          &
+                                  nlayers )
+
+    call get_w3_m3x3_q3x3x3_size( ndf_w3, undf_w3, unused, &
+                                  unused, unused,          &
+                                  unused, unused,          &
+                                  nlayers )
+
+    call get_wtheta_m3x3_q3x3x3_size( ndf_wt, undf_wt, unused, &
+                                      unused, unused,          &
+                                      unused, unused,          &
+                                      nlayers )
+    ! Get dofmaps
+    call get_w0_m3x3_dofmap(map_w0)
+    call get_w2_m3x3_dofmap(map_w2)
+    call get_w3_m3x3_dofmap(map_w3)
+    call get_wtheta_m3x3_dofmap(map_wt)
+
+    call get_w0_q3x3x3_basis(basis_w0)
+    call get_w0_q3x3x3_diff_basis(diff_basis_w0)
+    call get_w2_q3x3x3_basis(basis_w2)
+    call get_w3_q3x3x3_basis(basis_w3)
+    call get_wtheta_q3x3x3_basis(basis_wt)
+    call get_gaussian_q3x3x3_quadrature_weights_xy(wh)
+    call get_gaussian_q3x3x3_quadrature_weights_z(wv)
+
+    ! Create the data arrays
+    allocate(chi_data(undf_w0,3))
+    allocate(r_u_data(undf_w2))
+    allocate(u_lon_data(undf_w3))
+    allocate(u_lat_data(undf_w3))
+    allocate(u_up_data(undf_wt))
+    allocate(panel_id_data(undf_w3))
+
+    call get_w0_3x3x3_field(chi_data(:,1), chi_data(:,2), chi_data(:,3), &
+                            dlon, dlat, dz, map_w0, nlayers)
+
+    cell = 1
+    ncell_3d = ncells * nlayers
+    allocate( u_lon_map(ndf_w2, ndf_w3, ncell_3d) )
+    allocate( u_lat_map(ndf_w2, ndf_w3, ncell_3d) )
+    allocate( u_up_map(ndf_w2, ndf_wt, ncell_3d) )
+    u_lon_map(:,:,:) = 0.0_r_def
+    u_lat_map(:,:,:) = 0.0_r_def
+    u_up_map(:,:,:)  = 0.0_r_def
+
+    ! Create the data
+    r_u_data(:)      =  0.0_r_def
+    u_lon_data(:)    =  1.0_r_def
+    u_lat_data(:)    = -2.0_r_def
+    u_up_data(:)     =  0.0_r_def
+    panel_id_data(:) =  1.0_r_def
+
+    call compute_map_u_operators_code( cell, nlayers, ncell_3d,                 &
+                                u_lon_map, ncell_3d, u_lat_map,          &
+                                ncell_3d, u_up_map,                      &
+                                chi_data(:,1),                           &
+                                chi_data(:,2),                           &
+                                chi_data(:,3),                           &
+                                panel_id_data,                           &
+                                ndf_w2, basis_w2,                        &
+                                ndf_w3, basis_w3,                        &
+                                ndf_wt, basis_wt,                        &
+                                ndf_w0, undf_w0,                         &
+                                map_w0(:,cell), basis_w0, diff_basis_w0, &
+                                ndf_w3, undf_w3,                         &
+                                map_w3(:,cell),                          &
+                                nqp_h, nqp_v, wh, wv                     &
+                                )
+    call matrix_vector_code(cell,                            &
+                            nlayers,                         &
+                            r_u_data, u_lon_data,            &
+                            ncell_3d,                        &
+                            u_lon_map,                       &
+                            ndf_w2, undf_w2, map_w2(:,cell), &
+                            ndf_w3, undf_w3, map_w3(:,cell))
+
+    call matrix_vector_code(cell,                            &
+                            nlayers,                         &
+                            r_u_data, u_lat_data,            &
+                            ncell_3d,                        &
+                            u_lat_map,                       &
+                            ndf_w2, undf_w2, map_w2(:,cell), &
+                            ndf_w3, undf_w3, map_w3(:,cell))
+    call matrix_vector_code(cell,                            &
+                            nlayers,                         &
+                            r_u_data, u_up_data,             &
+                            ncell_3d,                        &
+                            u_up_map,                        &
+                            ndf_w2, undf_w2, map_w2(:,cell), &
+                            ndf_wt, undf_wt, map_wt(:,cell))
+
+    answer = 0.5_r_def
+
+    do k = 0,2
+      @assertEqual(answer, r_u_data(map_w2(1,cell)+k), tol)
+      @assertEqual(answer, r_u_data(map_w2(3,cell)+k), tol)
+    end do
+
+    answer = 1.0_r_def
+
+    do k = 0,2
+      @assertEqual(answer, r_u_data(map_w2(2,cell)+k), tol)
+      @assertEqual(answer, r_u_data(map_w2(4,cell)+k), tol)
+    end do
+
+    answer = 0.0_r_def
+
+    do k = 0,2
+      @assertEqual(answer, r_u_data(map_w2(5,cell)+k), tol)
+      @assertEqual(answer, r_u_data(map_w2(6,cell)+k), tol)
+    end do
+
+    deallocate(u_lon_map)
+    deallocate(u_lat_map)
+    deallocate(u_up_map)
+    deallocate(map_w0)
+    deallocate(map_w2)
+    deallocate(map_w3)
+    deallocate(map_wt)
+    deallocate(diff_basis_w0)
+    deallocate(basis_w0)
+    deallocate(basis_w2)
+    deallocate(basis_w3)
+    deallocate(basis_wt)
+    deallocate(wh)
+    deallocate(wv)
+    deallocate(chi_data)
+    deallocate(r_u_data)
+    deallocate(u_lon_data)
+    deallocate(u_lat_data)
+    deallocate(u_up_data)
+    deallocate(panel_id_data)
+
+  end subroutine test_all
+
+end module compute_map_u_operators_kernel_mod_test

@@ -1,0 +1,78 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+##############################################################################
+# Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+# For further details please refer to the file LICENCE.original which you
+# should have received as part of this distribution.
+##############################################################################
+'''
+Compare a list of source files against the dependency database to see if any
+of them are unused.
+'''
+
+from __future__ import print_function;
+
+import argparse
+import os.path
+import sys
+
+from dependerator import __version__
+import dependerator.database as database
+import utilities.logging  as logging
+
+###############################################################################
+# Entry point
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser( add_help=False, \
+                                      description=__doc__ )
+    parser.add_argument( '-help', '-h', '--help', action='help', \
+                         help='Show this help message and exit' )
+    parser.add_argument( '-version', action='version', \
+                         version='%(prog)s {}'.format( __version__ ) )
+    parser.add_argument( '-verbose', action='store_true', \
+                         help='Provide a running commentry' )
+    parser.add_argument( '-directory', default='./build', \
+                         help='Generated source files are here.' )
+    parser.add_argument( '-database', metavar='filename', required=True, \
+                         help='Database file to use' )
+    parser.add_argument( 'sourceFiles', metavar='source-file', nargs='*', \
+                         help='Dependency details are put here' )
+    args = parser.parse_args()
+
+    if args.verbose:
+        logger = logging.PrintLogger( sys.stdout )
+    else:
+        logger = logging.NoLogger()
+
+    dependencyStore = database.SQLiteDatabase( args.database )
+    fortranDependencies = database.FortranDependencies( dependencyStore )
+
+    sourceFiles = set()
+    for key in args.sourceFiles:
+        filename = key[len('./'):] if key.startswith('./') else key
+        sourceFiles.add( filename )
+        logger.logEvent( 'Tidying source filename {} -> {}'.format( key, \
+                                                                    filename ) )
+
+    programUnits = fortranDependencies.getPrograms()
+
+    usedSources = set()
+    for unit, unitFilename, prerequisite, prerequisiteFilename \
+                                   in fortranDependencies.getCompileDependencies():
+        if unit in programUnits:
+            usedSources.add( unitFilename )
+            logger.logEvent( 'Found program {}'.format( unitFilename ) )
+
+        filename = prerequisiteFilename[len(args.directory)+1:] \
+                          if prerequisiteFilename.startswith(args.directory) \
+                          else prerequisiteFilename
+        usedSources.add( filename )
+        logger.logEvent( 'Found usage of files {} in {}' \
+                                .format( filename, unitFilename ) )
+
+    sourceFiles = sourceFiles - usedSources
+
+    if len( sourceFiles ) != 0:
+        print( 'Unused files: {}'.format( ', '.join( sourceFiles ) ) )
+        sys.exit( 1 )

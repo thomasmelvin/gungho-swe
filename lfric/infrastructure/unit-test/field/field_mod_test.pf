@@ -1,0 +1,396 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the field representation
+!>
+!-------------------------------------------------------------------------------
+module field_mod_test
+
+  use constants_mod,                  only : i_def, r_def, str_def, imdi
+  use halo_comms_mod,                 only : initialise_halo_comms, &
+                                             finalise_halo_comms
+  use halo_routing_collection_mod,    only : halo_routing_collection_type, &
+                                             halo_routing_collection
+  use halo_comms_mod,                 only : halo_routing_type
+  use function_space_collection_mod,  only : function_space_collection_type, &
+                                             function_space_collection
+  use local_mesh_mod,                 only : local_mesh_type
+  use mesh_collection_mod,            only : mesh_collection_type, &
+                                             mesh_collection
+  use mesh_mod,                       only : mesh_type, PLANE_BI_PERIODIC
+  use function_space_mod,             only : function_space_type
+  use fs_continuity_mod,              only : W2, W3
+  use mpi_mod,                        only : store_comm, clear_comm
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: test_field, test_field_proxy, test_cpl_functionality, test_empty_field
+
+  @TestCase
+  type, extends(MPITestCase), public :: field_test_type
+    private
+    type(function_space_type), pointer :: w2_fs => null()
+    type(function_space_type), pointer :: w3_fs => null()
+    type(local_mesh_type)              :: unit_test_local_mesh
+    type(mesh_type), pointer           :: mesh => null()
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure get_local_mesh_ptr
+    procedure test_field
+    procedure test_field_proxy
+    procedure test_empty_field
+    procedure test_cpl_functionality
+  end type field_test_type
+
+  integer(i_def), parameter :: element_order = 0
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(field_test_type), intent(inout) :: this
+
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    type(mesh_type) :: unit_test_mesh
+    integer(i_def)  :: mesh_id
+
+    !Store the MPI communicator for later use
+    call store_comm(this%getMpiCommunicator())
+
+    ! Initialise halo functionality
+    call initialise_halo_comms( this%getMpiCommunicator() )
+
+    ! Create top level mesh collection
+    mesh_collection = mesh_collection_type()
+    ! Create top level function space collection
+    function_space_collection = function_space_collection_type()
+    ! Create top level halo_routing collection
+    halo_routing_collection = halo_routing_collection_type()
+
+    call this%unit_test_local_mesh%initialise()
+    unit_test_local_mesh_ptr => this%get_local_mesh_ptr()
+
+    ! Dummy mesh mod has 9 cells, 3 layers and is uniform in vertical
+    unit_test_mesh = mesh_type( PLANE_BI_PERIODIC, unit_test_local_mesh_ptr )
+    mesh_id = mesh_collection%add_new_mesh( unit_test_mesh )
+    this%mesh => mesh_collection%get_mesh( mesh_id )
+
+    ! Make a function space to be used to create fields in the tests
+    this%w2_fs => function_space_collection%get_fs( this%mesh, &
+                                                    element_order, W2 )
+    this%w3_fs => function_space_collection%get_fs( this%mesh, &
+                                                    element_order, W3 )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(field_test_type), intent(inout) :: this
+
+    call function_space_collection%clear()
+    call mesh_collection%clear()
+    call halo_routing_collection%clear()
+
+    ! Finalise halo functionality
+    call finalise_halo_comms()
+    ! Clear the stored MPI communicator
+    call clear_comm()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  function get_local_mesh_ptr(this) result(unit_test_local_mesh_ptr)
+    implicit none
+    class(field_test_type), intent(inout), target :: this
+    type(local_mesh_type), pointer :: unit_test_local_mesh_ptr
+    unit_test_local_mesh_ptr => this%unit_test_local_mesh
+  end function get_local_mesh_ptr
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  @Test( npes=[1] )
+  subroutine test_field( this )
+
+    use field_mod,             only: field_type, field_proxy_type
+
+    implicit none
+
+    class(field_test_type), intent(inout) :: this
+
+    type(field_type)          :: f1
+    type(field_type)          :: f2
+    type(field_proxy_type)    :: f1_p
+    type(field_proxy_type)    :: f2_p
+
+    character(str_def) :: name
+
+    type(function_space_type), pointer :: fs => null()
+    type(mesh_type),           pointer :: mesh_out => null()
+    type(mesh_type),           pointer :: mesh => null()
+
+    integer(i_def) :: iface, iedge, lid, test_integer
+    integer(i_def) :: order
+
+    ! Make a field with a function space
+    call f1%initialise( vector_space = this%w2_fs, name='f1' )
+
+    ! Get  and check the the name of the field
+    name = f1%get_name()
+    @assertEqual( 'f1', trim(name) )
+
+    ! get the proxy
+    f1_p = f1%get_proxy()
+
+    ! Check the size of the data array is the same as undf from the fs
+    @assertEqual( size( f1_p%data ) , f1_p%vspace%get_undf() )
+    ! Check the the function space the field lives on is the one it was
+    ! created with
+    @assertEqual( f1%which_function_space(), W2 )
+
+    ! Check the get function space returns W2 by comparing undf
+    fs => f1%get_function_space()
+    @assertEqual( fs%get_undf(), this%w2_fs%get_undf() )
+
+    ! Check the order the field thinks it is
+    order=f1%get_element_order()
+    @assertEqual( element_order, order )
+
+    ! Check what the field thinks the mesh_id is
+    mesh => f1%get_mesh()
+    @assertTrue( associated(this%mesh, mesh) )
+
+    ! Copy field operator tests follow...
+    call f1%copy_field(f2)
+    f2_p = f2%get_proxy()
+
+    ! Check that contained vector_space pointers point to same address
+    @assertTrue(associated(f1_p%vspace, f2_p%vspace), "Assigned field_type vspace pointers differ.")
+
+    ! Test if the field returns the correct mesh
+    ! Use a subset of the tests from mesh_mod_test.pf
+    mesh_out => f1%get_mesh()
+
+    !-------------------------------------------------------------------
+    ! Test get_face_on_cell()
+    iface=3
+    lid=9
+    test_integer = mesh_out%get_face_on_cell(iface, lid)
+    @assertEqual ( 28, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_edge_on_cell()
+    iedge=1
+    lid=5
+    test_integer = mesh_out%get_edge_on_cell(iedge, lid)
+    @assertEqual ( 27, test_integer )
+
+    iedge=5
+    lid=5
+    test_integer = mesh_out%get_edge_on_cell(iedge, lid)
+    @assertEqual ( 11, test_integer )
+
+    iedge=9
+    lid=5
+    test_integer = mesh_out%get_edge_on_cell(iedge, lid)
+    @assertEqual ( 28, test_integer )
+
+    iedge=12
+    lid=5
+    test_integer = mesh_out%get_edge_on_cell(iedge, lid)
+    @assertEqual ( 36, test_integer )
+
+    iedge=6
+    lid=9
+    test_integer = mesh_out%get_edge_on_cell(iedge, lid)
+    @assertEqual ( 32, test_integer )
+
+    ! Test copy_field with an optional name
+    call f1%copy_field(f2, name='f2')
+    name = f2%get_name()
+    @assertEqual( 'f2', trim(name) )
+
+  end subroutine test_field
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_field_proxy( this )
+
+    use field_mod,             only: field_type, field_proxy_type
+
+    implicit none
+
+    class(field_test_type), intent(inout) :: this
+
+    type(field_type)       :: f1
+    type(field_type)       :: f2
+    type(field_type)       :: f3
+    type(field_proxy_type) :: f1_p
+    type(field_proxy_type) :: f2_p
+    type(field_proxy_type) :: f3_p
+    integer(i_def)         :: i
+    integer(i_def)         :: max_halo_depth
+    type(halo_routing_type), pointer :: halo_routing
+    integer(i_def)         :: order
+    real(r_def)            :: test_sum, test_min, test_max
+    logical                :: dirty
+    logical                :: multidata_order
+
+    ! Make a field with a function space
+    call f1%initialise( vector_space = this%w2_fs, name='f1' )
+
+    ! get the proxy
+    f1_p = f1%get_proxy()
+
+    !Initialise field data
+    do i=1,f1_p%vspace%get_undf()
+      f1_p%data(i)=real(i)
+    end do
+
+    ! Make a second field, identical to the first
+    call f2%initialise( vector_space = this%w2_fs )
+    f2_p = f2%get_proxy()
+    do i=1,f2_p%vspace%get_undf()
+      f2_p%data(i)=real(i)
+    end do
+
+    ! Perform a halo swap on the second field
+    call f2_p%halo_exchange_start(1)
+    ! If I had any calculations to overlap with comms - I'd put them here!
+    call f2_p%halo_exchange_finish(1)
+
+    ! For serial case, the halo swapped field should be the same as the original
+    @assertEqual( f1_p%data  , f2_p%data, 1.0e-2_r_def )
+
+    ! Test the global reductions
+    test_sum=f1_p%get_sum()
+    @assertEqual( 4095.0  , test_sum, 1.0e-2_r_def )
+
+    test_min=f1_p%get_min()
+    @assertEqual( 1.0  , test_min, 1.0e-2_r_def )
+
+    test_max=f1_p%get_max()
+    @assertEqual( 90.0  , test_max, 1.0e-2_r_def)
+
+    max_halo_depth=f1_p%max_halo_depth()
+    @assertEqual ( 3, max_halo_depth )
+
+    halo_routing=>f1_p%get_halo_routing()
+    order = halo_routing%get_element_order()
+    @assertEqual( element_order, order )
+
+    dirty=f1_p%is_dirty(0)
+    @assertFalse ( dirty )
+
+    call f1_p%set_dirty()
+    dirty=f1_p%is_dirty(0)
+    @assertFalse ( dirty )
+
+    call f1_p%set_dirty()
+    dirty=f1_p%is_dirty(1)
+    @assertTrue ( dirty )
+
+    call f1_p%set_clean(1)
+    dirty=f1_p%is_dirty(1)
+    @assertFalse ( dirty )
+
+    ! check that a default field is ordered layer-first
+    ! i.e. ndata_first is false
+    multidata_order=f1_p%is_ndata_first()
+    @assertFalse ( multidata_order )
+
+    ! Make a field with different multi-data ordering
+    call f3%initialise( vector_space = this%w2_fs, &
+                        name='f3', &
+                        ndata_first=.true.)
+
+    ! get the proxy
+    f3_p = f3%get_proxy()
+
+    ! check that the multi-data field is ordered multi-data-first
+    multidata_order=f3_p%is_ndata_first()
+    @assertTrue ( multidata_order )
+
+  end subroutine test_field_proxy
+
+  @Test( npes=[1] )
+  subroutine test_empty_field( this )
+
+    use field_mod,             only: field_type, field_proxy_type
+
+    implicit none
+
+    class(field_test_type), intent(inout) :: this
+
+    type(field_type)       :: f1
+    type(field_proxy_type) :: f1_p
+    integer(i_def)         :: i
+
+    real(r_def), target :: empty_data(1)
+
+    ! Make a field, but provide override data
+    call f1%initialise( vector_space = this%w2_fs, name = 'f1', override_data = empty_data )
+
+    ! get the proxy
+    f1_p = f1%get_proxy()
+
+    ! Check that the proxy returns the empty_data array
+    @assertTrue( associated( f1_p%data, empty_data ) )
+
+    ! Re-initialise as a normal field
+    call f1%initialise( vector_space = this%w2_fs, name = 'f1' )
+
+    ! get the proxy
+    f1_p = f1%get_proxy()
+
+    ! Check that the proxy does not return the empty_data array
+    @assertFalse( associated( f1_p%data, empty_data ) )
+
+    ! Re-initialise again with the override data
+    call f1%initialise( vector_space = this%w2_fs, name = 'f1', override_data = empty_data )
+
+    ! get the proxy
+    f1_p = f1%get_proxy()
+
+    ! Check that the proxy returns the empty_data array once again
+    @assertTrue( associated( f1_p%data, empty_data ) )
+
+  end subroutine test_empty_field
+
+  @Test( npes=[1] )
+  subroutine test_cpl_functionality( this )
+
+    use field_mod,             only: field_type, field_proxy_type
+
+    implicit none
+
+    class(field_test_type), intent(inout) :: this
+
+    type(field_type)          :: f1
+    integer(i_def)            :: id_cpl
+
+    ! Make a field with a function space
+    call f1%initialise( vector_space = this%w3_fs, name='f1' )
+
+    !set coupling id (12) for f1
+    call f1%set_cpl_id(12_i_def, 1_i_def)
+
+    !get coupling id for f1
+    id_cpl = f1%get_cpl_id( 1_i_def )
+    @assertEqual (id_cpl, 12_i_def)
+
+ end subroutine test_cpl_functionality
+
+end module field_mod_test

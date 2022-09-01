@@ -1,0 +1,229 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief Updates density in one direction using the advective form of transport equation.
+!> @details Updates the density in either the x or y direction depending on the
+!!          direction variable.
+!!          "ffsl_1d_advective_first_update_alg": is only suitable for the first
+!!          advective step, as it does not take into account the cubed sphere
+!!          panel direction needed for subsequent advective steps.
+!!          "ffsl_1d_advective_update_alg": is suitable for subsequent advective
+!!          steps as it takes both directional first steps as inputs, and correctly
+!!          handles the direction at the cubed sphere panel edges.
+
+module ffsl_1d_advective_update_alg_mod
+
+  use constants_mod,                     only: r_def, i_def
+  use field_mod,                         only: field_type
+  use fs_continuity_mod,                 only: W3
+  use function_space_mod,                only: function_space_type
+  use subgrid_config_mod,                only: dep_pt_stencil_extent,          &
+                                               rho_approximation_stencil_extent
+  use fem_constants_mod,                 only: get_mass_matrix
+  use flux_direction_mod,                only: x_direction, y_direction
+
+  use psykal_lite_mod,                   only: invoke_subgrid_coeffs,      &
+                                               invoke_fv_mass_fluxes
+  use ffsl_1d_cons_update_alg_mod,       only: ffsl_1d_cons_update_alg
+  use ffsl_1d_flux_alg_mod,              only: ffsl_1d_flux_diff_horz
+  use operator_mod,                      only: operator_type
+  use dg_matrix_vector_kernel_mod,       only: dg_matrix_vector_kernel_type
+
+  implicit none
+
+  private
+
+  public :: ffsl_1d_advective_update_alg
+  public :: ffsl_1d_advective_first_update_alg
+
+contains
+
+  !=============================================================================
+  !> @brief FFSL update of density in one direction using advective transport equation.
+  !> @details Updates the density in either the x or y direction depending on the
+  !!          direction variable. An advective update is performed but using the
+  !!          conservative flux operator, a multiplicative correction is made to
+  !!          ensure the advective update is performed. This can be used for
+  !!          any step of the FFSL scheme - it inputs both rho_x and rho_y and
+  !!          correcly deals with the direction at cubed sphere panel edges.
+  !> @param[in]    direction        Direction in which to perform the 1D advective update
+  !> @param[in]    dep_pts_x        Departure points in x for W2 points at lowest order
+  !> @param[in]    dep_pts_y        Departure points in y for W2 points at lowest order
+  !> @param[in]    cell_orientation Orientation of cells, in particular halo cells
+  !> @param[in]    rho_x            Input density advected in x during previous step
+  !> @param[in]    rho_y            Input density advected in y during previous step
+  !> @param[inout] rho_out          Density after advective update
+  !> @param[in]    detj_at_w2       Detj values at W2 dof locations
+  !> @param[in]    dt               The model timestep length
+  subroutine ffsl_1d_advective_update_alg( direction,        &
+                                           dep_pts_x,        &
+                                           dep_pts_y,        &
+                                           cell_orientation, &
+                                           rho_x,            &
+                                           rho_y,            &
+                                           rho_out,          &
+                                           detj_at_w2,       &
+                                           dt )
+
+    implicit none
+
+    integer(i_def),      intent(in)     :: direction
+    type(field_type),    intent(in)     :: dep_pts_x
+    type(field_type),    intent(in)     :: dep_pts_y
+    type(field_type),    intent(in)     :: cell_orientation
+    type(field_type),    intent(in)     :: rho_x
+    type(field_type),    intent(in)     :: rho_y
+    type(field_type),    intent(inout)  :: rho_out
+    type(field_type),    intent(in)     :: detj_at_w2
+    real(r_def),         intent(in)     :: dt
+
+    ! Internal variables for the advective step
+    type( field_type ) :: rho_hat_adv, rho_adv_np1
+    type( field_type ) :: rho_constant_1, rho_hat_const, rho_constant_np1
+
+    ! Function space
+    type(function_space_type), pointer :: rho_fs => null()
+
+    rho_fs => rho_x%get_function_space()
+
+    call rho_hat_adv%initialise( vector_space = rho_fs )
+    call rho_hat_const%initialise( vector_space = rho_fs )
+    call rho_adv_np1%initialise( vector_space = rho_fs )
+    call rho_constant_np1%initialise( vector_space = rho_fs )
+    call rho_constant_1%initialise( vector_space = rho_fs )
+
+    call invoke( setval_c(rho_hat_adv, 0.0_r_def),      &
+                 setval_c(rho_hat_const, 0.0_r_def),    &
+                 setval_c(rho_constant_np1, 0.0_r_def), &
+                 setval_c(rho_constant_1, 1.0_r_def) )
+
+    ! Flux step with rho_x and rho_y - both are needed to get the correct
+    ! direction at cubed sphere panel edges
+    call ffsl_1d_flux_diff_horz( direction, rho_x, rho_y, cell_orientation, &
+                                 dep_pts_x, dep_pts_y, detj_at_w2, dt, rho_hat_adv )
+
+    if ( direction==x_direction ) then
+
+      call invoke( X_minus_bY(rho_adv_np1, rho_y, dt, rho_hat_adv) )
+
+    elseif ( direction==y_direction ) then
+
+      call invoke( X_minus_bY(rho_adv_np1, rho_x, dt, rho_hat_adv) )
+
+    end if
+
+    ! Flux step with constant
+    call ffsl_1d_flux_diff_horz( direction, rho_constant_1, rho_constant_1, &
+                                 cell_orientation, dep_pts_x, dep_pts_y,    &
+                                 detj_at_w2, dt, rho_hat_const )
+
+    call invoke( X_minus_bY(rho_constant_np1, rho_constant_1, dt, rho_hat_const), &
+    ! Perform multiplicative correction to obtain the advective update of density
+                 X_divideby_Y(rho_out, rho_adv_np1, rho_constant_np1) )
+
+    nullify(rho_fs)
+
+  end subroutine ffsl_1d_advective_update_alg
+
+
+  !=============================================================================
+  !> @brief FFSL first step update of density in one direction using advective transport equation.
+  !> @details Updates the density in either the x or y direction depending on the
+  !!          direction variable. An advective update is performed but using the
+  !!          conservative flux operator, a multiplicative correction is made to
+  !!          ensure the advective update is performed. This is for the first step
+  !!          of the FFSL scheme - it assumes that rho_in has not been previously
+  !!          advected in any direction.
+  !> @param[in]     direction        Direction in which to perform the 1D advective update
+  !> @param[in]     dep_pts          Departure points for W2 points at lowest order
+  !> @param[in]     cell_orientation Orientation of cells, in particular halo cells
+  !> @param[in]     rho_in           Density at time n
+  !> @param[in,out] rho_out          Density after advective update
+  !> @param[in]     dt               The model timestep length
+  subroutine ffsl_1d_advective_first_update_alg( direction,            &
+                                                 dep_pts,              &
+                                                 cell_orientation,     &
+                                                 rho_in,               &
+                                                 rho_out,              &
+                                                 dt)
+
+    implicit none
+
+    integer(i_def),   intent(in)    :: direction
+    type(field_type), intent(in)    :: dep_pts
+    type(field_type), intent(in)    :: cell_orientation
+    type(field_type), intent(in)    :: rho_in
+    type(field_type), intent(inout) :: rho_out
+    real(r_def),      intent(in)    :: dt
+
+    type(field_type) :: a0, a1, a2
+    type(field_type) :: rho_adv, rho_hat_adv
+    type(field_type) :: rho_constant_1, rho_adv_np1, rho_constant_np1
+    type(field_type) :: mass_flux
+    type(field_type) :: mass
+
+    type(function_space_type), pointer :: rho_fs => null()
+    type(function_space_type), pointer :: u_fs   => null()
+
+    type(operator_type), pointer :: mm_w3 => null()
+
+    rho_fs => rho_in%get_function_space()
+    u_fs   => dep_pts%get_function_space()
+
+    call a0%initialise( vector_space = rho_fs )
+    call a1%initialise( vector_space = rho_fs )
+    call a2%initialise( vector_space = rho_fs )
+
+    call rho_adv%initialise( vector_space = rho_fs )
+    call rho_hat_adv%initialise( vector_space = rho_fs )
+    call rho_adv_np1%initialise( vector_space = rho_fs )
+    call rho_constant_np1%initialise( vector_space = rho_fs )
+    call rho_constant_1%initialise( vector_space = rho_fs )
+    call mass_flux%initialise( vector_space = u_fs )
+    call mass%initialise( vector_space = rho_fs )
+
+    ! Calculate the conservative fluxes and update rho
+    call invoke( setval_c(mass_flux, 0.0_r_def), &
+                 setval_c(a0,        0.0_r_def), &
+                 setval_c(a1,        0.0_r_def), &
+                 setval_c(a2,        0.0_r_def) )
+
+    mm_w3 => get_mass_matrix(W3, rho_in%get_mesh_id())
+    call invoke( dg_matrix_vector_kernel_type(mass, rho_in, mm_w3) )
+    call invoke_subgrid_coeffs(a0, a1, a2, mass, cell_orientation, direction, &
+                               rho_approximation_stencil_extent, dep_pt_stencil_extent)
+    call invoke_fv_mass_fluxes(mass, dep_pts, mass_flux, &
+                               a0, a1, a2, direction, dep_pt_stencil_extent, &
+                               dt )
+
+    call ffsl_1d_cons_update_alg(rho_in, mass_flux, rho_adv_np1, &
+                                 cell_orientation, direction, dt)
+
+    ! Calculate the fluxes for rho=1
+    call invoke( setval_c(mass_flux,      0.0_r_def), &
+                 setval_c(rho_constant_1, 1.0_r_def), &
+                 setval_c(a0,             0.0_r_def), &
+                 setval_c(a1,             0.0_r_def), &
+                 setval_c(a2,             0.0_r_def), &
+                 dg_matrix_vector_kernel_type(mass, rho_constant_1, mm_w3) )
+
+    call invoke_subgrid_coeffs(a0, a1, a2, mass, cell_orientation, direction, &
+                               rho_approximation_stencil_extent, dep_pt_stencil_extent)
+
+    call invoke_fv_mass_fluxes(mass, dep_pts, mass_flux, &
+                               a0, a1, a2, direction, dep_pt_stencil_extent, &
+                               dt )
+
+    call ffsl_1d_cons_update_alg(rho_constant_1, mass_flux, rho_constant_np1, &
+                                 cell_orientation, direction, dt)
+
+    ! Perform multiplicative correction to obtain the advective update of density
+    call invoke( X_divideby_Y(rho_out, rho_adv_np1, rho_constant_np1) )
+
+    nullify(mm_w3, rho_fs, u_fs)
+
+  end subroutine ffsl_1d_advective_first_update_alg
+
+end module ffsl_1d_advective_update_alg_mod

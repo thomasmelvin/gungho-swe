@@ -1,0 +1,259 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> @brief Routines for managing split vertical/horizontal transport schemes.
+
+module split_transport_mod
+
+  use constants_mod,                    only: i_def, r_def
+  use ffsl_control_alg_mod,             only: ffsl_conservative_control, &
+                                              ffsl_advective_control
+  use field_mod,                        only: field_type
+  use log_mod,                          only: log_event, LOG_LEVEL_ERROR
+  use transport_metadata_mod,           only: transport_metadata_type
+  use transport_enumerated_types_mod,   only: splitting_strang_vhv,  &
+                                              splitting_strang_hvh,  &
+                                              splitting_hv,          &
+                                              splitting_vh,          &
+                                              direction_h,           &
+                                              direction_v,           &
+                                              split_method_null,     &
+                                              split_method_mol,      &
+                                              split_method_ffsl,     &
+                                              split_method_sl,       &
+                                              equation_conservative, &
+                                              equation_advective,    &
+                                              equation_consistent
+  use mol_conservative_alg_mod,         only: mol_conservative_alg
+  use mol_advective_alg_mod,            only: mol_advective_alg
+  use mol_consistent_alg_mod,           only: mol_consistent_alg
+
+  implicit none
+
+  private
+
+  public :: split_transport_control
+  public :: split_transport_field
+
+contains
+
+  !=============================================================================
+  !> @brief Controls vertical/horizontal split transport.
+  !> @details Manages the vertical/horizontal splitting of the split transport
+  !!          scheme by choosing the splitting type and calling the individual
+  !!          vertical and horizontal split components.
+  !> @param[in,out] field_np1          Field to return at end of transport step
+  !> @param[in]     field_n            Field at the start of the transport step
+  !> @param[in]     model_dt           Time difference across time step
+  !> @param[in]     transport_metadata Contains the configuration options for
+  !!                                   transporting these fields
+  subroutine split_transport_control(field_np1, field_n, model_dt, &
+                                     transport_metadata)
+
+    implicit none
+
+    ! Arguments
+    type(field_type),              intent(inout) :: field_np1
+    type(field_type),              intent(in)    :: field_n
+    real(kind=r_def),              intent(in)    :: model_dt
+    type(transport_metadata_type), intent(in)    :: transport_metadata
+
+    ! Internal variables
+    type(field_type) :: field_temp_1, field_temp_2
+    real(kind=r_def) :: vert_dt, hori_dt
+
+    ! Initialise fields
+    call field_temp_1%initialise( vector_space = field_n%get_function_space() )
+    call field_temp_2%initialise( vector_space = field_n%get_function_space() )
+
+    ! Choose splitting type and call appropriate horizontal/vertical step
+    select case ( transport_metadata%get_splitting() )
+
+    ! -------------------------------------------------------------------------!
+    ! Strang splitting
+    ! -------------------------------------------------------------------------!
+    case ( splitting_strang_vhv )
+
+      vert_dt = model_dt / 2.0_r_def
+      hori_dt = model_dt
+
+      call split_transport_field(field_temp_1, field_n, direction_v,      &
+                                 vert_dt, transport_metadata)
+      call split_transport_field(field_temp_2, field_temp_1, direction_h, &
+                                 hori_dt, transport_metadata)
+      call split_transport_field(field_np1, field_temp_2, direction_v,    &
+                                 vert_dt, transport_metadata)
+
+    case ( splitting_strang_hvh )
+
+      vert_dt = model_dt
+      hori_dt = model_dt / 2.0_r_def
+
+      call split_transport_field(field_temp_1, field_n, direction_h,      &
+                                 hori_dt, transport_metadata)
+      call split_transport_field(field_temp_2, field_temp_1, direction_v, &
+                                 vert_dt, transport_metadata)
+      call split_transport_field(field_np1, field_temp_2, direction_h,    &
+                                 hori_dt, transport_metadata)
+
+    ! -------------------------------------------------------------------------!
+    ! Vertical then horizontal splitting
+    ! -------------------------------------------------------------------------!
+    case ( splitting_vh )
+
+      vert_dt = model_dt
+      hori_dt = model_dt
+
+      call split_transport_field(field_temp_1, field_n, direction_v, &
+                                 vert_dt, transport_metadata)
+      call split_transport_field(field_np1, field_temp_1, direction_h, &
+                                 hori_dt, transport_metadata)
+
+    ! -------------------------------------------------------------------------!
+    ! Horizontal then vertical splitting
+    ! -------------------------------------------------------------------------!
+    case ( splitting_hv )
+
+      vert_dt = model_dt
+      hori_dt = model_dt
+
+      call split_transport_field(field_temp_1, field_n, direction_h, &
+                                 hori_dt, transport_metadata)
+      call split_transport_field(field_np1, field_temp_1, direction_v, &
+                                 vert_dt, transport_metadata)
+
+    case default
+      call log_event('Transport splitting not recognised', LOG_LEVEL_ERROR)
+
+    end select
+
+  end subroutine split_transport_control
+
+  !=============================================================================
+  !> @brief Does either vertical or horizontal transport of a field.
+  !> @details Performs a vertical or horizontal transport step, solving the
+  !!          transport equation for a (multidata) field.
+  !> @param[in,out] field_np1          Field to return at end of transport step
+  !> @param[in]     field_n            Field at the start of the transport step
+  !> @param[in]     direction          Indicates whether this transport step is
+  !!                                   in vertical or horizontal direction
+  !> @param[in]     step_dt            The dt for this time step
+  !> @param[in]     transport_metadata Contains the configuration options for
+  subroutine split_transport_field(field_np1, field_n, direction, &
+                                   step_dt, transport_metadata)
+
+    use vertical_sl_advective_alg_mod,    only: vertical_sl_advective_alg
+    use vertical_sl_conservative_alg_mod, only: vertical_sl_conservative_alg
+
+    implicit none
+
+    ! Arguments
+    type(field_type),              intent(inout) :: field_np1
+    type(field_type),              intent(in)    :: field_n
+    real(kind=r_def),              intent(in)    :: step_dt
+    integer(kind=i_def),           intent(in)    :: direction
+    type(transport_metadata_type), intent(in)    :: transport_metadata
+
+    ! Internal variables
+    integer(kind=i_def) :: method
+
+    ! -------------------------------------------------------------------------!
+    ! Set up method based on direction
+    ! -------------------------------------------------------------------------!
+    select case ( direction )
+    case ( direction_h )
+      method = transport_metadata%get_horizontal_method()
+    case ( direction_v )
+      method = transport_metadata%get_vertical_method()
+    case default
+      call log_event('Split transport direction not recognised', LOG_LEVEL_ERROR)
+    end select
+    ! -------------------------------------------------------------------------!
+
+    ! -------------------------------------------------------------------------!
+    ! Choose method, and then choose equation
+    ! -------------------------------------------------------------------------!
+    select case ( method )
+
+    ! -------------------------------------------------------------------------!
+    ! Null step
+    ! -------------------------------------------------------------------------!
+    case ( split_method_null )
+      call invoke( setval_X( field_np1, field_n ) )
+
+    ! -------------------------------------------------------------------------!
+    ! Method of Lines step
+    ! -------------------------------------------------------------------------!
+    case ( split_method_mol )
+      ! Choose form of transport equation
+      select case ( transport_metadata%get_equation() )
+      case ( equation_conservative )
+         call mol_conservative_alg(field_np1, field_n, direction, &
+                                   transport_metadata)
+
+      case ( equation_advective )
+         call mol_advective_alg(field_np1, field_n, direction, &
+                                transport_metadata)
+
+      case ( equation_consistent )
+         call mol_consistent_alg(field_np1, field_n, direction, &
+                                 transport_metadata)
+
+      case default
+        call log_event('Trying to solve unrecognised form of transport equation', &
+                        LOG_LEVEL_ERROR)
+
+      end select
+
+    ! -------------------------------------------------------------------------!
+    ! Flux-Form Semi-Lagrangian step
+    ! -------------------------------------------------------------------------!
+    case ( split_method_ffsl )
+      ! Choose form of transport equation
+      select case ( transport_metadata%get_equation() )
+      case ( equation_conservative )
+        call ffsl_conservative_control(field_np1, field_n, direction, &
+                                       step_dt, transport_metadata)
+
+      case ( equation_advective )
+        call ffsl_advective_control(field_np1, field_n, direction, &
+                                    step_dt, transport_metadata)
+
+      case default
+        call log_event('Trying to solve unrecognised form of transport equation', &
+                        LOG_LEVEL_ERROR)
+
+        end select
+
+    ! -------------------------------------------------------------------------!
+    ! Semi-Lagrangian step
+    ! -------------------------------------------------------------------------!
+    case ( split_method_sl )
+      ! Check that our direction is vertical
+      if ( direction /= direction_v ) then
+        call log_event('Semi-Lagrangian is only possible in the vertical', LOG_LEVEL_ERROR)
+      end if
+
+      ! Choose form of transport equation
+      select case ( transport_metadata%get_equation() )
+      case ( equation_conservative )
+        call vertical_sl_conservative_alg( field_np1, field_n, step_dt, transport_metadata )
+      case ( equation_advective )
+        call vertical_sl_advective_alg( field_np1, field_n, step_dt, transport_metadata )
+      case default
+        call log_event('Trying to solve unrecognised form of transport equation', &
+                        LOG_LEVEL_ERROR)
+
+        end select
+
+    case default
+      call log_event('Trying to transport with unrecognised scheme', &
+                      LOG_LEVEL_ERROR)
+
+    end select
+
+  end subroutine split_transport_field
+
+end module split_transport_mod

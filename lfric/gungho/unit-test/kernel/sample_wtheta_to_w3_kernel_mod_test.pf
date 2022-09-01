@@ -1,0 +1,165 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2020 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+!> Test the sample_wtheta_to_w3_kernel
+module sample_wtheta_to_w3_kernel_mod_test
+
+  use constants_mod,                       only : i_def, r_def
+  use get_unit_test_m3x3_q3x3x3_sizes_mod, only : get_w3_m3x3_q3x3x3_size, &
+                                                  get_wtheta_m3x3_q3x3x3_size
+  use get_unit_test_m3x3_dofmap_mod,       only : get_w3_m3x3_dofmap, &
+                                                  get_wtheta_m3x3_dofmap
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: sample_wtheta_to_w3_test_type, test_all
+
+  @TestCase
+  type, extends(TestCase) :: sample_wtheta_to_w3_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type sample_wtheta_to_w3_test_type
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    use base_mesh_config_mod,      only : geometry_planar, &
+                                          topology_fully_periodic
+    use feign_config_mod,          only : feign_base_mesh_config
+
+    implicit none
+
+    class(sample_wtheta_to_w3_test_type), intent(inout) :: this
+
+    call feign_base_mesh_config( filename='foo',                   &
+                                 prime_mesh_name='unit_test',      &
+                                 geometry=geometry_planar,         &
+                                 offline_partitioning=.false.,     &
+                                 topology=topology_fully_periodic, &
+                                 fplane=.false., f_lat_deg=0.0_r_def )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod,        only: final_configuration
+
+    implicit none
+
+    class(sample_wtheta_to_w3_test_type), intent(inout) :: this
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use sample_wtheta_to_w3_kernel_mod, only : sample_wtheta_to_w3_code
+
+   implicit none
+
+    class(sample_wtheta_to_w3_test_type), intent(inout) :: this
+
+    real(kind=r_def),      parameter :: tol = 1.0e-12_r_def
+    real(kind=r_def),      parameter :: dx = 5.0_r_def
+    real(kind=r_def),      parameter :: dy = 3.0_r_def
+    real(kind=r_def),      parameter :: dz = 7.0_r_def
+    real(kind=r_def),      parameter :: dV = dx * dy * dz
+    real(kind=r_def),      parameter :: theta0 = 300_r_def
+    real(kind=r_def),      parameter :: dtheta_dz = - 0.5_r_def
+
+    ! Fields
+    real(kind=r_def),    allocatable :: field_wt(:)
+    real(kind=r_def),    allocatable :: field_w3(:)
+    real(kind=r_def),    allocatable :: height_wt(:)
+    real(kind=r_def),    allocatable :: height_w3(:)
+    real(kind=r_def),    allocatable :: answer(:)
+
+    integer(kind=i_def)              :: k, cell
+    integer(kind=i_def)              :: nlayers, ncells
+    integer(kind=i_def)              :: nqp_h, nqp_v
+    integer(kind=i_def)              :: ndf_wt, ndf_w3
+    integer(kind=i_def)              :: dim_space, dim_space_diff
+    integer(kind=i_def)              :: undf_wt, undf_w3
+
+    ! Dofmaps
+    integer(kind=i_def), allocatable :: map_wt(:,:)
+    integer(kind=i_def), allocatable :: map_w3(:,:)
+
+    nlayers = 3
+    call get_w3_m3x3_q3x3x3_size( ndf_w3, undf_w3, ncells,      &
+                                  dim_space, dim_space_diff,    &
+                                  nqp_h, nqp_v, nlayers         )
+    call get_wtheta_m3x3_q3x3x3_size( ndf_wt, undf_wt, ncells,   &
+                                      dim_space, dim_space_diff, &
+                                      nqp_h, nqp_v, nlayers      )
+
+
+    call get_w3_m3x3_dofmap(map_w3, nlayers)
+    call get_wtheta_m3x3_dofmap(map_wt, nlayers)
+
+    ! Create the data
+    allocate( height_w3( undf_w3 ) )
+    allocate( height_wt( undf_wt ) )
+    allocate( field_w3( undf_w3 ) )
+    allocate( field_wt( undf_wt ) )
+    allocate( answer( undf_w3 ) )
+
+    do cell = 1, ncells
+      ! Fill height values
+      do k = 0, nlayers
+        ! Use a quadratic extrusion
+        height_wt(map_wt(1, cell) + k) = real(k, r_def)**2
+        if ( k /= nlayers ) then
+          height_w3(map_w3(1, cell) + k) = 0.5_r_def * (real(k, r_def)**2 + &
+                                                        real(k+1, r_def)**2)
+        end if
+      end do
+    end do
+
+    ! Choose field to vary linearly with height
+    ! The kernel should recover this exactly
+    field_wt = theta0 + dtheta_dz * height_wt
+    answer = theta0 + dtheta_dz * height_w3
+
+    ! Set initial field incorrectly
+    field_w3(:) = 0.0_r_def
+
+    cell = 4
+    call sample_wtheta_to_w3_code( nlayers,        &
+                                   field_w3,       &
+                                   field_wt,       &
+                                   ndf_w3,         &
+                                   undf_w3,        &
+                                   map_w3(:,cell), &
+                                   ndf_wt,         &
+                                   undf_wt,        &
+                                   map_wt(:,cell)  )
+
+
+    do k = 0, nlayers - 1
+        @assertEqual(answer(map_w3(1, cell)+k), field_w3(map_w3(1, cell)+k), tol)
+    end do
+
+
+    deallocate( answer )
+    deallocate( field_w3 )
+    deallocate( field_wt )
+    deallocate( height_w3 )
+    deallocate( height_wt )
+    deallocate( map_wt )
+    deallocate( map_w3 )
+
+  end subroutine test_all
+
+end module sample_wtheta_to_w3_kernel_mod_test

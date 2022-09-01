@@ -1,0 +1,10 @@
+#!/bin/sh
+###############################################################################
+# (c) Crown copyright 2022 Met Office. All rights reserved.
+# The file LICENCE, distributed with this code, contains details of the terms
+# under which the code may be used.
+###############################################################################
+# Execute a script passed as an argument.
+###############################################################################
+set -e -u -v -x # Stop on error # Trap undefined variables # Verbose
+eval "$*"

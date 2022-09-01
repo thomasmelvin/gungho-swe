@@ -1,0 +1,9 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+abstract class linear_operator_mod::abstract_linear_operator_type{
+    {abstract}+apply(<<in>>self:abstract_linear_operator_type, <<inout>>x:abstract_vector_type, <<inout>>y:abstact_vector_type) 
+}
+
+linear_operator_mod::abstract_linear_operator_type o-- vector_mod::abstract_vector_type

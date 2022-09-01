@@ -1,0 +1,148 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> Test the dino module
+!>
+module dino_mod_test
+
+  use pFUnit_Mod
+
+  use dino_mod,     only : dino_type
+  use constants_mod, only      : i_def, r_def
+
+  implicit none
+
+  private
+
+  public :: test_dino
+
+
+  @TestCase
+  type, extends(TestCase), public :: dino_test_type
+    private
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_dino
+ end type dino_test_type
+
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(dino_test_type), intent(inout) :: this
+    integer(kind=i_def) :: stat
+
+    ! delete the dinodump file if it exists before starting the test
+    open(unit=1234, iostat=stat, file='dinodump.dat', status='old')
+    if (stat == 0) close(1234, status='delete')
+
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(dino_test_type), intent(inout) :: this
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  !> test the default behaviour of the serial io lib.
+  @test
+  subroutine test_dino(this)
+
+    implicit none
+
+    class(dino_test_type), intent(inout) :: this
+    type(dino_type) :: dino_out, dino_in
+    integer(kind=i_def) :: d1_in, d1_out
+    real(kind=r_def) :: rin, rout
+    integer(kind=i_def) :: i,j,k,ctr
+    real(kind=r_def),allocatable, dimension(:) :: ar1_in, ar1_out
+    real(kind=r_def),allocatable, dimension(:,:,:) :: ar3_in, ar3_out
+    integer(kind=i_def), allocatable, dimension(:) :: ai1_in, ai1_out
+    integer(kind=i_def), allocatable, dimension(:,:) :: ai2_in, ai2_out
+    real(kind=r_def) :: epsilon
+
+    ! fuzzy tests for floating point numbers
+    epsilon = 1.0e-14_r_def
+
+    ! output first.
+
+    ! make the writer
+    dino_out = dino_type()
+    d1_out = 3
+    ! make 1d array for output for integers and reals
+    allocate(ar1_out(d1_out),ai1_out(d1_out))
+    ! fill them with data
+    do i = 1, d1_out
+       ar1_out(i) = real(i,kind=r_def)
+       ai1_out(i) = i
+    end do
+
+    ! allocate the ouput arrays, 2d for integers 3d for reals
+    allocate(ai2_out(ai1_out(2),ai1_out(3)))
+    allocate(ar3_out(ai1_out(1),ai1_out(2),ai1_out(3)))
+    ! fill them with data
+    ctr = 1
+    do k = 1, ai1_out(3)
+       do j = 1, ai1_out(2)
+          do i = 1, ai1_out(1)
+             ar3_out(i,j,k) = real(ctr,kind=r_def)
+             ai2_out(j,k) = ctr
+             ctr = ctr + 1
+          end do
+       end do
+    end do
+
+    ! Do the o Write out the data ...
+    call dino_out%output_scalar(d1_out)
+    call dino_out%output_array(ai1_out,d1_out)
+    call dino_out%output_array(ai2_out,ai1_out(2),ai1_out(3))
+    call dino_out%output_array(ar1_out,d1_out)
+    call dino_out%output_array(ar3_out,ai1_out(1),ai1_out(2),ai1_out(3))
+    ! close the file
+   call dino_out%io_close()
+
+    ! now do the i in the same order as the o
+    !open the reader
+    dino_in = dino_type()
+    ! read a scalar integer
+    call dino_in%input_scalar(d1_in)
+    ! allocate the 1d input arrays to be the size of the scalar just read in
+    allocate(ar1_in(d1_in),ai1_in(d1_in))
+    ! read the 1d integer array
+    call dino_in%input_array(ai1_in,d1_in)
+    ! allocate the input arrays for integer (2d) and real (3d)
+    allocate(ai2_in(ai1_in(2),ai1_in(3)))
+    allocate(ar3_in(ai1_in(1),ai1_in(2),ai1_in(3)))
+    ! read the arrays
+    call dino_in%input_array(ai2_in,ai1_in(2),ai1_in(3))
+    call dino_in%input_array(ar1_in,d1_in)
+    call dino_in%input_array(ar3_in,ai1_in(1),ai1_in(2),ai1_in(3))
+    ! close the file
+    call dino_in%io_close()
+
+    ! I have counted them out and counted them in ...
+    @assertEqual(d1_out,d1_in)
+    @assertEqual(ai1_out,ai1_in)
+    @assertEqual(ai2_out,ai2_in)
+    @assertEqual(ar1_out,ar1_in,epsilon)
+    @assertEqual(ar3_out,ar3_in,epsilon)
+
+    ! clean up.
+    deallocate(ai1_out,ar1_out,ai2_out,ar3_out)
+    deallocate(ai1_in,ar1_in,ai2_in,ar3_in)
+  end subroutine test_dino
+
+end module dino_mod_test

@@ -1,0 +1,371 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> @brief pFunit tests for the mesh map module
+!>
+module mesh_map_mod_test
+
+  use constants_mod,              only: r_def, i_def, IMDI, &
+                                        str_max_filename, str_def
+  use extrusion_mod,              only: uniform_extrusion_type, PRIME_EXTRUSION
+  use global_mesh_mod,            only: global_mesh_type
+  use halo_comms_mod,             only: initialise_halo_comms, &
+                                        finalise_halo_comms
+  use local_mesh_mod,             only: local_mesh_type
+  use mesh_map_mod,               only: mesh_map_type
+  use mesh_mod,                   only: mesh_type
+  use mpi_mod,                    only: store_comm, clear_comm
+  use partition_mod,              only: partition_type, partitioner_interface, &
+                                        partitioner_cubedsphere_serial
+  use ugrid_mesh_data_mod,        only: ugrid_mesh_data_type
+
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: mesh_map_test_type,      &
+            test_coarse_to_fine_map, &
+            test_fine_to_coarse_map
+
+  @testCase
+  type, extends( MPITestCase ) :: mesh_map_test_type
+    private
+    type(mesh_type) :: coarse_mesh
+    type(mesh_type) :: fine_mesh
+  contains
+    procedure :: setUp
+    procedure :: tearDown
+    procedure :: test_coarse_to_fine_map
+    procedure :: test_fine_to_coarse_map
+  end type mesh_map_test_type
+
+  character(str_max_filename), &
+                  parameter :: filename    = 'data/mesh_C32_MG.nc'
+  integer(i_def), parameter :: local_rank  = 0_i_def
+  integer(i_def), parameter :: total_ranks = 1_i_def
+  integer(i_def), parameter :: max_stencil_depth = 0_i_def
+  integer(i_def), parameter :: xproc       = 1_i_def
+  integer(i_def), parameter :: yproc       = 1_i_def
+  integer(i_def), parameter :: nlayers     = 5_i_def
+  real(r_def),    parameter :: domain_top  = 10000.0_r_def
+  real(r_def),    parameter :: radius      = 6371229.0_r_def
+
+  integer(i_def), parameter :: CoarseToFineMap(2,2,96) = reshape( &
+      [   1,    2,   9,    10,            3,    4,   11,   12,  &
+          5,    6,   13,   14,            7,    8,   15,   16,  &
+         17,   18,   25,   26,           19,   20,   27,   28,  &
+         21,   22,   29,   30,           23,   24,   31,   32,  &
+         33,   34,   41,   42,           35,   36,   43,   44,  &
+         37,   38,   45,   46,           39,   40,   47,   48,  &
+         49,   50,   57,   58,           51,   52,   59,   60,  &
+         53,   54,   61,   62,           55,   56,   63,   64,  &
+         65,   66,   73,   74,           67,   68,   75,   76,  &
+         69,   70,   77,   78,           71,   72,   79,   80,  &
+         81,   82,   89,   90,           83,   84,   91,   92,  &
+         85,   86,   93,   94,           87,   88,   95,   96,  &
+         97,   98,  105,  106,           99,  100,  107,  108,  &
+        101,  102,  109,  110,          103,  104,  111,  112,  &
+        113,  114,  121,  122,          115,  116,  123,  124,  &
+        117,  118,  125,  126,          119,  120,  127,  128,  &
+        129,  130,  137,  138,          131,  132,  139,  140,  &
+        133,  134,  141,  142,          135,  136,  143,  144,  &
+        145,  146,  153,  154,          147,  148,  155,  156,  &
+        149,  150,  157,  158,          151,  152,  159,  160,  &
+        161,  162,  169,  170,          163,  164,  171,  172,  &
+        165,  166,  173,  174,          167,  168,  175,  176,  &
+        177,  178,  185,  186,          179,  180,  187,  188,  &
+        181,  182,  189,  190,          183,  184,  191,  192,  &
+        193,  194,  201,  202,          195,  196,  203,  204,  &
+        197,  198,  205,  206,          199,  200,  207,  208,  &
+        209,  210,  217,  218,          211,  212,  219,  220,  &
+        213,  214,  221,  222,          215,  216,  223,  224,  &
+        225,  226,  233,  234,          227,  228,  235,  236,  &
+        229,  230,  237,  238,          231,  232,  239,  240,  &
+        241,  242,  249,  250,          243,  244,  251,  252,  &
+        245,  246,  253,  254,          247,  248,  255,  256,  &
+        257,  258,  265,  266,          259,  260,  267,  268,  &
+        261,  262,  269,  270,          263,  264,  271,  272,  &
+        273,  274,  281,  282,          275,  276,  283,  284,  &
+        277,  278,  285,  286,          279,  280,  287,  288,  &
+        289,  290,  297,  298,          291,  292,  299,  300,  &
+        293,  294,  301,  302,          295,  296,  303,  304,  &
+        305,  306,  313,  314,          307,  308,  315,  316,  &
+        309,  310,  317,  318,          311,  312,  319,  320,  &
+        321,  322,  329,  330,          323,  324,  331,  332,  &
+        325,  326,  333,  334,          327,  328,  335,  336,  &
+        337,  338,  345,  346,          339,  340,  347,  348,  &
+        341,  342,  349,  350,          343,  344,  351,  352,  &
+        353,  354,  361,  362,          355,  356,  363,  364,  &
+        357,  358,  365,  366,          359,  360,  367,  368,  &
+        369,  370,  377,  378,          371,  372,  379,  380,  &
+        373,  374,  381,  382,          375,  376,  383,  384 ], (/2,2,96/))
+
+  integer(i_def), parameter :: FineToCoarseMap(1,1,384) = reshape(            &
+    [ 1,  1,  2,  2,  3,  3,  4,  4,  1,  1,  2,  2,  3,  3,  4,  4,  5,  5,  &
+      6,  6,  7,  7,  8,  8,  5,  5,  6,  6,  7,  7,  8,  8,  9,  9,  10, 10, &
+      11, 11, 12, 12, 9,  9,  10, 10, 11, 11, 12, 12, 13, 13, 14, 14, 15, 15, &
+      16, 16, 13, 13, 14, 14, 15, 15, 16, 16, 17, 17, 18, 18, 19, 19, 20, 20, &
+      17, 17, 18, 18, 19, 19, 20, 20, 21, 21, 22, 22, 23, 23, 24, 24, 21, 21, &
+      22, 22, 23, 23, 24, 24, 25, 25, 26, 26, 27, 27, 28, 28, 25, 25, 26, 26, &
+      27, 27, 28, 28, 29, 29, 30, 30, 31, 31, 32, 32, 29, 29, 30, 30, 31, 31, &
+      32, 32, 33, 33, 34, 34, 35, 35, 36, 36, 33, 33, 34, 34, 35, 35, 36, 36, &
+      37, 37, 38, 38, 39, 39, 40, 40, 37, 37, 38, 38, 39, 39, 40, 40, 41, 41, &
+      42, 42, 43, 43, 44, 44, 41, 41, 42, 42, 43, 43, 44, 44, 45, 45, 46, 46, &
+      47, 47, 48, 48, 45, 45, 46, 46, 47, 47, 48, 48, 49, 49, 50, 50, 51, 51, &
+      52, 52, 49, 49, 50, 50, 51, 51, 52, 52, 53, 53, 54, 54, 55, 55, 56, 56, &
+      53, 53, 54, 54, 55, 55, 56, 56, 57, 57, 58, 58, 59, 59, 60, 60, 57, 57, &
+      58, 58, 59, 59, 60, 60, 61, 61, 62, 62, 63, 63, 64, 64, 61, 61, 62, 62, &
+      63, 63, 64, 64, 65, 65, 66, 66, 67, 67, 68, 68, 65, 65, 66, 66, 67, 67, &
+      68, 68, 69, 69, 70, 70, 71, 71, 72, 72, 69, 69, 70, 70, 71, 71, 72, 72, &
+      73, 73, 74, 74, 75, 75, 76, 76, 73, 73, 74, 74, 75, 75, 76, 76, 77, 77, &
+      78, 78, 79, 79, 80, 80, 77, 77, 78, 78, 79, 79, 80, 80, 81, 81, 82, 82, &
+      83, 83, 84, 84, 81, 81, 82, 82, 83, 83, 84, 84, 85, 85, 86, 86, 87, 87, &
+      88, 88, 85, 85, 86, 86, 87, 87, 88, 88, 89, 89, 90, 90, 91, 91, 92, 92, &
+      89, 89, 90, 90, 91, 91, 92, 92, 93, 93, 94, 94, 95, 95, 96, 96, 93, 93, &
+      94, 94, 95, 95, 96, 96 ], (/1,1,384/) )
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class( mesh_map_test_type ), intent( inout ) :: this
+
+    type(uniform_extrusion_type)    :: extrusion
+    type(ugrid_mesh_data_type)      :: ugrid_mesh_data
+    type(global_mesh_type), target  :: coarse_global_mesh
+    type(global_mesh_type), pointer :: coarse_global_mesh_ptr => null()
+    type(global_mesh_type), target  :: fine_global_mesh
+    type(global_mesh_type), pointer :: fine_global_mesh_ptr => null()
+    type(partition_type)            :: coarse_partition
+    type(partition_type)            :: fine_partition
+    type(local_mesh_type), target   :: coarse_local_mesh
+    type(local_mesh_type), pointer  :: coarse_local_mesh_ptr => null()
+    type(local_mesh_type), target   :: fine_local_mesh
+    type(local_mesh_type), pointer  :: fine_local_mesh_ptr => null()
+
+    character(str_def)     :: name
+    type(global_mesh_type) :: global_mesh
+    type(mesh_type)        :: mesh
+
+    procedure (partitioner_interface), pointer :: partitioner_ptr => null()
+    integer(i_def)         :: npanels
+
+    !Store the MPI communicator for later use
+    call store_comm(this%getMpiCommunicator())
+    ! Initialise halo functionality
+    call initialise_halo_comms( this%getMpiCommunicator() )
+
+    partitioner_ptr => partitioner_cubedsphere_serial
+    npanels = 6
+
+    ! Extrusion to be used for all meshes
+    extrusion = uniform_extrusion_type( radius, domain_top, nlayers, &
+                                        PRIME_EXTRUSION )
+
+    ! Get coarse mesh
+    name = 'C4'
+    call ugrid_mesh_data%read_from_file(trim(filename), name)
+    coarse_global_mesh = global_mesh_type( ugrid_mesh_data, npanels)
+    coarse_global_mesh_ptr => coarse_global_mesh
+    call ugrid_mesh_data%clear()
+
+    coarse_partition = partition_type( coarse_global_mesh_ptr, &
+                                       partitioner_ptr,        &
+                                       xproc, yproc,           &
+                                       max_stencil_depth,      &
+                                       local_rank, total_ranks )
+
+    call coarse_local_mesh%initialise( coarse_global_mesh_ptr, &
+                                       coarse_partition )
+    call coarse_local_mesh%init_cell_owner()
+    coarse_local_mesh_ptr => coarse_local_mesh
+
+    this%coarse_mesh = mesh_type( coarse_local_mesh_ptr, extrusion )
+    ! Get fine mesh
+    name = 'C8'
+    call ugrid_mesh_data%read_from_file(trim(filename), name)
+    fine_global_mesh = global_mesh_type( ugrid_mesh_data, npanels)
+    fine_global_mesh_ptr => fine_global_mesh
+    call ugrid_mesh_data%clear()
+
+    fine_partition   = partition_type( fine_global_mesh_ptr,   &
+                                       partitioner_ptr,        &
+                                       xproc, yproc,           &
+                                       max_stencil_depth,      &
+                                       local_rank, total_ranks )
+
+    call fine_local_mesh%initialise( fine_global_mesh_ptr, &
+                                     fine_partition )
+    call fine_local_mesh%init_cell_owner()
+    fine_local_mesh_ptr => fine_local_mesh
+
+    this%fine_mesh = mesh_type( fine_local_mesh_ptr, extrusion )
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class( mesh_map_test_type ), intent( inout ) :: this
+
+    ! Finalise halo functionality
+    call finalise_halo_comms()
+    ! Clear the stored MPI communicator
+    call clear_comm()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_coarse_to_fine_map( this )
+
+    implicit none
+
+    class( mesh_map_test_type ), intent( inout ) :: this
+
+    type (mesh_map_type) :: mesh_map
+
+    integer(i_def) :: test_integer
+    integer(i_def), allocatable :: cell_map(:,:,:)
+
+    integer(i_def), pointer :: test_1_array_ptr(:,:)   => null()
+    integer(i_def), pointer :: test_2_array_ptr(:,:,:) => null()
+    integer(i_def) :: nsource_cells
+    integer(i_def) :: ntarget_cells_per_source_cell_x
+    integer(i_def) :: ntarget_cells_per_source_cell_y
+
+    ntarget_cells_per_source_cell_x = 2
+    ntarget_cells_per_source_cell_y = 2
+    nsource_cells                   = this%coarse_mesh%get_ncells_2d()
+    allocate(cell_map(ntarget_cells_per_source_cell_x, &
+                      ntarget_cells_per_source_cell_y, &
+                      nsource_cells))
+
+    cell_map(:,:,:) = CoarseToFineMap(:,:,:)
+
+    mesh_map = mesh_map_type( this%coarse_mesh%get_id(), &
+                              this%fine_mesh%get_id(),   &
+                              cell_map )
+
+    !-------------------------------------------------------------------
+    ! Test get_source_id
+    test_integer = mesh_map%get_source_id()
+    @assertEqual ( this%coarse_mesh%get_id(), test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_target_id
+    test_integer = mesh_map%get_target_id()
+    @assertEqual ( this%fine_mesh%get_id(), test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_cell_factor
+    test_integer = mesh_map%get_ntarget_cells_per_source_cell()
+    @assertEqual ( 4, test_integer )
+
+    test_integer = mesh_map%get_ntarget_cells_per_source_x()
+    @assertEqual ( 2, test_integer )
+
+    test_integer = mesh_map%get_ntarget_cells_per_source_y()
+    @assertEqual ( 2, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nsource_cells
+    test_integer = mesh_map%get_nsource_cells()
+    @assertEqual ( 96, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_map_from_cell
+    test_1_array_ptr => mesh_map%get_cell_map(11)
+    @assertEqual ( reshape([37,38,45,46],(/2,2/)), test_1_array_ptr )
+    nullify(test_1_array_ptr)
+
+
+    !-------------------------------------------------------------------
+    ! Test get_full_map
+    test_2_array_ptr => mesh_map%get_whole_cell_map()
+    @assertEqual ( CoarseToFineMap, test_2_array_ptr )
+    nullify(test_2_array_ptr)
+    deallocate(cell_map)
+
+    call mesh_map%clear()
+
+  end subroutine test_coarse_to_fine_map
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test( npes=[1] )
+  subroutine test_fine_to_coarse_map( this )
+
+    implicit none
+
+    class( mesh_map_test_type ), intent( inout ) :: this
+
+    type (mesh_map_type) :: mesh_map
+
+    integer(i_def) :: test_integer
+    integer(i_def), allocatable :: cell_map(:,:,:)
+
+    integer(i_def), pointer :: test_1_array_ptr(:,:)   => null()
+    integer(i_def), pointer :: test_2_array_ptr(:,:,:) => null()
+    integer(i_def) :: nsource_cells
+    integer(i_def) :: ntarget_cells_per_source_cell_x
+    integer(i_def) :: ntarget_cells_per_source_cell_y
+
+    ntarget_cells_per_source_cell_x = 1
+    ntarget_cells_per_source_cell_y = 1
+    nsource_cells                   = this%fine_mesh%get_ncells_2d()
+    allocate(cell_map(ntarget_cells_per_source_cell_x, &
+                      ntarget_cells_per_source_cell_y, &
+                      nsource_cells))
+
+    cell_map(:,:,:) = FineToCoarseMap(:,:,:)
+    mesh_map = mesh_map_type( this%fine_mesh%get_id(),   &
+                              this%coarse_mesh%get_id(), &
+                              cell_map )
+
+    !-------------------------------------------------------------------
+    ! Test get_source_id
+    test_integer = mesh_map%get_source_id()
+    @assertEqual ( this%fine_mesh%get_id(), test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_target_id
+    test_integer = mesh_map%get_target_id()
+    @assertEqual ( this%coarse_mesh%get_id(), test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_cell_factor
+    test_integer = mesh_map%get_ntarget_cells_per_source_cell()
+    @assertEqual ( 1, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_nsource_cells
+    test_integer = mesh_map%get_nsource_cells()
+    @assertEqual ( 384, test_integer )
+
+    !-------------------------------------------------------------------
+    ! Test get_map_from_cell
+    test_1_array_ptr => mesh_map%get_cell_map(11)
+    @assertEqual ( reshape([2],(/1,1/)), test_1_array_ptr )
+    nullify(test_1_array_ptr)
+
+
+    !-------------------------------------------------------------------
+    ! Test get_full_map
+    test_2_array_ptr => mesh_map%get_whole_cell_map()
+    @assertEqual ( FineToCoarseMap, test_2_array_ptr )
+    nullify(test_2_array_ptr)
+    deallocate(cell_map)
+
+    call mesh_map%clear()
+
+  end subroutine test_fine_to_coarse_map
+
+end module mesh_map_mod_test

@@ -1,0 +1,63 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2021 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> @brief Exercises the LFRic NetCDF file type.
+!>
+module lfric_ncdf_file_mod_test
+
+  use constants_mod,       only: i_def
+  use lfric_ncdf_file_mod, only: lfric_ncdf_file_type, &
+                                 LFRIC_NCDF_READ,      &
+                                 LFRIC_NCDF_WRITE,     &
+                                 LFRIC_NCDF_OPEN,      &
+                                 LFRIC_NCDF_CREATE
+  use pfunit_mod
+
+  implicit none
+
+  private
+  public :: test_file
+
+contains
+
+  @test
+  subroutine test_file()
+
+    implicit none
+
+    type(lfric_ncdf_file_type)     :: file1, file2, file3
+    integer(kind=i_def)            :: file1id, file2id, file3id
+    integer(kind=i_def), parameter :: canwrite = 1
+    integer(kind=i_def), parameter :: nowrite = 0
+
+    file1 = lfric_ncdf_file_type("test_file.nc", open_mode=LFRIC_NCDF_CREATE, &
+                                  io_mode=LFRIC_NCDF_WRITE)
+    file1id = file1%get_id()
+    @assertEqual(file1%get_io_mode(), canwrite)
+
+    call file1%close_definition()
+    call file1%close_file()
+
+    file2 = lfric_ncdf_file_type("test_file.nc", open_mode=LFRIC_NCDF_OPEN, &
+                                  io_mode=LFRIC_NCDF_READ)
+    file2id = file2%get_id()
+    @assertEqual(file2%get_io_mode(), nowrite)
+
+    call file2%close_file()
+
+    file3 = lfric_ncdf_file_type("test_file.nc", open_mode=LFRIC_NCDF_OPEN, &
+                                  io_mode=LFRIC_NCDF_WRITE)
+    file3id = file3%get_id()
+    @assertEqual(file3%get_io_mode(), canwrite)
+
+    call file3%close_file()
+
+    @assertEqual(file1id, file2id)
+    @assertEqual(file1id, file3id)
+
+  end subroutine test_file
+
+end module lfric_ncdf_file_mod_test

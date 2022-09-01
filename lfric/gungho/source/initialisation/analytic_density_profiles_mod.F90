@@ -1,0 +1,406 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> @brief Functions to compute a variety of analytic profiles
+!> @details Collection of functions to return the value of a field at a given
+!!          point based upon a specified analytic formula
+module analytic_density_profiles_mod
+
+use constants_mod,              only : r_def, pi
+use log_mod,                    only : log_event,                &
+                                       log_scratch_space,        &
+                                       LOG_LEVEL_ERROR
+use coord_transform_mod,        only : xyz2llr, central_angle
+use idealised_config_mod,       only : test_cold_bubble_x,           &
+                                       test_cold_bubble_y,           &
+                                       test_dry_cbl,                 &
+                                       test_snow,                    &
+                                       test_warm_bubble,             &
+                                       test_warm_bubble_3d,          &
+                                       test_gaussian_hill,           &
+                                       test_cosine_hill,             &
+                                       test_cosine_bell,             &
+                                       test_yz_cosine_hill,          &
+                                       test_slotted_cylinder,        &
+                                       test_constant_field,          &
+                                       test_hadley_like_dcmip,       &
+                                       test_cosine_stripe,           &
+                                       test_vortex_field,            &
+                                       test_gravity_wave,            &
+                                       test_solid_body_rotation,     &
+                                       test_solid_body_rotation_alt, &
+                                       test_deep_baroclinic_wave,    &
+                                       test_isentropic,              &
+                                       test_isot_atm,                &
+                                       test_isot_cold_atm,           &
+                                       test_const_lapse_rate,        &
+                                       test_shallow_conv,            &
+                                       test_cos_phi,                 &
+                                       test_cosine_bubble,           &
+                                       test_eternal_fountain,        &
+                                       test_div_free_reversible,     &
+                                       test_curl_free_reversible,    &
+                                       test_rotational,              &
+                                       test_translational,           &
+                                       test_vertical_cylinder
+use initial_density_config_mod, only : r1, x1, y1, z1, r2, x2, y2, z2, &
+                                       tracer_max, tracer_background
+use base_mesh_config_mod,       only : geometry, &
+                                       geometry_spherical
+use planet_config_mod,          only : p_zero, Rd, kappa, scaled_radius
+use reference_profile_mod,      only : reference_profile
+use analytic_temperature_profiles_mod, &
+                                only : analytic_temperature
+use deep_baroclinic_wave_mod,   only : deep_baroclinic_wave
+use domain_size_config_mod,     only : planar_domain_max_x
+use extrusion_config_mod,       only : domain_top
+
+implicit none
+
+private
+
+public :: vortex_field
+public :: analytic_density
+public :: hadley_like_dcmip
+
+contains
+
+!>@brief Compute the vortex field from Nair and Jablonowski 08
+!>@details  Equations below have been taken from Nair and Jablonowski, "Moving vortices
+!> on the sphere: A test case for horizontal advection problems", AMS 2008,
+!> equations (18)-(22)
+!> lat_pole and lon_pole denote the position of one of the vortices
+!> Parameter values have been taken from the paper and are currently
+!> hard-wired
+!>@param[in] lat Latitude of point
+!>@param[in] long Longitude of point
+!>@param[in] radius Distance from the centre of the planet of the point
+!>@param[in] time Time to compute the vortex at
+!>@return density Value of the tracer field at this point
+function vortex_field(lat,long,radius,time) result(density)
+  implicit none
+  real(kind=r_def), intent(in) :: lat
+  real(kind=r_def), intent(in) :: long
+  real(kind=r_def), intent(in) :: radius
+  real(kind=r_def), intent(in) :: time
+  real(kind=r_def)             :: density
+
+  real(kind=r_def) :: lat_pole, lon_pole
+  real(kind=r_def) :: lat_dash, lon_dash
+  real(kind=r_def) :: r0, v0, V
+  real(kind=r_def) :: gamma_value, radial_distance, omega
+
+  ! Equations below have been taken from Nair and Jablonowski, "Moving vortices
+  ! on the sphere: A test case for horizontal advection problems", AMS 2008,
+  ! equations (18)-(22)
+  ! lat_pole and lon_pole denote the position of one of the vortices
+  ! Parameter values have been taken from the paper and are currently
+  ! hard-wired
+
+  lat_pole = 0.0_r_def
+  lon_pole = 0.0_r_def
+  r0 = 3.0_r_def
+  v0 = 38.61073731_r_def
+  gamma_value = 5.0_r_def
+
+  lat_dash = asin(sin(lat)*sin(lat_pole) &
+                + cos(lat)*cos(lat_pole)*cos(long-lon_pole))
+  lon_dash = atan2(cos(lat)*sin(long-lon_pole),              &
+                   cos(lat)*sin(lat_pole)*cos(long-lon_pole) &
+                 - cos(lat_pole)*sin(lat) )
+
+  radial_distance = r0*cos(lat_dash)
+  V = v0*3.0_r_def*(sqrt(3.0_r_def)/2.0_r_def)*  &
+                              (sinh(radial_distance)/cosh(radial_distance)**3)
+
+  if (abs(radial_distance)<1E-10_r_def) then
+    omega = 0.0_r_def
+  else
+    omega = V/(radius*radial_distance)
+  end if
+
+  density = 1.0_r_def - tanh((radial_distance/gamma_value)*     &
+                                                    sin(lon_dash-omega*time))
+
+end function vortex_field
+
+
+!>@brief Compute the density function from Allen and Zerroukat 2016
+!>@details  Equations below have been taken from Allen and Zerroukat, "A deep
+!> non-hydrostatic compressible atmospheric model on a Yin-Yang grid", JCP, 2016,
+!> equation (5.5)
+!> Parameter values have been taken from the paper and are currently
+!> hard-wired
+!>@param[in] radius Distance from the centre of the planet to the point of interest
+!>@return density Value of the tracer field at this point
+function hadley_like_dcmip(radius) result(density)
+  implicit none
+  real(kind=r_def), intent(in) :: radius
+  real(kind=r_def)             :: density
+
+  real(kind=r_def) :: z, z1, z2, z0
+
+  z = radius - scaled_radius
+
+  z1 = 2000.0_r_def
+  z2 = 5000.0_r_def
+  z0 = 0.5_r_def*(z1+z2)
+
+  if ((z-z1)*(z2-z)>0) then
+    density = 0.5_r_def*(1.0_r_def + cos(2.0_r_def*pi*(z-z0)/(z2-z1)))
+  else
+    density = 0.0_r_def
+  end if
+
+end function hadley_like_dcmip
+
+
+!> @brief Compute an analytic density field
+!> @param[in] chi Position in physical coordinates
+!> @param[in] choice Integer defining which specified formula to use
+!> @result density The result density field
+function analytic_density(chi, choice, time) result(density)
+
+  implicit none
+  real(kind=r_def), intent(in) :: chi(3)
+  integer,          intent(in) :: choice
+  real(kind=r_def), intent(in) :: time
+  real(kind=r_def)             :: density
+
+  real(kind=r_def)             :: l, dt
+  real(kind=r_def), parameter  :: XC = 0.0_r_def, &
+                                  XR = 4000.0_r_def, &
+                                  ZC_cold = 3000.0_r_def, &
+                                  ZR = 2000.0_r_def
+  real(kind=r_def)             :: long, lat, radius
+  real(kind=r_def)             :: l1, l2
+  real(kind=r_def)             :: d1, d2
+  real(kind=r_def)             :: h1, h2
+  real(kind=r_def)             :: pressure, temperature
+  real(kind=r_def)             :: t0
+  real(kind=r_def)             :: u, v, w
+  real(kind=r_def)             :: bubble_dist, bubble_zc
+  real(kind=r_def)             :: bubble_radius, bubble_width, bubble_height
+  real(kind=r_def)             :: slot_width, slot_length
+
+  integer                      :: id
+
+  if ( geometry == geometry_spherical ) then
+    call xyz2llr(chi(1),chi(2),chi(3),long,lat,radius)
+    call central_angle(long,lat,x1,y1,l1)
+    call central_angle(long,lat,x2,y2,l2)
+  else
+    long = chi(1)
+    lat  = chi(2)
+    l1 = sqrt((long-x1)**2 + (lat-y1)**2)
+    l2 = sqrt((long-x2)**2 + (lat-y2)**2)
+  end if
+
+  select case( choice )
+
+  case ( test_dry_cbl, test_gravity_wave, &
+         test_isentropic, test_isot_atm,  &
+         test_isot_cold_atm, test_const_lapse_rate, &
+         test_shallow_conv, test_snow )
+    call reference_profile(pressure, density, temperature, chi, choice)
+
+  case ( test_cold_bubble_x, test_cold_bubble_y )
+    if ( choice == test_cold_bubble_x ) then
+      id = 1
+    else
+      id = 2
+    end if
+    call reference_profile(pressure, density, temperature, chi, choice)
+    l = sqrt( ((chi(id)-XC)/XR)**2 + ((chi(3)-ZC_cold)/ZR)**2 )
+    if ( l <= 1.0_r_def ) then
+      dt =  15.0_r_def/2.0_r_def*(cos(PI*l)+1.0_r_def)
+      temperature = temperature - dt/pressure
+      density = p_zero/(Rd*temperature) * pressure**( (1.0_r_def - kappa )/ kappa )
+    end if
+
+  !> No perturbation needed for warm bubble tests so just use background
+  !> (isentropic) value
+  case ( test_warm_bubble, test_warm_bubble_3d  )
+    call reference_profile(pressure, density, temperature, chi, choice)
+  case( test_gaussian_hill )
+    h1 = tracer_max*exp( -(l1/r1)**2 )
+    h2 = tracer_max*exp( -(l2/r2)**2 )
+    density = tracer_background + h1 + h2
+
+  case( test_cosine_hill )
+    if ( l1 < r1 ) then
+      h1 = tracer_background + (tracer_max/2.0_r_def)*(1.0_r_def+cos((l1/r1)*PI))
+    else
+      h1 = tracer_background
+    end if
+    if (l2 < r2) then
+      h2 = tracer_background + (tracer_max/2.0_r_def)*(1.0_r_def+cos((l2/r2)*PI))
+    else
+      h2 = tracer_background
+    end if
+    density = h1+h2
+
+  case( test_cosine_bell )
+    bubble_height = domain_top/12.0_r_def
+    d1 = min( 1.0_r_def, ( l1 / 0.5_r_def )**2 + &
+         ( ( radius - scaled_radius - domain_top/2.0_r_def ) / bubble_height )**2 )
+    d2 = min( 1.0_r_def, ( l2 / 0.5_r_def )**2 + &
+         ( ( radius - scaled_radius - domain_top/2.0_r_def ) / bubble_height )**2 )
+    density = tracer_background + ( (tracer_max - tracer_background) / 2.0_r_def ) * &
+              ( ( 1.0_r_def + cos( pi*d1 ) ) + ( 1.0_r_def + cos( pi*d2 ) ) )
+
+  case( test_yz_cosine_hill )
+
+    l1 = sqrt((chi(2)-y1)**2 + (chi(3)-z1)**2)
+    l2 = sqrt((chi(2)-y2)**2 + (chi(3)-z2)**2)
+
+    if ( l1 < r1 ) then
+      h1 = tracer_background + (tracer_max/2.0_r_def)*(1.0_r_def+cos((l1/r1)*PI))
+    else
+      h1 = tracer_background
+    end if
+    if (l2 < r2) then
+      h2 = tracer_background + (tracer_max/2.0_r_def)*(1.0_r_def+cos((l2/r2)*PI))
+    else
+      h2 = tracer_background
+    end if
+    density = h1+h2
+
+  case( test_slotted_cylinder )
+    ! Cylinder 1
+    if ( l1 < r1 ) then
+      if (abs(long-x1) > r1/6.0_r_def) then
+        h1 = tracer_max
+      else
+        if (lat < y1-r1*5.0_r_def/12.0_r_def) then
+          h1 = tracer_max
+        else
+          h1 = tracer_background
+        end if
+      end if
+    else
+      h1 = tracer_background
+    end if
+    ! Cylinder 2
+    if ( l2 < r2 ) then
+      if (abs(long-x2) > r2/6.0_r_def) then
+        h2 = tracer_max
+      else
+        if (lat > y2+r2*5.0_r_def/12.0_r_def) then
+          h2 = tracer_max
+        else
+          h2 = tracer_background
+        end if
+      end if
+    else
+      h2 = tracer_background
+    end if
+    density = h1 + h2
+
+  case( test_constant_field )
+    density = tracer_background
+
+  case( test_cosine_stripe )
+    l1 = sqrt((long-x1)**2)
+    if ( l1 < r1 ) then
+      density = tracer_background + (tracer_max/2.0_r_def)*(1.0_r_def+cos((l1/r1)*PI))
+    else
+      density = tracer_background
+    end if
+
+  case( test_vortex_field )
+    density = vortex_field(lat,long,radius,time)
+
+  case( test_hadley_like_dcmip )
+    density = hadley_like_dcmip(radius)
+
+  case( test_solid_body_rotation,                                    &
+        test_solid_body_rotation_alt )
+    t0          = 280.0_r_def
+    temperature = analytic_temperature(chi, choice)
+    pressure    = t0 / temperature
+    density     = p_zero * pressure**( (1.0_r_def - kappa )/ kappa )           &
+                         / (Rd * temperature)
+  case( test_deep_baroclinic_wave )
+    call deep_baroclinic_wave(long, lat, radius-scaled_radius, &
+                              pressure, temperature, density, &
+                              u, v, w)
+
+  case( test_cos_phi )
+    density = tracer_max*cos(lat)**4
+
+  case( test_cosine_bubble )
+    l1 = sqrt( ((chi(1) - x1)/r1)**2 + ((chi(3) - y1)/r2)**2 )
+    if ( l1 < 1.0_r_def ) then
+      density = tracer_background + tracer_max*cos(0.5_r_def*l1*PI)**2
+    else
+      density = tracer_background
+    end if
+
+  case( test_eternal_fountain )
+    bubble_width = 0.4_r_def * planar_domain_max_x
+    bubble_height = 0.1_r_def * domain_top
+
+    if ( ( (chi(1) + bubble_width / 2.0_r_def) &
+            * (bubble_width / 2.0_r_def - chi(1)) > 0.0_r_def ) &
+      .and. ( chi(3) * (bubble_height - chi(3)) > 0.0_r_def ) ) then
+      density = tracer_max
+    else
+      density = tracer_background
+    end if
+
+  case ( test_rotational, test_curl_free_reversible, &
+         test_translational, test_div_free_reversible )
+    bubble_zc = domain_top / 4.0_r_def
+    bubble_width = planar_domain_max_x / 5.0_r_def
+    bubble_height = domain_top / 10.0_r_def
+    bubble_radius = bubble_height / 2.0_r_def
+
+    ! Elliptical distance from centre of bubble
+    bubble_dist = bubble_radius &
+      * sqrt( ((chi(1) - XC) / (bubble_width / 2.0_r_def) ) ** 2.0_r_def &
+            + ((chi(3) - bubble_zc) / (bubble_height / 2.0_r_def)) ** 2.0_r_def)
+
+    density = tracer_background + (tracer_max - tracer_background) &
+                * exp(-(bubble_dist / bubble_radius)**2.0_r_def)
+
+  case( test_vertical_cylinder )
+    bubble_zc = domain_top / 4.0_r_def
+    bubble_width = planar_domain_max_x / 2.0_r_def
+    bubble_height = domain_top / 4.0_r_def
+    bubble_radius = bubble_height / 2.0_r_def
+
+    ! Elliptical distance from centre of bubble
+    bubble_dist = bubble_radius &
+      * sqrt( ((chi(1) - XC) / (bubble_width / 2.0_r_def) ) ** 2.0_r_def &
+            + ((chi(3) - bubble_zc) / (bubble_height / 2.0_r_def)) ** 2.0_r_def)
+
+    slot_width = bubble_width / 12.0_r_def
+    slot_length = 17.0_r_def * bubble_height / 24.0_r_def
+
+    if ( bubble_dist < bubble_radius ) then
+      if ( abs(chi(1) - XC) > slot_width / 2.0_r_def ) then
+        density = tracer_max
+      else
+        if ( chi(3) < (bubble_zc + bubble_height / 2.0_r_def - slot_length) ) then
+          density = tracer_max
+        else
+          density = tracer_background
+        end if
+      end if
+    else
+      density = tracer_background
+    end if
+
+  case default
+    write( log_scratch_space, '(A)' )  'Invalid density profile choice, stopping'
+    call log_event( log_scratch_space, LOG_LEVEL_ERROR )
+
+  end select
+
+end function analytic_density
+
+end module analytic_density_profiles_mod

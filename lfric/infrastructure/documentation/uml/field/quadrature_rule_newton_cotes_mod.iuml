@@ -1,0 +1,9 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+class quadrature_rule_newton_cotes_mod::quadrature_rule_newton_cotes_type {
+  quadrature_rule( <<in>>nqp_1d: integer) : real(::)
+}
+
+quadrature_rule_mod::quadrature_rule_type <|-- quadrature_rule_newton_cotes_mod::quadrature_rule_newton_cotes_type

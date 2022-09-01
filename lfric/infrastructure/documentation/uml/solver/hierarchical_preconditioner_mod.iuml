@@ -1,0 +1,10 @@
+'!-----------------------------------------------------------------------------
+'! (C) Crown copyright 2021 Met Office. All rights reserved.
+'! The file LICENCE, distributed with this code, contains details of the terms
+'! under which the code may be used.
+'!-----------------------------------------------------------------------------
+
+abstract class hierarchical_preconditioner_mod::abstract_hierarchical_preconditioner_type{
+    {abstract}+coarsen(<<in>>self:abstract_hierarchical_preconditioner_type, <<in>>fs_coarse, <<inout>>coarse_operator) 
+}
+preconditioner_mod::abstract_preconditioner_type ^- hierarchical_preconditioner_mod::abstract_hierarchical_preconditioner_type

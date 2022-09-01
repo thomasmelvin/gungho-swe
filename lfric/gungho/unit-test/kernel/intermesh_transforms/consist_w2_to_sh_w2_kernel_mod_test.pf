@@ -1,0 +1,199 @@
+!-----------------------------------------------------------------------------
+! (c) Crown copyright 2022 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> Test the kernel mapping from W2 to the shifted W2 space
+!>
+module consist_w2_to_sh_w2_kernel_mod_test
+
+  use constants_mod,         only: i_def, r_def
+  use reference_element_mod, only: E, W, N, S, T, B
+  use pFUnit_Mod
+
+
+  implicit none
+
+  private
+  public :: consist_w2_to_sh_w2_test_type, test_all
+
+  @TestCase
+  type, extends(TestCase) :: consist_w2_to_sh_w2_test_type
+    private
+  contains
+
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+
+  end type consist_w2_to_sh_w2_test_type
+
+contains
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(consist_w2_to_sh_w2_test_type), intent(inout) :: this
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    use configuration_mod, only: final_configuration
+
+    implicit none
+
+    class(consist_w2_to_sh_w2_test_type), intent(inout) :: this
+
+    call final_configuration()
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @Test
+  subroutine test_all( this )
+
+    use consist_w2_to_sh_w2_kernel_mod, only : consist_w2_to_sh_w2_code
+
+    implicit none
+
+    class(consist_w2_to_sh_w2_test_type), intent(inout) :: this
+
+    real(kind=r_def), parameter ::  tol = 1.0e-12_r_def
+    real(kind=r_def), parameter ::   dx = 5.0_r_def
+    real(kind=r_def), parameter ::   dy = 4.0_r_def
+    real(kind=r_def), parameter ::   u_W = 7.0_r_def
+    real(kind=r_def), parameter ::   u_E = 11.0_r_def
+    real(kind=r_def), parameter ::   u_N = 3.0_r_def
+    real(kind=r_def), parameter ::   u_S = 4.0_r_def
+
+    ! Fields
+    real(kind=r_def), allocatable :: u_sh_field(:)
+    real(kind=r_def), allocatable :: u_field(:)
+    real(kind=r_def), allocatable :: answer(:)
+    real(kind=r_def), allocatable :: rmultiplicity_w2(:)
+    real(kind=r_def), allocatable :: height_wt(:)
+    real(kind=r_def), allocatable :: height_wt_sh(:)
+
+    integer(kind=i_def) :: cell, k
+    real(kind=r_def) :: dz
+
+    ! Sizes
+    integer(kind=i_def) :: nlayers, nlayers_sh, ncells
+    integer(kind=i_def) :: ndf_w2_sh, ndf_wt_sh
+    integer(kind=i_def) :: ndf_w2, ndf_wt
+    integer(kind=i_def) :: undf_w2_sh, undf_wt_sh
+    integer(kind=i_def) :: undf_w2, undf_wt
+
+    ! Dofmaps
+    integer(kind=i_def), allocatable :: map_w2(:,:), map_w2_sh(:,:)
+    integer(kind=i_def), allocatable :: map_wt(:,:), map_wt_sh(:,:)
+
+    ! just consider a single column of three layers
+    nlayers = 3
+    nlayers_sh = 4
+    ndf_w2 = 6
+    undf_w2 = 16
+    ndf_w2_sh = 6
+    undf_w2_sh = 21
+    ndf_wt = 2
+    undf_wt = 4
+    ndf_wt_sh = 1
+    undf_wt_sh = 5
+    ncells = 1
+    cell = 1
+
+    ! Create the data
+    allocate( u_sh_field(undf_w2_sh) )
+    allocate( u_field(undf_w2) )
+    allocate( answer(undf_w2_sh) )
+    allocate( rmultiplicity_w2(undf_w2) )
+    allocate( map_w2_sh(ndf_w2, ncells) )
+    allocate( map_w2(ndf_w2, ncells) )
+    allocate( map_wt_sh(ndf_wt, ncells) )
+    allocate( map_wt(ndf_wt, ncells) )
+
+    ! Only one cell so all maps are to first cell
+    map_w2_sh(:,:) = reshape( [1_i_def, 5_i_def, 9_i_def, &
+                               13_i_def, 17_i_def, 18_i_def], [6,1])
+    map_wt_sh(:,:) = reshape( [1_i_def, 2_i_def], [2,1])
+    map_w2(:,:)    = reshape( [1_i_def, 4_i_def, 7_i_def, &
+                               10_i_def, 13_i_def, 14_i_def], [6,1])
+    map_wt(:,:)    = reshape( [1_i_def, 2_i_def], [2,1])
+
+    ! Set up the height fields for the meshes
+    ! These are used for the initial conditions but not by the kernel
+    ! Let's consider a quadratic extrusion
+    height_wt    = (/ 0.0_r_def, 1.0_r_def, 4.0_r_def, 9.0_r_def /)
+    height_wt_sh = (/ 0.0_r_def, 0.5_r_def, 2.5_r_def, 6.5_r_def, 9.0_r_def /)
+
+    ! Now set up initial field in W2 and the answer in shifted W2
+    ! Assume a horizontal velocity that is constant in the vertical direction
+    ! Vertical velocity varies linearly
+    u_field(:) = 0.0_r_def
+    answer(:) = 0.0_r_def
+    ! We only have one column so take multiplicity to be 1.0 for horizontal values
+    ! The vertical values are set below
+    rmultiplicity_w2(:) = 1.0_r_def
+
+    do k = 1, nlayers
+      dz = height_wt(map_wt(2, cell)+k-1) - height_wt(map_wt(1, cell)+k-1)
+      u_field(map_w2(W, cell)+k-1) = u_W * dy * dz
+      u_field(map_w2(E, cell)+k-1) = u_E * dy * dz
+      u_field(map_w2(N, cell)+k-1) = u_N * dx * dz
+      u_field(map_w2(S, cell)+k-1) = u_S * dx * dz
+      u_field(map_w2(B, cell)+k-1) = height_wt(map_wt(1, cell)+k-1) * dx * dy
+    end do
+
+    u_field(map_w2(T, cell)+nlayers-1) = height_wt(map_wt(2, cell)+nlayers-1) * dx * dy
+
+    ! Correct rmultiplicity for vertical values
+    do k = 1, nlayers - 1
+      rmultiplicity_w2(map_w2(B, cell)+k) = 0.5_r_def
+    end do
+
+    ! Set up shifted W2 fields (including the answer)
+    do k = 1, nlayers_sh
+      dz = height_wt_sh(map_wt_sh(2, cell)+k-1) - height_wt_sh(map_wt_sh(1, cell)+k-1)
+      answer(map_w2_sh(W, cell)+k-1) = u_W * dy * dz
+      answer(map_w2_sh(E, cell)+k-1) = u_E * dy * dz
+      answer(map_w2_sh(N, cell)+k-1) = u_N * dx * dz
+      answer(map_w2_sh(S, cell)+k-1) = u_S * dx * dz
+      answer(map_w2_sh(B, cell)+k-1) = height_wt_sh(map_wt_sh(1, cell)+k-1) * dx * dy
+    end do
+
+    answer(map_w2_sh(T, cell)+nlayers_sh-1) = &
+      height_wt_sh(map_wt_sh(2, cell)+nlayers_sh-1) * dx * dy
+
+    ! Perform kernel
+    u_sh_field(:) = 0.0_r_def
+
+    call consist_w2_to_sh_w2_code(  nlayers_sh,       &
+                                    u_sh_field,       &
+                                    u_field,          &
+                                    rmultiplicity_w2, &
+                                    ndf_w2_sh,        &
+                                    undf_w2_sh,       &
+                                    map_w2_sh,        &
+                                    ndf_w2,           &
+                                    undf_w2,          &
+                                    map_w2            &
+                                  )
+
+    @assertEqual(answer(:), u_sh_field(:), tol)
+
+    deallocate( u_sh_field )
+    deallocate( u_field )
+    deallocate( answer )
+    deallocate( rmultiplicity_w2 )
+    deallocate( map_w2_sh )
+    deallocate( map_w2 )
+    deallocate( map_wt_sh )
+    deallocate( map_wt )
+
+  end subroutine test_all
+
+end module consist_w2_to_sh_w2_kernel_mod_test

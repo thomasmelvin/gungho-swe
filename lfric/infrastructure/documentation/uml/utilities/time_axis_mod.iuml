@@ -1,0 +1,20 @@
+class time_axis_mod::time_axis_type {
+  -name : character
+  -time_data : real[]<<allocatable>>
+  -index_data : integer[]<<allocatable>>
+  -fields : field_collection_type
+  -cyclic : logical = .true.
+  -time_units : character = 'seconds'
+
+  +initialise(<<in>>input_data: real[], <<in>>input_index_data: integer[], <<in>>name: character, <<in>>input_units: character<<optional>>, <<in>>cyclic: logical<<optional>>)
+  +set_update_behaviour(<<in>> procedure <<pointer>> : update_behaviour))
+  +get_name(<<out>>output_name: character)
+  +get_units(<<out>>output_units: character)
+  +shift_forward()
+  +get_time_window(<<out>>time_window: real[2])
+  +get_index_window(<<out>>time_window_index: integer[2])
+  +align(<<in>>input_time: real)
+  +add_field(<<in>>field: field_type)
+  +update_fields()
+  +populate_model_fields(<<in>>model_fields: field_collection_type)
+ }

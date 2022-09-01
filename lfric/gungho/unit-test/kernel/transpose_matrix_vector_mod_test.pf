@@ -1,0 +1,60 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+!
+!-------------------------------------------------------------------------------
+module transpose_matrix_vector_mod_test
+
+  use constants_mod, only : r_def
+  use pFUnit_Mod
+
+  implicit none
+
+contains
+
+  @test
+  subroutine test_of_transpose_matrix_vector()
+
+    use transpose_matrix_vector_kernel_mod, only : transpose_matrix_vector_code
+
+    implicit none
+
+    real(kind=r_def) :: d(4,2), x(4), y(2), answer(2)
+    real(kind=r_def) :: tol
+    integer          :: i
+
+    ! Make up a matrix
+    d(1,:) = (/ 2.0_r_def, -2.0_r_def /)
+    d(2,:) = (/ 3.0_r_def, -1.0_r_def /)
+    d(3,:) = (/ 0.4_r_def,  1.3_r_def /)
+    d(4,:) = (/ -4.5_r_def, 7.9_r_def /)
+    ! rhs vector
+    x(:) = (/ 0.25_r_def, 1.5_r_def, -0.35_r_def, 5.0_r_def /)
+    ! lhs vector
+    y(:) = 0.0_r_def
+    answer = matmul(transpose(d),x)
+
+    call transpose_matrix_vector_code(1, &
+                                      1, &
+                                      y, &
+                                      x, &
+                                      1, &
+                                      d, &
+                                      2, &
+                                      2, &
+                                      (/1, 2/), &
+                                      4, &
+                                      4, &
+                                      (/1, 2, 3, 4/) )
+
+    tol = 1.0e-14_r_def
+
+    do i = 1,2
+      @assertEqual( y(i), answer(i), tol )
+    end do
+
+  end subroutine test_of_transpose_matrix_vector
+
+end module transpose_matrix_vector_mod_test

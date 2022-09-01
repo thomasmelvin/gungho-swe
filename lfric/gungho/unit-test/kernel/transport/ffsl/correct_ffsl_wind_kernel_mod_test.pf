@@ -1,0 +1,259 @@
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2017 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+
+!> Test the correction of the wind fields due to orientation of cells for Cosmic
+!> transport scheme.
+
+module correct_ffsl_wind_kernel_mod_test
+
+  use constants_mod,      only : i_def, r_def
+  use pFUnit_Mod
+
+  implicit none
+
+  private
+  public :: correct_ffsl_wind_test_type, &
+            test_all
+
+  @TestCase
+  type, extends(TestCase) :: correct_ffsl_wind_test_type
+    private
+    real(kind=r_def), allocatable :: orientation(:)
+    real(kind=r_def), allocatable :: wind_in(:), wind_out(:)
+
+    integer(i_def) :: map_w3(1)
+    integer(i_def) :: map_w2(1:6)
+  contains
+    procedure setUp
+    procedure tearDown
+    procedure test_all
+  end type correct_ffsl_wind_test_type
+
+    integer(i_def), parameter :: nlayers = 2
+    integer(i_def), parameter :: ndf_w2  = 6
+    integer(i_def), parameter :: undf_w2 = 11
+    integer(i_def), parameter :: ndf_w3  = 1
+    integer(i_def), parameter :: undf_w3 = 2
+
+contains
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine setUp( this )
+
+    implicit none
+
+    class(correct_ffsl_wind_test_type), intent(inout) :: this
+
+    this%map_w3 = 1
+    this%map_w2 = (/ 1,3,5,7,9,10 /)
+
+    allocate( this%orientation(undf_w3) )
+    allocate( this%wind_in(undf_w2) )
+    allocate( this%wind_out(undf_w2) )
+
+  end subroutine setUp
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  subroutine tearDown( this )
+
+    implicit none
+
+    class(correct_ffsl_wind_test_type), intent(inout) :: this
+
+    deallocate( this%orientation )
+    deallocate( this%wind_in )
+    deallocate( this%wind_out )
+
+  end subroutine tearDown
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  @test
+  subroutine test_all( this )
+
+    use correct_ffsl_wind_kernel_mod, only: correct_ffsl_wind_code
+    use flux_direction_mod, only : x_direction, y_direction
+
+    implicit none
+
+    class(correct_ffsl_wind_test_type), intent(inout) :: this
+
+    real(r_def), parameter :: tol    = 1.0e-6_r_def
+
+    this%wind_in(1:11) = (/ 101.0_r_def,102.0_r_def,  & ! "west"  face at level 0 and 1
+                            103.0_r_def,104.0_r_def,  & ! "south" face at level 0 and 1
+                            105.0_r_def,106.0_r_def,  & ! "east"  face at level 0 and 1
+                            107.0_r_def,108.0_r_def,  & ! "north" face at level 0 and 1
+                            109.0_r_def,110.0_r_def,111.0_r_def /) ! vertical faces
+
+    ! Test for cell orientation=1 in x_direction
+
+    this%orientation(1) = 1.0_r_def
+    call correct_ffsl_wind_code( nlayers,                      &
+                                 this%wind_out,                &
+                                 this%wind_in,                 &
+                                 this%orientation,             &
+                                 undf_w2,                      &
+                                 ndf_w2,                       &
+                                 this%map_w2,                  &
+                                 undf_w3,                      &
+                                 ndf_w3,                       &
+                                 this%map_w3,                  &
+                                 x_direction )
+    ! Level 0 and 1 "west" faces
+    @assertEqual( this%wind_out(1), this%wind_in(1), tol)
+    @assertEqual( this%wind_out(2), this%wind_in(2), tol)
+    ! Level 0 and 1 "east" faces
+    @assertEqual( this%wind_out(5), this%wind_in(5), tol)
+    @assertEqual( this%wind_out(6), this%wind_in(6), tol)
+
+
+    ! Test for cell orientation=2 in x_direction
+
+    this%wind_out(1:4) = (/ -99.0_r_def,-99.0_r_def,-99.0_r_def,-99.0_r_def /)
+    this%orientation(1) = 2.0_r_def
+    call correct_ffsl_wind_code( nlayers,                      &
+                                 this%wind_out,                &
+                                 this%wind_in,                 &
+                                 this%orientation,             &
+                                 undf_w2,                      &
+                                 ndf_w2,                       &
+                                 this%map_w2,                  &
+                                 undf_w3,                      &
+                                 ndf_w3,                       &
+                                 this%map_w3,                  &
+                                 x_direction )
+    ! Level 0 and 1 "south" faces
+    @assertEqual( -this%wind_out(3), this%wind_in(3), tol)
+    @assertEqual( -this%wind_out(4), this%wind_in(4), tol)
+    ! Level 0 and 1 "north" faces
+    @assertEqual( -this%wind_out(7), this%wind_in(7), tol)
+    @assertEqual( -this%wind_out(8), this%wind_in(8), tol)
+
+
+    ! Test for cell orientation=3 in x_direction
+
+    this%wind_out(1:4) = (/ -99.0_r_def,-99.0_r_def,-99.0_r_def,-99.0_r_def /)
+    this%orientation(1) = 3.0_r_def
+    call correct_ffsl_wind_code( nlayers,                      &
+                                 this%wind_out,                &
+                                 this%wind_in,                 &
+                                 this%orientation,             &
+                                 undf_w2,                      &
+                                 ndf_w2,                       &
+                                 this%map_w2,                  &
+                                 undf_w3,                      &
+                                 ndf_w3,                       &
+                                 this%map_w3,                  &
+                                 x_direction )
+    @assertEqual( -this%wind_out(1), this%wind_in(1), tol)
+    @assertEqual( -this%wind_out(2), this%wind_in(2), tol)
+    @assertEqual( -this%wind_out(5), this%wind_in(5), tol)
+    @assertEqual( -this%wind_out(6), this%wind_in(6), tol)
+
+
+    ! Test for cell orientation=4 in x_direction
+
+
+    this%orientation(1) = 4.0_r_def
+    call correct_ffsl_wind_code( nlayers,                      &
+                                 this%wind_out,                &
+                                 this%wind_in,                 &
+                                 this%orientation,             &
+                                 undf_w2,                      &
+                                 ndf_w2,                       &
+                                 this%map_w2,                  &
+                                 undf_w3,                      &
+                                 ndf_w3,                       &
+                                 this%map_w3,                  &
+                                 x_direction )
+    @assertEqual( this%wind_out(3), this%wind_in(3), tol)
+    @assertEqual( this%wind_out(4), this%wind_in(4), tol)
+    @assertEqual( this%wind_out(7), this%wind_in(7), tol)
+    @assertEqual( this%wind_out(8), this%wind_in(8), tol)
+
+
+    ! Test for cell orientation=1 in y_direction
+
+    this%orientation(1) = 1.0_r_def
+    call correct_ffsl_wind_code( nlayers,                      &
+                                 this%wind_out,                &
+                                 this%wind_in,                 &
+                                 this%orientation,             &
+                                 undf_w2,                      &
+                                 ndf_w2,                       &
+                                 this%map_w2,                  &
+                                 undf_w3,                      &
+                                 ndf_w3,                       &
+                                 this%map_w3,                  &
+                                 y_direction )
+    @assertEqual( this%wind_out(3), this%wind_in(3), tol)
+    @assertEqual( this%wind_out(4), this%wind_in(4), tol)
+    @assertEqual( this%wind_out(7), this%wind_in(7), tol)
+    @assertEqual( this%wind_out(8), this%wind_in(8), tol)
+
+
+    ! Test for cell orientation=2 in y_direction
+
+    this%orientation(1) = 2.0_r_def
+    call correct_ffsl_wind_code( nlayers,                      &
+                                 this%wind_out,                &
+                                 this%wind_in,                 &
+                                 this%orientation,             &
+                                 undf_w2,                      &
+                                 ndf_w2,                       &
+                                 this%map_w2,                  &
+                                 undf_w3,                      &
+                                 ndf_w3,                       &
+                                 this%map_w3,                  &
+                                 y_direction )
+    @assertEqual( this%wind_out(1), this%wind_in(1), tol)
+    @assertEqual( this%wind_out(2), this%wind_in(2), tol)
+    @assertEqual( this%wind_out(5), this%wind_in(5), tol)
+    @assertEqual( this%wind_out(6), this%wind_in(6), tol)
+
+
+    ! Test for cell orientation=3 in y_direction
+
+    this%orientation(1) = 3.0_r_def
+    call correct_ffsl_wind_code( nlayers,                      &
+                                 this%wind_out,                &
+                                 this%wind_in,                 &
+                                 this%orientation,             &
+                                 undf_w2,                      &
+                                 ndf_w2,                       &
+                                 this%map_w2,                  &
+                                 undf_w3,                      &
+                                 ndf_w3,                       &
+                                 this%map_w3,                  &
+                                 y_direction )
+    @assertEqual( -this%wind_out(3), this%wind_in(3), tol)
+    @assertEqual( -this%wind_out(4), this%wind_in(4), tol)
+    @assertEqual( -this%wind_out(7), this%wind_in(7), tol)
+    @assertEqual( -this%wind_out(8), this%wind_in(8), tol)
+
+
+    ! Test for cell orientation=4 in y_direction
+
+    this%orientation(1) = 4.0_r_def
+    call correct_ffsl_wind_code( nlayers,                      &
+                                 this%wind_out,                &
+                                 this%wind_in,                 &
+                                 this%orientation,             &
+                                 undf_w2,                      &
+                                 ndf_w2,                       &
+                                 this%map_w2,                  &
+                                 undf_w3,                      &
+                                 ndf_w3,                       &
+                                 this%map_w3,                  &
+                                 y_direction )
+    @assertEqual( -this%wind_out(1), this%wind_in(1), tol)
+    @assertEqual( -this%wind_out(2), this%wind_in(2), tol)
+    @assertEqual( -this%wind_out(5), this%wind_in(5), tol)
+    @assertEqual( -this%wind_out(6), this%wind_in(6), tol)
+
+  end subroutine test_all
+
+end module correct_ffsl_wind_kernel_mod_test

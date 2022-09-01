@@ -1,0 +1,11 @@
+' Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+' For further details please refer to the file LICENCE.original which you
+' should have received as part of this distribution.
+
+interface file_mod::file_type {
+
+  +{abstract} file_open( <<in>> file_name: string )
+  +{abstract} file_new( <<in>> file_name: string )
+  +{abstract} file_close()
+
+}

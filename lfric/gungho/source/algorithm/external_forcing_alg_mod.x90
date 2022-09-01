@@ -1,0 +1,180 @@
+!-------------------------------------------------------------------------------
+! (C) Crown copyright 2020 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-------------------------------------------------------------------------------
+!> @brief Interface to external forcing code.
+module external_forcing_alg_mod
+
+  use external_forcing_config_mod,    only: theta_forcing,             &
+                                            theta_forcing_none,        &
+                                            theta_forcing_held_suarez, &
+                                            theta_forcing_earth_like,  &
+                                            theta_forcing_temp_tend,   &
+                                            wind_forcing,              &
+                                            wind_forcing_none,         &
+                                            wind_forcing_held_suarez
+  use log_mod,                        only: log_event, LOG_LEVEL_INFO, &
+                                            LOG_LEVEL_ERROR
+
+  use held_suarez_fv_kernel_mod,      only: held_suarez_fv_kernel_type
+  use held_suarez_fv_wind_kernel_mod, only: held_suarez_fv_wind_kernel_type
+
+  use earth_like_kernel_mod,       only: earth_like_kernel_type
+
+  ! Derived Types
+  use constants_mod,                  only: i_def, r_def, l_def
+  use field_mod,                      only: field_type
+  use field_collection_mod,           only: field_collection_type
+
+  use fs_continuity_mod,              only: W2, Wtheta
+  use fem_constants_mod,              only: get_rmultiplicity
+  use geometric_constants_mod,        only: get_coordinates, &
+                                            get_da_at_w2,    &
+                                            get_panel_id,    &
+                                            get_height
+  use mesh_mod,                       only: mesh_type
+
+  use io_config_mod,                  only: subroutine_timers
+  use planet_config_mod,              only: kappa
+
+  use temp_tend_profile_alg_mod,      only: temp_tend_profile_alg
+  use timer_mod,                      only: timer
+
+  implicit none
+
+  private
+  public :: external_forcing_alg
+
+contains
+
+  !> @details Interface to external forcing of temperature and wind.
+  !>          The choices of temperature and wind forcing are independent,
+  !>          such that any combination of temperature forcing will work with
+  !>          any combination of wind forcing (or either can be set to none
+  !>          and unforced).
+  !> @param[in]     derived_fields     Group of derived fields
+  !> @param[in]     theta              Theta field
+  !> @param[in]     exner              Exner pressure
+  !> @param[in]     exner_in_wth       Exner pressure on Wtheta space
+  !> @param[in]     dt                 The model timestep length
+  !> @param[out]    dtheta_forcing     Theta increment from external forcing
+  !> @param[out]    du_forcing         Wind increment from external forcing
+  !> @param[in,out] theta_forcing_done Flag to say if theta code run
+  !> @param[in,out] wind_forcing_done  Flag to say if wind code run
+  subroutine external_forcing_alg(derived_fields, theta, exner, exner_in_wth, &
+                                  dt, dtheta_forcing, du_forcing,             &
+                                  theta_forcing_done, wind_forcing_done)
+
+    implicit none
+
+    type( field_collection_type ), intent(in) :: derived_fields
+    type( field_type ), intent( in )  :: theta, exner, exner_in_wth
+    type( field_type ), intent( out ) :: dtheta_forcing, du_forcing
+    real( kind=r_def ), intent( in )  :: dt
+
+    logical( kind=l_def ), intent(inout) :: theta_forcing_done, &
+                                            wind_forcing_done
+
+    ! Temporary field to unpack from field collection
+    type( field_type ), pointer :: u_physics => null()
+    type( field_type ), pointer :: w2_rmultiplicity => null()
+    type( field_type ), pointer :: dA => null()
+    type( field_type ), pointer :: chi(:) => null()
+    type( field_type ), pointer :: panel_id => null()
+    type( field_type ), pointer :: height_wth => null()
+
+    type( mesh_type ),  pointer :: mesh => null()
+
+    if ( subroutine_timers ) call timer("external_forcing_alg")
+
+    mesh => theta%get_mesh()
+    height_wth => get_height( Wtheta, mesh%get_id() )
+
+    if (theta_forcing /= theta_forcing_none) then
+
+      call dtheta_forcing%initialise( vector_space = theta%get_function_space() )
+      call invoke( setval_c(dtheta_forcing, 0.0_r_def) )
+
+      chi => get_coordinates( mesh%get_id() )
+      panel_id => get_panel_id( mesh%get_id() )
+
+      select case(theta_forcing)
+
+        case(theta_forcing_held_suarez)
+
+          call log_event( 'slow_physics: Running Held-Suarez theta forcing', &
+                          LOG_LEVEL_INFO )
+
+          call invoke(held_suarez_fv_kernel_type(dtheta_forcing, theta, &
+                                                 exner_in_wth, chi,     &
+                                                 panel_id, kappa, dt) )
+
+        case(theta_forcing_earth_like)
+
+          call log_event( 'slow_physics: Running Earth-Like theta forcing', &
+                          LOG_LEVEL_INFO )
+
+          call invoke(earth_like_kernel_type(dtheta_forcing, theta,         &
+                                             exner_in_wth, height_wth, chi, &
+                                             panel_id, kappa, dt) )
+
+        case(theta_forcing_temp_tend)
+
+          call temp_tend_profile_alg( dtheta_forcing, exner_in_wth )
+
+        case default
+
+          call log_event( 'slow_physics: Incorrect theta_forcing option', &
+                          LOG_LEVEL_ERROR )
+
+      end select
+
+      theta_forcing_done = .true. ! Collect this increment later on
+
+      nullify( chi, panel_id )
+
+    end if
+
+    if (wind_forcing /= wind_forcing_none) then
+
+      u_physics => derived_fields%get_field('u_physics')
+      w2_rmultiplicity => get_rmultiplicity( W2, mesh%get_id() ) ! 1/multiplicity of w2
+      dA => get_da_at_w2( mesh%get_id() )
+
+      call du_forcing%initialise( vector_space = u_physics%get_function_space() )
+      call invoke( setval_c(du_forcing, 0.0_r_def) )
+
+      select case(wind_forcing)
+
+        case(wind_forcing_held_suarez)
+
+          call log_event( 'slow_physics: Running Held-Suarez wind forcing', &
+                          LOG_LEVEL_INFO )
+
+          call invoke(held_suarez_fv_wind_kernel_type(du_forcing, u_physics, &
+                                                      w2_rmultiplicity,      &
+                                                      exner, exner_in_wth,   &
+                                                      kappa, dt),            &
+                      inc_X_times_Y(du_forcing, dA) )
+
+        case default
+
+          call log_event( 'slow_physics: Incorrect wind_forcing option', &
+                          LOG_LEVEL_ERROR )
+
+      end select
+
+      wind_forcing_done = .true. ! Collect this increment later on
+
+      nullify( w2_rmultiplicity, u_physics, dA )
+
+    end if
+
+    nullify( mesh )
+
+    if ( subroutine_timers ) call timer("external_forcing_alg")
+
+  end subroutine external_forcing_alg
+
+end module external_forcing_alg_mod

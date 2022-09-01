@@ -1,0 +1,135 @@
+{#- This is the skeleton of the configuration feigning module used in unit -#}
+{#- tests. The Jinja templating library is used to insert the actual code. -#}
+
+!-----------------------------------------------------------------------------
+! (C) Crown copyright 2022 Met Office. All rights reserved.
+! The file LICENCE, distributed with this code, contains details of the terms
+! under which the code may be used.
+!-----------------------------------------------------------------------------
+! Handles the feigning of namelists.
+!
+module {{modulename}}
+
+  use constants_mod, only : {{kinds | sort | join( ', ' )}}
+  use log_mod,       only : log_scratch_space, log_event, LOG_LEVEL_ERROR
+  use mpi_mod,       only : get_comm_rank
+
+  implicit none
+
+  private
+{%- if namelists %}
+  public :: {{ namelists | sort | decorate( 'feign_', '_config' ) | join( ', &\n' + ' '*12 ) }}
+{%- endif %}
+
+  integer(i_native) :: local_rank = -1
+  integer(i_native), parameter :: temporary_unit = 3
+
+contains
+
+{%- for name in namelists | sort %}
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+{%-   set procedureName = 'feign_' + name + '_config' %}
+  subroutine {{procedureName}}({{' '}}
+{%- for param in parameters[name] %}
+{%-   if not loop.first %}{{ ', &\n' }}{{ ' '*(15 + procedureName|length) }}{% endif %}
+{{-   param.name }}
+{%- endfor %} )
+
+{%- set onlies = ['read_' + name + '_namelist', 'postprocess_' + name + '_namelist'] %}
+{%- if enumerations %}
+{%-   for enum in enumerations[name]|sort -%}
+{%-     do onlies.extend( ['key_from_' + enum, enum + '_from_key'] ) %}
+{%-   endfor %}
+{%- endif %}
+{%- set moduleName = name + '_config_mod' %}
+
+    use {{moduleName}}, only : {{onlies | join( ', &\n' + ' '*(17 + moduleName|length) )}}
+
+    implicit none
+
+{%- for param in parameters[name] %}
+{%-   if loop.first %}{{'\n'}}{% endif %}
+{%-   if param.get_configure_type() == 'array' %}
+{%-     if param.fortran_type.intrinsic_type == 'character' %}
+    character(*), intent(in) :: {{param.name}}(:)
+{%-     else %}
+    {{param.fortran_type.declaration()}}, intent(in) :: {{param.name}}(:)
+{%-     endif %}
+{%-   else %}
+{%-     if param.fortran_type.intrinsic_type == 'character' %}
+    character(*), intent(in) :: {{param.name}}
+{%-     else %}
+    {{param.fortran_type.declaration()}}, intent(in) :: {{param.name}}
+{%-     endif %}
+{%-   endif %}
+{%- endfor %}
+
+    character(*), parameter :: temp_close_message &
+      = "feign_{{name}}_config: Unable to close temporary file"
+
+    integer(i_native)  :: condition
+
+{%- if string_arrays %}
+    integer(i_native)  :: i
+    character(str_max_filename) :: tmp_str
+{%- endif %}
+
+{%- if non_string_arrays %}
+    character(str_def) :: fmt_str
+{%- endif %}
+
+    if (local_rank == -1) then
+      local_rank = get_comm_rank()
+    end if
+
+    open( temporary_unit, status='scratch', action='readwrite', &
+          iostat=condition )
+
+    if (condition /= 0) then
+      write( 6, '("feign_{{name}}_config: ", I0)' ) condition
+      stop
+    end if
+
+    write( temporary_unit, '("&{{name}}")' )
+{%- for param in parameters[name] %}
+{%-   if param.get_configure_type() == 'enumeration' %}
+    write( temporary_unit, '("{{param.name}} = ''", A, "''")' ) key_from_{{param.name}}( {{param.name}} )
+{%-   elif param.fortran_type.intrinsic_type == 'character' %}
+{%-     if param.get_configure_type() == 'array' %}
+    write( tmp_str,'(A)') "'"//trim({{param.name}}(1))//"'"
+    if (size({{param.name}}) > 1) then
+      do i=2, size({{param.name}})
+        write( tmp_str,'(A)') trim(tmp_str)//",'"//trim({{param.name}}(i))//"'"
+      end do
+    end if
+    write( temporary_unit, '(A)' ) '{{param.name}} = '// trim(tmp_str)
+{%-     else %}
+    write( temporary_unit, '("{{param.name}} = ''", {{param.fortran_type.write_format}}, "''")' ) {{param.name}}
+{%-     endif %}
+
+{%-   else %}
+{%-     if param.get_configure_type() == 'array' %}
+    if (size({{param.name}}) > 1) then
+      write( fmt_str,'(A,I0,A)')  "(A,", size({{param.name}})-1, "({{param.fortran_type.write_format}},','),{{param.fortran_type.write_format}})"
+      write( temporary_unit, fmt_str ) '{{param.name}} = ', {{param.name}}
+    else
+      write( temporary_unit, '("{{param.name}} = ", {{param.fortran_type.write_format}})' ) {{param.name}}
+    end if
+{%-     else %}
+    write( temporary_unit, '("{{param.name}} = ", {{param.fortran_type.write_format}})' ) {{param.name}}
+{%-     endif %}
+{%-   endif %}
+{%- endfor %}
+    write( temporary_unit, '("/")' )
+
+    rewind(temporary_unit)
+    call read_{{name}}_namelist( temporary_unit, local_rank )
+    call postprocess_{{name}}_namelist()
+    close(temporary_unit, iostat=condition )
+    if (condition /= 0) stop temp_close_message
+
+  end subroutine feign_{{name}}_config
+{%- endfor %}
+
+end module {{modulename}}

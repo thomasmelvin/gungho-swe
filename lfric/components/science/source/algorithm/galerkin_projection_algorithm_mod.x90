@@ -1,0 +1,121 @@
+!-----------------------------------------------------------------------------
+! Copyright (c) 2017,  Met Office, on behalf of HMSO and Queen's Printer
+! For further details please refer to the file LICENCE.original which you
+! should have received as part of this distribution.
+!-----------------------------------------------------------------------------
+
+!> An algorithm for computing the galerkin projection
+!> As a first step fields are projected into a continuous space
+
+module galerkin_projection_algorithm_mod
+
+  use constants_mod,                   only: r_def, i_def
+  use function_space_collection_mod,   only: function_space_collection
+  use field_mod,                       only: field_type
+  use finite_element_config_mod,       only: element_order
+  use fs_continuity_mod,               only: W2, W3
+  use gp_rhs_kernel_mod,               only: gp_rhs_kernel_type
+  use gp_vector_rhs_kernel_mod,        only: gp_vector_rhs_kernel_type
+  use log_mod,                         only: log_event, log_scratch_space, &
+                                             LOG_LEVEL_INFO
+  use mesh_mod,                        only: mesh_type
+  use operator_mod,                    only: operator_type
+  use quadrature_xyoz_mod,             only: quadrature_xyoz_type
+  use mass_matrix_solver_alg_mod,      only: mass_matrix_solver_alg
+  use geometric_constants_mod,         only: get_coordinates, get_panel_id
+
+  implicit none
+
+  private
+  public :: galerkin_projection_algorithm
+
+contains
+!> @brief An algorithm to compute the galerkin projection of a field
+!> @details Computes the Galerkin projection of a field f_in into the space
+!>          of field f_out. Solves M*f_out = rhs where rhs = int(gamma*f_in)
+!>          and gamma is a test function from the same space as f_out and M is
+!>          the mass matrix for the space of f_out.
+!>          If f_in is in a vector space then it is decomposed into
+!>          orthogonal components and the galerkin projection of each
+!>          component is computed.
+!> @param[out] f_out A field to project to
+!> @param[in]  f_in  Field to project
+!> @param[in]  mesh  Mesh object the model for fields
+!> @param[in]  space_dimension Dimension of the space f_in (scalar or vector)
+!> @param[in]  qr Quadrature rule to perform integrations
+  subroutine galerkin_projection_algorithm( f_out,           &
+                                            f_in,            &
+                                            mesh,            &
+                                            space_dimension, &
+                                            qr)
+
+    implicit none
+
+    ! Dimension of space to project
+    integer( kind = i_def ),      intent(in)    :: space_dimension
+
+    ! Field to output
+    type( field_type ),           intent(inout) :: f_out(space_dimension)
+
+    ! Field to input
+    type( field_type ),           intent(in)    :: f_in
+
+    type( mesh_type ), pointer,   intent(in)    :: mesh
+    type( quadrature_xyoz_type ), intent(in)    :: qr
+
+    ! Coordinate fields
+    type( field_type ), pointer :: chi(:)   => null()
+    type( field_type ), pointer :: panel_id => null()
+
+    integer( kind=i_def )       :: out_fs
+    type( field_type )          :: rhs(space_dimension)
+    type( field_type )          :: w2_field
+    integer( kind=i_def )       :: dir
+
+    chi      => get_coordinates(mesh%get_id())
+    panel_id => get_panel_id(mesh%get_id())
+
+
+    ! Create continuous fields to project data into
+    out_fs = f_out(1)%which_function_space()
+    do dir = 1,space_dimension
+      call rhs(dir)%initialise( vector_space = f_out(1)%get_function_space() )
+      call invoke( setval_c(rhs(dir), 0.0_r_def) )
+    end do
+
+    ! Project field into continuous space
+    write( log_scratch_space, '(A)' ) 'Computing Galerkin projection...'
+    call log_event( log_scratch_space, LOG_LEVEL_INFO )
+    if ( f_in%which_function_space() == out_fs ) then
+      write( log_scratch_space, '(A)' ) '   function spaces match, no projection needed'
+      call log_event( log_scratch_space, LOG_LEVEL_INFO )
+      call invoke( setval_X(f_out(1), f_in) )
+    else
+      if ( space_dimension == 1 ) then
+        write( log_scratch_space, '(A)' ) '    scalar field ... '
+        call log_event( log_scratch_space, LOG_LEVEL_INFO )
+        call invoke( gp_rhs_kernel_type(rhs(1), f_in, chi, panel_id, qr) )
+      else
+        write( log_scratch_space, '(A)' ) '    vector field ... '
+        call log_event( log_scratch_space, LOG_LEVEL_INFO )
+
+        ! Create dummy W2 field for kernel to perform check again
+        call w2_field%initialise(                                              &
+                          vector_space =                                       &
+                              function_space_collection%get_fs( mesh,          &
+                                                                element_order, &
+                                                                W2) )
+
+        call invoke( gp_vector_rhs_kernel_type(rhs, f_in, chi, &
+                                               panel_id, w2_field, qr) )
+      end if
+      do dir = 1,space_dimension
+        call mass_matrix_solver_alg( f_out(dir), rhs(dir) )
+      end do
+    end if
+
+    nullify(chi, panel_id)
+
+  end subroutine galerkin_projection_algorithm
+
+end module galerkin_projection_algorithm_mod
