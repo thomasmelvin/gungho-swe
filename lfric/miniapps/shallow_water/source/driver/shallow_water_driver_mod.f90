@@ -24,7 +24,8 @@ module shallow_water_driver_mod
                                            mesh_collection_type
   use mesh_mod,                      only: mesh_type
   use shallow_water_mod,             only: program_name
-  use shallow_water_diagnostics_mod, only: shallow_water_diagnostics
+  use shallow_water_diagnostics_mod, only: shallow_water_diagnostics, &
+                                           shallow_water_energy
   use shallow_water_model_mod,       only: initialise_infrastructure, &
                                            initialise_model,          &
                                            finalise_infrastructure,   &
@@ -35,6 +36,8 @@ module shallow_water_driver_mod
                                            output_model_data,     &
                                            finalise_model_data
   use shallow_water_step_mod,        only: shallow_water_step
+  use shallow_water_settings_config_mod, &
+                                     only: e_z_diagnostic, e_z_frequency
 
   implicit none
 
@@ -129,6 +132,17 @@ contains
 
       ! Use diagnostic output frequency to determine whether to write
       ! diagnostics on this timestep
+
+      if ( ( mod(clock%get_step(), e_z_frequency) == 0 ) &
+           .and. ( e_z_diagnostic ) ) then
+
+        call shallow_water_energy( mesh,      &
+                                   model_data )
+
+
+      end if
+
+
 
       if ( ( mod(clock%get_step(), diagnostic_frequency) == 0 ) &
            .and. ( write_diag ) ) then

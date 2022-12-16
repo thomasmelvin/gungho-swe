@@ -105,7 +105,7 @@ scaling_factor = 1.0
 &time
 calendar       = 'timestep'
 timestep_start = '1'
-timestep_end   = '200'
+timestep_end   = '10'
         ! Recommended T_max:
         !  288  for Galewsky                     (i.e. 6 days for dt = 1800)
         !  720  for Williamson test cases       (i.e. 15 days for dt = 1800)
@@ -251,6 +251,8 @@ stochastic_physics='none'
 /
 
 &shallow_water_settings
+e_z_diagnostic=.true.
+e_z_frequency=5
 ref_gp = 5.0     ! reference geopotential; gravity*reference_height
                  ! Recommended values: 29420   for spherical geostrophic balance test case (i.e. 3000*g)
                  !                     58440   for mountain test case                      (i.e. 5960*g)

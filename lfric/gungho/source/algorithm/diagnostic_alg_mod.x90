@@ -79,36 +79,6 @@ contains
   end subroutine divergence_diagnostic_alg
 
 !=============================================================================!
-  !> @details An algorithm for calculating the l2 error for the density field.
-  !>          It is capable of calculating the error at each timestep by using
-  !>          set_rho_alg algorithm which will return the analytic density value
-  !>          at each timestep.
-  !> @param[in,out] l2   l2 norm
-  !> @param[in] rho_num  Density
-  !> @param[in] timestep Timestep
-  !> @param[in] dt       The model timestep length
-  subroutine density_diagnostic_alg(l2, rho_num, timestep, dt)
-    use field_mod,                    only: field_type
-    use set_rho_alg_mod,              only: set_rho_alg
-
-    implicit none
-
-    real(r_def), intent(inout)   :: l2
-    type(field_type), intent(in) :: rho_num
-    integer(i_def),   intent(in) :: timestep
-    real(r_def),      intent(in) :: dt
-
-    type(field_type)             :: rho_analytic
-
-    call rho_analytic%initialise( vector_space = rho_num%get_function_space() )
-
-    call set_rho_alg( rho_analytic, timestep, dt )
-
-    l2 = rel_l2_error_alg(rho_num, rho_analytic)
-
-  end subroutine density_diagnostic_alg
-
-!=============================================================================!
   !> @details An algorithm for calculating the l2 norm for the hydrostatic
   !>          imbalance. It calculates the sum of pressure gradient and
   !>          gravity term at each timestep using the hydrostatic kernel.

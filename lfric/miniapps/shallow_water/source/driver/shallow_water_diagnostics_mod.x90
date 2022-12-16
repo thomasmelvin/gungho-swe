@@ -12,22 +12,30 @@
 module shallow_water_diagnostics_mod
 
   use clock_mod,                         only: clock_type
-  use constants_mod,                     only: i_def
+  use constants_mod,                     only: i_def, r_def
   use field_mod,                         only: field_type
   use field_collection_mod,              only: field_collection_type
-  use log_mod,                           only: log_event, LOG_LEVEL_INFO
+  use finite_element_config_mod,         only: element_order, &
+                                               nqp_exact
+  use log_mod,                           only: log_event, LOG_LEVEL_INFO, log_scratch_space
   use mesh_mod,                          only: mesh_type
   use diagnostics_io_mod,                only: write_scalar_diagnostic, &
                                                write_vector_diagnostic
   use shallow_water_settings_config_mod, only: thermal_swe
   use shallow_water_model_data_mod,      only: model_data_type
   use swe_init_fields_alg_mod,           only: swe_init_vorticity_alg
+  use geometric_constants_mod,           only: get_coordinates, &
+                                               get_panel_id
+  use quadrature_xyoz_mod,               only: quadrature_xyoz_type
+  use quadrature_rule_gaussian_mod,      only: quadrature_rule_gaussian_type
+  use compute_sw_energy_kernel_mod,      only: compute_sw_energy_kernel_type
 
   implicit none
 
   private
 
   public :: shallow_water_diagnostics
+  public :: shallow_water_energy
 
 contains
 
@@ -99,5 +107,80 @@ contains
     call write_scalar_diagnostic('q', q, clock, mesh, nodal_output_on_w3)
 
   end subroutine shallow_water_diagnostics
+
+  !===================================================================================
+
+  !> @brief Outputs the energy and enstrophy diagnostics
+  subroutine shallow_water_energy( mesh,               &
+                                   model_data       )
+
+    implicit none
+
+    type(mesh_type),       intent(in), pointer :: mesh
+    type(model_data_type), intent(in), target  :: model_data
+
+    type( field_collection_type ), pointer :: prognostic_fields => null()
+
+    type(field_type), pointer :: wind => null()
+    type(field_type), pointer :: geopot => null()
+    type(field_type), pointer :: q => null()
+    type(field_type)          :: total_geopot
+    type(field_type)          :: surface_geopot
+    type( quadrature_xyoz_type ) :: qr
+    type( quadrature_rule_gaussian_type ) :: quadrature_rule
+    type( field_type ), pointer :: chi(:) => null()
+    type( field_type ), pointer :: panel_id => null()
+
+    type( field_type ) :: energy, enstrophy, pv
+
+    real(kind=r_def) :: total_enstrophy, total_energy, total_pv
+
+    ! Get pointers to field collections for use downstream
+    prognostic_fields => model_data%prognostic_fields
+
+    ! Can't just iterate through the collection as some fields are scalars
+    ! and some fields are vectors, so explicitly extract all fields from
+    ! the collection and output each of them
+    wind     => prognostic_fields%get_field('wind')
+    geopot   => prognostic_fields%get_field('geopot')
+    q        => prognostic_fields%get_field('q')
+
+    call total_geopot%initialise( vector_space=geopot%get_function_space() )
+    call invoke( X_plus_Y(total_geopot, geopot, model_data%s_geopot) )
+    call surface_geopot%initialise( vector_space=geopot%get_function_space() )
+    call invoke( X_minus_Y(surface_geopot, total_geopot, geopot) )
+
+    qr = quadrature_xyoz_type(nqp_exact, quadrature_rule)
+    chi          => get_coordinates(mesh%get_id())
+    panel_id     => get_panel_id(mesh%get_id())
+
+    call energy%initialise( vector_space=geopot%get_function_space() )
+    call enstrophy%initialise( vector_space=geopot%get_function_space() )
+    call pv%initialise( vector_space=geopot%get_function_space() )
+    call invoke( setval_c(energy, 0.0_r_def),    &
+                 setval_c(enstrophy, 0.0_r_def), &
+                 setval_c(pv, 0.0_r_def) )
+
+    call invoke( compute_sw_energy_kernel_type(energy, enstrophy, pv, &
+                                               geopot, q, wind,       &
+                                               surface_geopot, chi,   &
+                                               panel_id, qr),         &
+                 sum_X(total_enstrophy, enstrophy),                   &
+                 sum_X(total_energy, energy),                         &
+                 sum_X(total_pv, pv) )
+
+    write( log_scratch_space, '(A, E32.24, A)')     &
+          'ENERGY: ', total_energy, ' ...'
+    call log_event( log_scratch_space, LOG_LEVEL_INFO )
+
+    write( log_scratch_space, '(A, E32.24, A)')     &
+          'ENSTROPHY: ', total_enstrophy, ' ...'
+    call log_event( log_scratch_space, LOG_LEVEL_INFO )
+
+    write( log_scratch_space, '(A, E32.24, A)')     &
+          'SUM PV: ', total_pv, ' ...'
+    call log_event( log_scratch_space, LOG_LEVEL_INFO )
+
+  end subroutine shallow_water_energy
 
 end module shallow_water_diagnostics_mod
